@@ -680,9 +680,11 @@ export function CodexFormFields({
                 ),
                 supportsParallelToolCalls:
                   existing.get(model.id)?.supportsParallelToolCalls ?? false,
-                inputModalities: existing.get(model.id)?.inputModalities ?? [
-                  "text",
-                ],
+                inputModalities:
+                  existing.get(model.id)?.inputModalities ??
+                  (model.id.toLowerCase().startsWith("gpt-")
+                    ? ["text", "image"]
+                    : ["text"]),
               })),
             );
           }

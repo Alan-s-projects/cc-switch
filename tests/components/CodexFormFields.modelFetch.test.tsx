@@ -183,6 +183,36 @@ describe("Codex model-fetch lifecycle", () => {
     ]);
   });
 
+  it("defaults new Copilot GPT models to image input while preserving saved modalities", async () => {
+    vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
+      advertisedModel("gpt-6-astra"),
+      advertisedModel("gpt-5.5"),
+      advertisedModel("claude-model"),
+    ]);
+    const props = {
+      ...makeProps("copilot"),
+      catalogModels: [{ model: "gpt-5.5", inputModalities: ["text"] }],
+    };
+    render(<Harness {...props} />);
+    fireEvent.click(fetchButton());
+    await waitFor(() => expect(fetchButton()).toBeEnabled());
+
+    expect(props.onCatalogModelsChange).toHaveBeenCalledWith([
+      expect.objectContaining({
+        model: "gpt-6-astra",
+        inputModalities: ["text", "image"],
+      }),
+      expect.objectContaining({
+        model: "gpt-5.5",
+        inputModalities: ["text"],
+      }),
+      expect.objectContaining({
+        model: "claude-model",
+        inputModalities: ["text"],
+      }),
+    ]);
+  });
+
   it("discards a pending model list after the Copilot protocol changes", async () => {
     const pending = pendingModels();
     vi.mocked(copilotGetModelsForAccount).mockReturnValue(pending.promise);
