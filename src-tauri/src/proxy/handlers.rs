@@ -26,6 +26,7 @@ use super::{
             responses_sse_events_from_anthropic_message,
         },
         streaming_codex_chat::create_responses_sse_stream_from_chat_with_context,
+        streaming_copilot_responses,
         streaming_gemini::create_anthropic_sse_stream_from_gemini,
         streaming_responses::{
             create_anthropic_sse_stream_from_responses,
@@ -947,6 +948,17 @@ async fn handle_responses_for_app(
         )
         .await;
     }
+
+    let response = if ctx.provider.is_github_copilot()
+        && matches!(
+            codex_upstream_format,
+            Some(super::forwarder::CodexUpstreamFormat::NativeResponses)
+        )
+    {
+        streaming_copilot_responses::normalize_item_ids(response)
+    } else {
+        response
+    };
 
     process_response(
         response,

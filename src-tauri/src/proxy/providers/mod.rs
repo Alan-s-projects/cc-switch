@@ -29,6 +29,7 @@ pub(crate) mod reasoning_bridge;
 pub mod streaming;
 pub mod streaming_codex_anthropic;
 pub mod streaming_codex_chat;
+pub(crate) mod streaming_copilot_responses;
 pub mod streaming_gemini;
 pub mod streaming_responses;
 pub mod transform;

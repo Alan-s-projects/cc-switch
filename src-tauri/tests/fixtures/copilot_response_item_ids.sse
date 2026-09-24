@@ -1,0 +1,51 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_created","output":[]}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_progress","output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"msg_added","type":"message","role":"assistant","phase":"commentary","status":"in_progress","content":[]}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","sequence_number":3,"output_index":0,"content_index":0,"item_id":"msg_part_added","part":{"type":"output_text","text":"","annotations":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":4,"output_index":0,"content_index":0,"item_id":"msg_delta_1","delta":"Checking"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":5,"output_index":0,"content_index":0,"item_id":"msg_delta_2","delta":" the"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":6,"output_index":0,"content_index":0,"item_id":"msg_delta_3","delta":" diagnostic"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":7,"output_index":0,"content_index":0,"item_id":"msg_delta_4","delta":" status"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":8,"output_index":0,"content_index":0,"item_id":"msg_delta_5","delta":".\n"}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","sequence_number":9,"output_index":0,"content_index":0,"item_id":"msg_text_done","text":"Checking the diagnostic status.\n"}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","sequence_number":10,"output_index":0,"content_index":0,"item_id":"msg_part_done","part":{"type":"output_text","text":"Checking the diagnostic status.\n","annotations":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":11,"output_index":0,"item":{"id":"msg_done","type":"message","role":"assistant","phase":"commentary","status":"completed","content":[{"type":"output_text","text":"Checking the diagnostic status.\n","annotations":[]}]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":12,"output_index":1,"item":{"id":"fc_added","type":"function_call","status":"in_progress","call_id":"call_probe","name":"diagnostic_probe","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":13,"output_index":1,"item_id":"fc_delta","delta":"{}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":14,"output_index":1,"item_id":"fc_args_done","arguments":"{}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":15,"output_index":1,"item":{"id":"fc_done","type":"function_call","status":"completed","call_id":"call_probe","name":"diagnostic_probe","arguments":"{}"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":16,"response":{"id":"resp_completed","output":[{"id":"msg_completed","type":"message","role":"assistant","phase":"commentary","status":"completed","content":[{"type":"output_text","text":"Checking the diagnostic status.\n","annotations":[]}]},{"id":"fc_completed","type":"function_call","status":"completed","call_id":"call_probe","name":"diagnostic_probe","arguments":"{}"}],"usage":{"input_tokens":100,"output_tokens":12,"total_tokens":112}}}
+
