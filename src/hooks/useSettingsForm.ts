@@ -9,41 +9,8 @@ export type SettingsFormState = Omit<Settings, "language"> & {
   language: Language;
 };
 
-const normalizeLanguage = (lang?: string | null): Language => {
-  if (!lang) return "zh";
-  const normalized = lang.toLowerCase().replace(/_/g, "-");
-
-  if (normalized === "zh") {
-    return "zh";
-  }
-
-  if (
-    normalized === "zh-tw" ||
-    normalized.startsWith("zh-hant") ||
-    normalized.startsWith("zh-hk") ||
-    normalized.startsWith("zh-mo")
-  ) {
-    return "zh-TW";
-  }
-
-  if (normalized === "en" || normalized === "ja") {
-    return normalized;
-  }
-
-  if (normalized.startsWith("zh")) {
-    return "zh";
-  }
-
-  return "zh";
-};
-
-const isSupportedLanguage = (lang?: string | null): boolean => {
-  if (!lang) return false;
-  const normalized = lang.toLowerCase().replace(/_/g, "-");
-  return (
-    normalized === "en" || normalized === "ja" || normalized.startsWith("zh")
-  );
-};
+// Accept legacy preferences when reading app data, but Atlas is English-only.
+const normalizeLanguage = (_lang?: string | null): Language => "en";
 
 const sanitizeDir = (value?: string | null): string | undefined => {
   if (!value) return undefined;
@@ -77,23 +44,14 @@ export function useSettingsForm(): UseSettingsFormResult {
     null,
   );
 
-  const initialLanguageRef = useRef<Language>("zh");
+  const initialLanguageRef = useRef<Language>("en");
 
-  const readPersistedLanguage = useCallback((): Language => {
-    if (typeof window !== "undefined") {
-      const stored = window.localStorage.getItem("language");
-      if (isSupportedLanguage(stored)) {
-        return normalizeLanguage(stored);
-      }
-    }
-    return normalizeLanguage(i18n.language);
-  }, [i18n]);
+  const readPersistedLanguage = useCallback((): Language => "en", []);
 
   const syncLanguage = useCallback(
-    (lang: Language) => {
-      const current = normalizeLanguage(i18n.language);
-      if (current !== lang) {
-        void i18n.changeLanguage(lang);
+    (_lang: Language) => {
+      if (i18n.language !== "en") {
+        void i18n.changeLanguage("en");
       }
     },
     [i18n],

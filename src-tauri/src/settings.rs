@@ -759,13 +759,15 @@ pub(crate) fn resolve_override_path(raw: &str) -> PathBuf {
 }
 
 pub fn get_settings() -> AppSettings {
-    settings_store()
+    let mut settings = settings_store()
         .read()
         .unwrap_or_else(|e| {
             log::warn!("设置锁已毒化，使用恢复值: {e}");
             e.into_inner()
         })
-        .clone()
+        .clone();
+    settings.language = Some("en".to_string());
+    settings
 }
 
 pub fn get_settings_for_frontend() -> AppSettings {
@@ -781,6 +783,7 @@ pub fn get_settings_for_frontend() -> AppSettings {
 }
 
 pub fn update_settings(mut new_settings: AppSettings) -> Result<(), AppError> {
+    new_settings.language = Some("en".to_string());
     new_settings.normalize_paths();
     save_settings_file(&new_settings)?;
 

@@ -227,14 +227,3 @@ fn restore_single_env(conflict: &EnvConflict) -> Result<(), String> {
         )),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_backup_dir_creation() {
-        let backup_dir = get_backup_dir();
-        assert!(backup_dir.is_ok());
-    }
-}

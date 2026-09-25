@@ -21,12 +21,14 @@ pub async fn stream_check_provider(
     app_type: AppType,
     provider_id: String,
 ) -> Result<StreamCheckResult, AppError> {
+    crate::copilot_bridge::require_codex(app_type.as_str())?;
     let config = state.db.get_stream_check_config()?;
 
     let providers = state.db.get_all_providers(app_type.as_str())?;
     let provider = providers
         .get(&provider_id)
         .ok_or_else(|| AppError::Message(format!("供应商 {provider_id} 不存在")))?;
+    crate::copilot_bridge::require_copilot(provider)?;
 
     // Copilot 端点是动态的（随 OAuth token 解析），需预先取出 host 再探测；
     // 其余供应商传 None，由服务层从 settings_config 提取 base_url。无需鉴权。
@@ -52,8 +54,9 @@ pub async fn stream_check_all_providers(
     app_type: AppType,
     proxy_targets_only: bool,
 ) -> Result<Vec<(String, StreamCheckResult)>, AppError> {
+    crate::copilot_bridge::require_codex(app_type.as_str())?;
     let config = state.db.get_stream_check_config()?;
-    let providers = state.db.get_all_providers(app_type.as_str())?;
+    let providers = crate::copilot_bridge::providers(&state.db)?;
 
     let allowed_ids: Option<HashSet<String>> = if proxy_targets_only {
         let mut ids = HashSet::new();

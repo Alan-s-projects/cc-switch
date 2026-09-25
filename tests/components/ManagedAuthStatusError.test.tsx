@@ -1,6 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CodexOAuthSection } from "@/components/providers/forms/CodexOAuthSection";
 import { CopilotAuthSection } from "@/components/providers/forms/CopilotAuthSection";
 
 const authMocks = vi.hoisted(() => ({
@@ -42,26 +41,6 @@ describe("managed auth status failures", () => {
   beforeEach(() => {
     authMocks.refetchCodex.mockResolvedValue(undefined);
     authMocks.refetchCopilot.mockResolvedValue(undefined);
-  });
-
-  it("shows a retryable error instead of an empty Codex account selector", () => {
-    const onAccountSelect = vi.fn();
-    render(
-      <CodexOAuthSection
-        mode="select"
-        selectedAccountId="acct-existing"
-        onAccountSelect={onAccountSelect}
-      />,
-    );
-
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "无法加载 ChatGPT 账号状态，请重试。",
-    );
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-    expect(onAccountSelect).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "重试" }));
-    expect(authMocks.refetchCodex).toHaveBeenCalledTimes(1);
   });
 
   it("shows a retryable error instead of an empty Copilot account selector", () => {

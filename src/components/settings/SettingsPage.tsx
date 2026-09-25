@@ -34,12 +34,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { settingsApi } from "@/lib/api";
-import { LanguageSettings } from "@/components/settings/LanguageSettings";
 import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { WindowSettings } from "@/components/settings/WindowSettings";
-import { AppVisibilitySettings } from "@/components/settings/AppVisibilitySettings";
-import { SkillStorageLocationSettings } from "@/components/settings/SkillStorageLocationSettings";
-import { SkillSyncMethodSettings } from "@/components/settings/SkillSyncMethodSettings";
 import { TerminalSettings } from "@/components/settings/TerminalSettings";
 import { DirectorySettings } from "@/components/settings/DirectorySettings";
 import { ImportExportSection } from "@/components/settings/ImportExportSection";
@@ -51,8 +47,6 @@ import { ConnectivityCheckConfigPanel } from "@/components/usage/ConnectivityChe
 import { UsageDashboard } from "@/components/usage/UsageDashboard";
 import { LogConfigPanel } from "@/components/settings/LogConfigPanel";
 import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
-import { CodexAuthSettings } from "@/components/settings/CodexAuthSettings";
-import { useInstalledSkills } from "@/hooks/useSkills";
 import { useSettings } from "@/hooks/useSettings";
 import { useImportExport } from "@/hooks/useImportExport";
 import { useTranslation } from "react-i18next";
@@ -104,8 +98,6 @@ export function SettingsPage({
     clearSelection,
     resetStatus,
   } = useImportExport({ onImportSuccess });
-
-  const { data: installedSkills } = useInstalledSkills();
 
   const [activeTab, setActiveTab] = useState<string>("general");
   const [showRestartPrompt, setShowRestartPrompt] = useState(false);
@@ -252,32 +244,7 @@ export function SettingsPage({
                     transition={{ duration: 0.3 }}
                     className="space-y-6"
                   >
-                    <LanguageSettings
-                      value={settings.language}
-                      onChange={(lang) => handleAutoSave({ language: lang })}
-                    />
                     <ThemeSettings />
-                    <AppVisibilitySettings
-                      settings={settings}
-                      onChange={handleAutoSave}
-                    />
-                    <SkillStorageLocationSettings
-                      value={settings.skillStorageLocation ?? "cc_switch"}
-                      installedCount={installedSkills?.length ?? 0}
-                      onMigrated={(location) =>
-                        updateSettings({ skillStorageLocation: location })
-                      }
-                    />
-                    <SkillSyncMethodSettings
-                      value={settings.skillSyncMethod ?? "auto"}
-                      onChange={(method) =>
-                        handleAutoSave({ skillSyncMethod: method })
-                      }
-                    />
-                    <CodexAuthSettings
-                      settings={settings}
-                      onChange={handleAutoSave}
-                    />
                     <WindowSettings
                       settings={settings}
                       onChange={handleAutoSave}
@@ -515,12 +482,6 @@ export function SettingsPage({
                   refreshIntervalMs={settings?.usageDashboardRefreshIntervalMs}
                   onRefreshIntervalChange={(usageDashboardRefreshIntervalMs) =>
                     handleAutoSave({ usageDashboardRefreshIntervalMs })
-                  }
-                  sessionAutoSyncEnabled={
-                    settings?.sessionAutoSyncEnabled ?? true
-                  }
-                  onSessionAutoSyncEnabledChange={(sessionAutoSyncEnabled) =>
-                    handleAutoSave({ sessionAutoSyncEnabled })
                   }
                 />
               </TabsContent>

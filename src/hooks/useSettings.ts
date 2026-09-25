@@ -1,14 +1,8 @@
 import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { useQueryClient } from "@tanstack/react-query";
 import { providersApi, settingsApi } from "@/lib/api";
-import { syncCurrentProvidersLiveSafe } from "@/utils/postChangeSync";
-import {
-  invalidatePiDirectoryCaches,
-  useSettingsQuery,
-  useSaveSettingsMutation,
-} from "@/lib/query";
+import { useSettingsQuery, useSaveSettingsMutation } from "@/lib/query";
 import type { Settings } from "@/types";
 import { useSettingsForm, type SettingsFormState } from "./useSettingsForm";
 import {
@@ -67,7 +61,6 @@ export function useSettings(): UseSettingsResult {
   const { t } = useTranslation();
   const { data } = useSettingsQuery();
   const saveMutation = useSaveSettingsMutation();
-  const queryClient = useQueryClient();
 
   // 1️⃣ 表单状态管理
   const {
@@ -130,58 +123,6 @@ export function useSettings(): UseSettingsResult {
     setRequiresRestart,
   ]);
 
-  // 同步 Claude 插件集成配置到 ~/.claude/settings.json
-  // 返回 true 表示已执行过 syncCurrentProvidersLiveSafe，调用方可跳过重复同步
-  // prevEnabled 必须由调用方在 saveMutation 之前从实时缓存（queryClient.getQueryData）捕获，
-  // 避免 useCallback closure 中 data 因未 re-render 而滞后导致的快速连切 race。
-  const syncClaudePluginIfChanged = useCallback(
-    async (
-      enabled: boolean | undefined,
-      prevEnabled: boolean | undefined,
-    ): Promise<boolean> => {
-      if (enabled === undefined || enabled === prevEnabled) return false;
-      try {
-        if (enabled) {
-          const currentId = await providersApi.getCurrent("claude");
-          let isOfficial = false;
-          if (currentId) {
-            const allProviders = await providersApi.getAll("claude");
-            isOfficial = allProviders[currentId]?.category === "official";
-          }
-          await settingsApi.applyClaudePluginConfig({ official: isOfficial });
-        } else {
-          await settingsApi.applyClaudePluginConfig({ official: true });
-        }
-
-        const syncResult = await syncCurrentProvidersLiveSafe();
-        if (!syncResult.ok) {
-          console.warn(
-            "[useSettings] Failed to sync providers after toggling Claude plugin",
-            syncResult.error,
-          );
-          toast.error(
-            t("notifications.syncClaudePluginFailed", {
-              defaultValue: "同步 Claude 插件失败",
-            }),
-          );
-        }
-        return true;
-      } catch (error) {
-        console.warn(
-          "[useSettings] Failed to sync Claude plugin config",
-          error,
-        );
-        toast.error(
-          t("notifications.syncClaudePluginFailed", {
-            defaultValue: "同步 Claude 插件失败",
-          }),
-        );
-        return false;
-      }
-    },
-    [t],
-  );
-
   // 即时保存设置（用于 General 标签页的实时更新）
   // 保存基础配置 + 独立的系统 API 调用（开机自启）
   const autoSaveSettings = useCallback(
@@ -219,12 +160,6 @@ export function useSettings(): UseSettingsResult {
           language: mergedSettings.language,
         };
 
-        // 在 mutate 之前从实时缓存捕获上一次持久化的插件集成状态，
-        // 避免 closure 里的 data 因 React 尚未 re-render 而滞后
-        const prevPluginEnabled = queryClient.getQueryData<Settings>([
-          "settings",
-        ])?.enableClaudePluginIntegration;
-
         // 保存到配置文件
         await saveMutation.mutateAsync(payload);
 
@@ -244,41 +179,6 @@ export function useSettings(): UseSettingsResult {
             );
           }
         }
-
-        // Claude Code 初次安装确认：开=写入 hasCompletedOnboarding=true；关=删除该字段
-        // 仅在本次更新包含 skipClaudeOnboarding 时触发，避免其它自动保存误触发
-        const nextSkipClaudeOnboarding = updates.skipClaudeOnboarding;
-        if (
-          nextSkipClaudeOnboarding !== undefined &&
-          nextSkipClaudeOnboarding !== (data?.skipClaudeOnboarding ?? false)
-        ) {
-          try {
-            if (nextSkipClaudeOnboarding) {
-              await settingsApi.applyClaudeOnboardingSkip();
-            } else {
-              await settingsApi.clearClaudeOnboardingSkip();
-            }
-          } catch (error) {
-            console.warn(
-              "[useSettings] Failed to sync Claude onboarding skip",
-              error,
-            );
-            toast.error(
-              nextSkipClaudeOnboarding
-                ? t("notifications.skipClaudeOnboardingFailed", {
-                    defaultValue: "跳过 Claude Code 初次安装确认失败",
-                  })
-                : t("notifications.clearClaudeOnboardingSkipFailed", {
-                    defaultValue: "恢复 Claude Code 初次安装确认失败",
-                  }),
-            );
-          }
-        }
-
-        await syncClaudePluginIfChanged(
-          payload.enableClaudePluginIntegration,
-          prevPluginEnabled,
-        );
 
         // 持久化语言偏好
         try {
@@ -311,7 +211,7 @@ export function useSettings(): UseSettingsResult {
         throw error;
       }
     },
-    [data, queryClient, saveMutation, settings, syncClaudePluginIfChanged, t],
+    [data, saveMutation, settings, t],
   );
 
   // 完整保存设置（用于 Advanced 标签页的手动保存）
@@ -337,13 +237,6 @@ export function useSettings(): UseSettingsResult {
         );
         const sanitizedPiDir = sanitizeDir(mergedSettings.piConfigDir);
         const previousAppDir = initialAppConfigDir;
-        const previousClaudeDir = sanitizeDir(data?.claudeConfigDir);
-        const previousCodexDir = sanitizeDir(data?.codexConfigDir);
-        const previousGeminiDir = sanitizeDir(data?.geminiConfigDir);
-        const previousGrokDir = sanitizeDir(data?.grokConfigDir);
-        const previousOpencodeDir = sanitizeDir(data?.opencodeConfigDir);
-        const previousOpenclawDir = sanitizeDir(data?.openclawConfigDir);
-        const previousPiDir = sanitizeDir(data?.piConfigDir);
         const {
           webdavSync: _ignoredWebdavSync,
           s3Sync: _ignoredS3Sync,
@@ -361,12 +254,6 @@ export function useSettings(): UseSettingsResult {
           piConfigDir: sanitizedPiDir,
           language: mergedSettings.language,
         };
-
-        // 在 mutate 之前从实时缓存捕获上一次持久化的插件集成状态，
-        // 避免 closure 里的 data 因 React 尚未 re-render 而滞后
-        const prevPluginEnabled = queryClient.getQueryData<Settings>([
-          "settings",
-        ])?.enableClaudePluginIntegration;
 
         await saveMutation.mutateAsync(payload);
 
@@ -389,38 +276,6 @@ export function useSettings(): UseSettingsResult {
           }
         }
 
-        // Claude Code 初次安装确认：开=写入 hasCompletedOnboarding=true；关=删除该字段
-        const prevSkipClaudeOnboarding = data?.skipClaudeOnboarding ?? false;
-        const nextSkipClaudeOnboarding = payload.skipClaudeOnboarding ?? false;
-        if (nextSkipClaudeOnboarding !== prevSkipClaudeOnboarding) {
-          try {
-            if (nextSkipClaudeOnboarding) {
-              await settingsApi.applyClaudeOnboardingSkip();
-            } else {
-              await settingsApi.clearClaudeOnboardingSkip();
-            }
-          } catch (error) {
-            console.warn(
-              "[useSettings] Failed to sync Claude onboarding skip",
-              error,
-            );
-            toast.error(
-              nextSkipClaudeOnboarding
-                ? t("notifications.skipClaudeOnboardingFailed", {
-                    defaultValue: "跳过 Claude Code 初次安装确认失败",
-                  })
-                : t("notifications.clearClaudeOnboardingSkipFailed", {
-                    defaultValue: "恢复 Claude Code 初次安装确认失败",
-                  }),
-            );
-          }
-        }
-
-        const pluginSynced = await syncClaudePluginIfChanged(
-          payload.enableClaudePluginIntegration,
-          prevPluginEnabled,
-        );
-
         try {
           if (typeof window !== "undefined" && payload.language) {
             window.localStorage.setItem("language", payload.language);
@@ -436,36 +291,6 @@ export function useSettings(): UseSettingsResult {
           await providersApi.updateTrayMenu();
         } catch (error) {
           console.warn("[useSettings] Failed to refresh tray menu", error);
-        }
-
-        // 任一 app 的目录覆盖发生变化后，立即把当前状态投影到新的 live 目录。
-        // 如果插件同步已经执行过 syncCurrentProvidersLiveSafe，则跳过避免重复
-        const claudeDirChanged = sanitizedClaudeDir !== previousClaudeDir;
-        const codexDirChanged = sanitizedCodexDir !== previousCodexDir;
-        const geminiDirChanged = sanitizedGeminiDir !== previousGeminiDir;
-        const grokDirChanged = sanitizedGrokDir !== previousGrokDir;
-        const opencodeDirChanged = sanitizedOpencodeDir !== previousOpencodeDir;
-        const openclawDirChanged = sanitizedOpenclawDir !== previousOpenclawDir;
-        const piDirChanged = sanitizedPiDir !== previousPiDir;
-        if (
-          !pluginSynced &&
-          (claudeDirChanged ||
-            codexDirChanged ||
-            geminiDirChanged ||
-            grokDirChanged ||
-            opencodeDirChanged ||
-            openclawDirChanged)
-        ) {
-          const syncResult = await syncCurrentProvidersLiveSafe();
-          if (!syncResult.ok) {
-            console.warn(
-              "[useSettings] Failed to sync current providers after directory change",
-              syncResult.error,
-            );
-          }
-        }
-        if (piDirChanged) {
-          await invalidatePiDirectoryCaches(queryClient);
         }
 
         const appDirChanged = sanitizedAppDir !== (previousAppDir ?? undefined);
@@ -496,11 +321,9 @@ export function useSettings(): UseSettingsResult {
       appConfigDir,
       data,
       initialAppConfigDir,
-      queryClient,
       saveMutation,
       settings,
       setRequiresRestart,
-      syncClaudePluginIfChanged,
       t,
     ],
   );

@@ -63,15 +63,6 @@ vi.mock("@/components/ui/tabs", () => {
   };
 });
 
-vi.mock("@/components/settings/LanguageSettings", () => ({
-  LanguageSettings: ({ value, onChange }: any) => (
-    <div>
-      <span>language:{value}</span>
-      <button onClick={() => onChange("en")}>change-language</button>
-    </div>
-  ),
-}));
-
 vi.mock("@/components/settings/ThemeSettings", () => ({
   ThemeSettings: () => <div data-testid="theme-settings">theme</div>,
 }));
@@ -148,7 +139,7 @@ describe("SettingsPage integration", () => {
     renderDialog();
 
     await waitFor(() =>
-      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+      expect(screen.getByTestId("theme-settings")).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
     fireEvent.click(screen.getByText("settings.advanced.configDir.title"));
@@ -163,7 +154,7 @@ describe("SettingsPage integration", () => {
     renderDialog({ onImportSuccess });
 
     await waitFor(() =>
-      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+      expect(screen.getByTestId("theme-settings")).toBeInTheDocument(),
     );
 
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
@@ -187,7 +178,7 @@ describe("SettingsPage integration", () => {
     renderDialog();
 
     await waitFor(() =>
-      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+      expect(screen.getByTestId("theme-settings")).toBeInTheDocument(),
     );
 
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
@@ -214,7 +205,7 @@ describe("SettingsPage integration", () => {
     renderDialog();
 
     await waitFor(() =>
-      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+      expect(screen.getByTestId("theme-settings")).toBeInTheDocument(),
     );
 
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
@@ -236,26 +227,24 @@ describe("SettingsPage integration", () => {
     fireEvent.click(resetButtons[0]);
     await waitFor(() => expect(appInput.value).toBe("/home/mock/.cc-switch"));
 
-    const claudeInput = (await screen.findByPlaceholderText(
-      "settings.browsePlaceholderClaude",
+    const codexInput = (await screen.findByPlaceholderText(
+      "settings.browsePlaceholderCodex",
     )) as HTMLInputElement;
-    fireEvent.change(claudeInput, { target: { value: "/custom/claude" } });
-    await waitFor(() => expect(claudeInput.value).toBe("/custom/claude"));
+    fireEvent.change(codexInput, { target: { value: "/custom/codex" } });
+    await waitFor(() => expect(codexInput.value).toBe("/custom/codex"));
 
     fireEvent.click(browseButtons[1]);
-    await waitFor(() =>
-      expect(claudeInput.value).toBe("/custom/claude/picked"),
-    );
+    await waitFor(() => expect(codexInput.value).toBe("/custom/codex/picked"));
 
     fireEvent.click(resetButtons[1]);
-    await waitFor(() => expect(claudeInput.value).toBe("/home/mock/.claude"));
+    await waitFor(() => expect(codexInput.value).toBe("/home/mock/.codex"));
   });
 
   it("notifies when export fails", async () => {
     renderDialog();
 
     await waitFor(() =>
-      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+      expect(screen.getByTestId("theme-settings")).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
     fireEvent.click(screen.getByText("settings.advanced.data.title"));

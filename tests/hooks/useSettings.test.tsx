@@ -200,7 +200,7 @@ describe("useSettings hook", () => {
     getQueryDataMock.mockImplementation(() => serverSettings);
   });
 
-  it("auto-saves and applies Claude onboarding skip when toggled on", async () => {
+  it("saves legacy onboarding flags without applying them to client files", async () => {
     serverSettings = {
       ...serverSettings,
       skipClaudeOnboarding: false,
@@ -224,11 +224,11 @@ describe("useSettings hook", () => {
       await result.current.autoSaveSettings({ skipClaudeOnboarding: true });
     });
 
-    expect(applyClaudeOnboardingSkipMock).toHaveBeenCalledTimes(1);
+    expect(applyClaudeOnboardingSkipMock).not.toHaveBeenCalled();
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
-  it("auto-saves and clears Claude onboarding skip when toggled off", async () => {
+  it("does not clear client onboarding files when a legacy flag is disabled", async () => {
     serverSettings = {
       ...serverSettings,
       skipClaudeOnboarding: true,
@@ -252,7 +252,7 @@ describe("useSettings hook", () => {
       await result.current.autoSaveSettings({ skipClaudeOnboarding: false });
     });
 
-    expect(clearClaudeOnboardingSkipMock).toHaveBeenCalledTimes(1);
+    expect(clearClaudeOnboardingSkipMock).not.toHaveBeenCalled();
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
@@ -304,15 +304,11 @@ describe("useSettings hook", () => {
     expect(payload.openclawConfigDir).toBe("/custom/openclaw");
     expect(payload.language).toBe("en");
     expect(setAppConfigDirOverrideMock).toHaveBeenCalledWith("/override/app");
-    // 状态改变，应该调用 API
-    expect(applyClaudePluginConfigMock).toHaveBeenCalledWith({
-      official: false,
-    });
+    expect(applyClaudePluginConfigMock).not.toHaveBeenCalled();
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(true);
     expect(window.localStorage.getItem("language")).toBe("en");
     expect(toastErrorMock).not.toHaveBeenCalled();
-    // 插件同步已包含 syncCurrentProvidersLiveSafe，目录变更不再重复调用
-    expect(syncCurrentProvidersLiveMock).toHaveBeenCalledTimes(1);
+    expect(syncCurrentProvidersLiveMock).not.toHaveBeenCalled();
   });
 
   it("saves settings without restart when directory unchanged", async () => {
@@ -375,10 +371,10 @@ describe("useSettings hook", () => {
     const payload = mutateAsyncMock.mock.calls[0][0] as Settings;
     expect(payload.piConfigDir).toBe("/custom/pi");
     expect(syncCurrentProvidersLiveMock).not.toHaveBeenCalled();
-    expect(invalidatePiDirectoryCachesMock).toHaveBeenCalledTimes(1);
+    expect(invalidatePiDirectoryCachesMock).not.toHaveBeenCalled();
   });
 
-  it("shows toast when Claude plugin sync fails but continues flow", async () => {
+  it("saves app settings without invoking legacy plugin synchronization", async () => {
     // 设置服务器状态为 false,本地状态为 true,触发状态变化
     serverSettings = {
       ...serverSettings,
@@ -409,13 +405,12 @@ describe("useSettings hook", () => {
       await result.current.saveSettings();
     });
 
-    expect(toastErrorMock).toHaveBeenCalled();
-    const message = toastErrorMock.mock.calls.at(-1)?.[0] as string;
-    expect(message).toContain("同步 Claude 插件失败");
+    expect(applyClaudePluginConfigMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(true);
   });
 
-  it("detects plugin toggle via live cache even when closure data is stale", async () => {
+  it("never projects client configuration when legacy cache values differ", async () => {
     // 模拟快速连切后的 race：useSettingsQueryMock 的 data 滞后停留在 false（closure 未更新），
     // 但 queryClient 缓存（getQueryData）实时值已为 true（上次持久化到 enabled），
     // form 里用户想切回 false。旧实现会因 data === form 而跳过副作用；新实现应读 prev=true 并执行。
@@ -449,11 +444,8 @@ describe("useSettings hook", () => {
       await result.current.saveSettings(undefined, { silent: true });
     });
 
-    // 修复生效：读的是缓存实时值 true，payload=false，差异触发 clear_claude_config
-    expect(applyClaudePluginConfigMock).toHaveBeenCalledWith({
-      official: true,
-    });
-    expect(syncCurrentProvidersLiveMock).toHaveBeenCalled();
+    expect(applyClaudePluginConfigMock).not.toHaveBeenCalled();
+    expect(syncCurrentProvidersLiveMock).not.toHaveBeenCalled();
   });
 
   it("resets form, language and directories using server data", () => {

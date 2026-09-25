@@ -43,6 +43,7 @@ impl ProviderRouter {
     /// - 故障转移关闭时：仅返回当前供应商
     /// - 故障转移开启时：仅使用故障转移队列，按队列顺序依次尝试（P1 → P2 → ...）
     pub async fn select_providers(&self, app_type: &str) -> Result<Vec<Provider>, AppError> {
+        crate::copilot_bridge::require_codex(app_type)?;
         let mut result = Vec::new();
         let mut total_providers = 0usize;
         let mut circuit_open_count = 0usize;
@@ -58,7 +59,8 @@ impl ProviderRouter {
             .as_deref()
             .map(|id| self.db.get_provider_by_id(id, app_type))
             .transpose()?
-            .flatten();
+            .flatten()
+            .filter(|provider| provider.is_github_copilot());
 
         // 检查该应用的自动故障转移开关是否开启（从 proxy_config 表读取）
         let auto_failover_enabled = match self.db.get_proxy_config_for_app(app_type).await {
@@ -95,7 +97,8 @@ impl ProviderRouter {
                 let Some(provider) = all_providers.get(&provider_id).cloned() else {
                     continue;
                 };
-                if !provider_supports_failover(app_type, &provider) {
+                if !provider.is_github_copilot() || !provider_supports_failover(app_type, &provider)
+                {
                     continue;
                 }
                 total_providers += 1;
@@ -301,6 +304,15 @@ mod tests {
     use std::env;
     use tempfile::TempDir;
 
+    fn copilot_provider(id: &str) -> Provider {
+        let mut provider = Provider::with_id(id.into(), id.into(), json!({}), None);
+        provider.meta = Some(ProviderMeta {
+            provider_type: Some("github_copilot".into()),
+            ..Default::default()
+        });
+        provider
+    }
+
     fn managed_codex_official(id: &str, account_id: &str) -> Provider {
         let mut provider = Provider::with_id(
             id.to_string(),
@@ -376,7 +388,7 @@ mod tests {
         let db = Arc::new(Database::memory().unwrap());
         let router = ProviderRouter::new(db);
 
-        let breaker = router.get_or_create_circuit_breaker("claude:test").await;
+        let breaker = router.get_or_create_circuit_breaker("codex:test").await;
         assert!(breaker.allow_request().await.allowed);
     }
 
@@ -386,18 +398,16 @@ mod tests {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
 
-        let provider_a =
-            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
-        let provider_b =
-            Provider::with_id("b".to_string(), "Provider B".to_string(), json!({}), None);
+        let provider_a = copilot_provider("a");
+        let provider_b = copilot_provider("b");
 
-        db.save_provider("claude", &provider_a).unwrap();
-        db.save_provider("claude", &provider_b).unwrap();
-        db.set_current_provider("claude", "a").unwrap();
-        db.add_to_failover_queue("claude", "b").unwrap();
+        db.save_provider("codex", &provider_a).unwrap();
+        db.save_provider("codex", &provider_b).unwrap();
+        db.set_current_provider("codex", "a").unwrap();
+        db.add_to_failover_queue("codex", "b").unwrap();
 
         let router = ProviderRouter::new(db.clone());
-        let providers = router.select_providers("claude").await.unwrap();
+        let providers = router.select_providers("codex").await.unwrap();
 
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].id, "a");
@@ -410,27 +420,25 @@ mod tests {
         let db = Arc::new(Database::memory().unwrap());
 
         // 设置 sort_index 来控制顺序：b=1, a=2
-        let mut provider_a =
-            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
+        let mut provider_a = copilot_provider("a");
         provider_a.sort_index = Some(2);
-        let mut provider_b =
-            Provider::with_id("b".to_string(), "Provider B".to_string(), json!({}), None);
+        let mut provider_b = copilot_provider("b");
         provider_b.sort_index = Some(1);
 
-        db.save_provider("claude", &provider_a).unwrap();
-        db.save_provider("claude", &provider_b).unwrap();
-        db.set_current_provider("claude", "a").unwrap();
+        db.save_provider("codex", &provider_a).unwrap();
+        db.save_provider("codex", &provider_b).unwrap();
+        db.set_current_provider("codex", "a").unwrap();
 
-        db.add_to_failover_queue("claude", "b").unwrap();
-        db.add_to_failover_queue("claude", "a").unwrap();
+        db.add_to_failover_queue("codex", "b").unwrap();
+        db.add_to_failover_queue("codex", "a").unwrap();
 
         // 启用自动故障转移（使用新的 proxy_config API）
-        let mut config = db.get_proxy_config_for_app("claude").await.unwrap();
+        let mut config = db.get_proxy_config_for_app("codex").await.unwrap();
         config.auto_failover_enabled = true;
         db.update_proxy_config_for_app(config).await.unwrap();
 
         let router = ProviderRouter::new(db.clone());
-        let providers = router.select_providers("claude").await.unwrap();
+        let providers = router.select_providers("codex").await.unwrap();
 
         assert_eq!(providers.len(), 2);
         // 故障转移开启时：仅按队列顺序选择（忽略当前供应商）
@@ -444,25 +452,23 @@ mod tests {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
 
-        let provider_a =
-            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
-        let mut provider_b =
-            Provider::with_id("b".to_string(), "Provider B".to_string(), json!({}), None);
+        let provider_a = copilot_provider("a");
+        let mut provider_b = copilot_provider("b");
         provider_b.sort_index = Some(1);
 
-        db.save_provider("claude", &provider_a).unwrap();
-        db.save_provider("claude", &provider_b).unwrap();
-        db.set_current_provider("claude", "a").unwrap();
+        db.save_provider("codex", &provider_a).unwrap();
+        db.save_provider("codex", &provider_b).unwrap();
+        db.set_current_provider("codex", "a").unwrap();
 
         // 只把 b 加入故障转移队列（模拟“当前供应商不在队列里”的常见配置）
-        db.add_to_failover_queue("claude", "b").unwrap();
+        db.add_to_failover_queue("codex", "b").unwrap();
 
-        let mut config = db.get_proxy_config_for_app("claude").await.unwrap();
+        let mut config = db.get_proxy_config_for_app("codex").await.unwrap();
         config.auto_failover_enabled = true;
         db.update_proxy_config_for_app(config).await.unwrap();
 
         let router = ProviderRouter::new(db.clone());
-        let providers = router.select_providers("claude").await.unwrap();
+        let providers = router.select_providers("codex").await.unwrap();
 
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].id, "b");
@@ -470,16 +476,11 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn codex_official_current_stays_single_route_when_failover_is_stale() {
+    async fn legacy_non_copilot_current_routes_only_to_copilot_failover() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
         let official = managed_codex_official("official-a", "account-a");
-        let fallback = Provider::with_id(
-            "fallback".to_string(),
-            "Fallback".to_string(),
-            json!({}),
-            None,
-        );
+        let fallback = copilot_provider("fallback");
         db.save_provider("codex", &official).unwrap();
         db.save_provider("codex", &fallback).unwrap();
         db.set_current_provider("codex", &official.id).unwrap();
@@ -494,7 +495,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0].id, official.id);
+        assert_eq!(providers[0].id, fallback.id);
     }
 
     #[tokio::test]
@@ -502,19 +503,9 @@ mod tests {
     async fn stale_codex_official_queue_entries_are_not_retry_targets() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
-        let current = Provider::with_id(
-            "third-party".to_string(),
-            "Third Party".to_string(),
-            json!({}),
-            None,
-        );
+        let current = copilot_provider("third-party");
         let official = managed_codex_official("official-a", "account-a");
-        let fallback = Provider::with_id(
-            "fallback".to_string(),
-            "Fallback".to_string(),
-            json!({}),
-            None,
-        );
+        let fallback = copilot_provider("fallback");
         db.save_provider("codex", &current).unwrap();
         db.save_provider("codex", &official).unwrap();
         db.save_provider("codex", &fallback).unwrap();
@@ -553,33 +544,31 @@ mod tests {
         .await
         .unwrap();
 
-        let provider_a =
-            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
-        let provider_b =
-            Provider::with_id("b".to_string(), "Provider B".to_string(), json!({}), None);
+        let provider_a = copilot_provider("a");
+        let provider_b = copilot_provider("b");
 
-        db.save_provider("claude", &provider_a).unwrap();
-        db.save_provider("claude", &provider_b).unwrap();
+        db.save_provider("codex", &provider_a).unwrap();
+        db.save_provider("codex", &provider_b).unwrap();
 
-        db.add_to_failover_queue("claude", "a").unwrap();
-        db.add_to_failover_queue("claude", "b").unwrap();
+        db.add_to_failover_queue("codex", "a").unwrap();
+        db.add_to_failover_queue("codex", "b").unwrap();
 
         // 启用自动故障转移（使用新的 proxy_config API）
-        let mut config = db.get_proxy_config_for_app("claude").await.unwrap();
+        let mut config = db.get_proxy_config_for_app("codex").await.unwrap();
         config.auto_failover_enabled = true;
         db.update_proxy_config_for_app(config).await.unwrap();
 
         let router = ProviderRouter::new(db.clone());
 
         router
-            .record_result("b", "claude", false, false, Some("fail".to_string()))
+            .record_result("b", "codex", false, false, Some("fail".to_string()))
             .await
             .unwrap();
 
-        let providers = router.select_providers("claude").await.unwrap();
+        let providers = router.select_providers("codex").await.unwrap();
         assert_eq!(providers.len(), 2);
 
-        assert!(router.allow_provider_request("b", "claude").await.allowed);
+        assert!(router.allow_provider_request("b", "codex").await.allowed);
     }
 
     #[tokio::test]
@@ -597,13 +586,12 @@ mod tests {
         .await
         .unwrap();
 
-        let provider_a =
-            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
-        db.save_provider("claude", &provider_a).unwrap();
-        db.add_to_failover_queue("claude", "a").unwrap();
+        let provider_a = copilot_provider("a");
+        db.save_provider("codex", &provider_a).unwrap();
+        db.add_to_failover_queue("codex", "a").unwrap();
 
         // 启用自动故障转移
-        let mut config = db.get_proxy_config_for_app("claude").await.unwrap();
+        let mut config = db.get_proxy_config_for_app("codex").await.unwrap();
         config.auto_failover_enabled = true;
         db.update_proxy_config_for_app(config).await.unwrap();
 
@@ -611,26 +599,26 @@ mod tests {
 
         // 触发熔断：1 次失败
         router
-            .record_result("a", "claude", false, false, Some("fail".to_string()))
+            .record_result("a", "codex", false, false, Some("fail".to_string()))
             .await
             .unwrap();
 
         // 第一次请求：获取 HalfOpen 探测名额
-        let first = router.allow_provider_request("a", "claude").await;
+        let first = router.allow_provider_request("a", "codex").await;
         assert!(first.allowed);
         assert!(first.used_half_open_permit);
 
         // 第二次请求应被拒绝（名额已被占用）
-        let second = router.allow_provider_request("a", "claude").await;
+        let second = router.allow_provider_request("a", "codex").await;
         assert!(!second.allowed);
 
         // 使用 release_permit_neutral 释放名额（不影响健康统计）
         router
-            .release_permit_neutral("a", "claude", first.used_half_open_permit)
+            .release_permit_neutral("a", "codex", first.used_half_open_permit)
             .await;
 
         // 第三次请求应被允许（名额已释放）
-        let third = router.allow_provider_request("a", "claude").await;
+        let third = router.allow_provider_request("a", "codex").await;
         assert!(third.allowed);
         assert!(third.used_half_open_permit);
     }

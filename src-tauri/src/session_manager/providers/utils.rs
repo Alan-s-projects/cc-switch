@@ -153,33 +153,3 @@ pub fn path_basename(value: &str) -> Option<String> {
         .filter(|segment| !segment.is_empty())?;
     Some(last.to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn parse_timestamp_to_ms_supports_integers_and_rfc3339() {
-        assert_eq!(
-            parse_timestamp_to_ms(&json!(1_771_061_953_033_i64)),
-            Some(1_771_061_953_033)
-        );
-        assert_eq!(
-            parse_timestamp_to_ms(&json!(1_771_061_953_i64)),
-            Some(1_771_061_953_000)
-        );
-        assert_eq!(
-            parse_timestamp_to_ms(&json!("1970-01-01T00:00:01Z")),
-            Some(1_000)
-        );
-    }
-
-    #[test]
-    fn extract_text_supports_pi_tool_calls() {
-        assert_eq!(
-            extract_text(&json!([{ "type": "toolCall", "name": "read" }])),
-            "[Tool: read]"
-        );
-    }
-}

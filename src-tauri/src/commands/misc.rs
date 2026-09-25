@@ -56,7 +56,7 @@ pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
     handle
         .opener()
         .open_url(
-            "https://github.com/farion1231/cc-switch/releases/latest",
+            "https://github.com/Alan-s-projects/cc-switch/releases/latest",
             None::<String>,
         )
         .map_err(|e| format!("打开更新页面失败: {e}"))?;
@@ -166,7 +166,7 @@ pub async fn get_tool_versions(
     };
     let mut results = Vec::new();
 
-    for tool in requested {
+    for tool in requested.into_iter().filter(|tool| *tool == "codex") {
         let pref = wsl_shell_by_tool.as_ref().and_then(|m| m.get(tool));
         let tool_wsl_shell = pref.and_then(|p| p.wsl_shell.as_deref());
         let tool_wsl_shell_flag = pref.and_then(|p| p.wsl_shell_flag.as_deref());
@@ -183,6 +183,9 @@ pub async fn run_tool_lifecycle_action(
     action: String,
     wsl_shell_by_tool: Option<HashMap<String, WslShellPreferenceInput>>,
 ) -> Result<(), String> {
+    if tools.iter().any(|tool| tool != "codex") {
+        return Err("This build supports Codex only".into());
+    }
     let action = ToolLifecycleAction::from_str(&action)?;
     let requested = normalize_requested_tools(&tools);
     if requested.is_empty() {
@@ -3727,6 +3730,9 @@ pub struct ToolInstallationReport {
 pub async fn probe_tool_installations(
     tools: Vec<String>,
 ) -> Result<Vec<ToolInstallationReport>, String> {
+    if tools.iter().any(|tool| tool != "codex") {
+        return Err("This build supports Codex only".into());
+    }
     let requested = normalize_requested_tools(&tools);
     if requested.is_empty() {
         return Err("No supported tools selected".to_string());

@@ -16,18 +16,7 @@ export interface AppConfig {
   badgeClass: string;
 }
 
-export const APP_IDS: AppId[] = [
-  "claude",
-  "claude-desktop",
-  "codex",
-  "gemini",
-  "grokbuild",
-  "opencode",
-  "openclaw",
-  "hermes",
-  "pi",
-  "mcode",
-];
+export const APP_IDS: AppId[] = ["codex"];
 
 export const DEFAULT_VISIBLE_APPS: VisibleApps = {
   claude: true,
@@ -60,12 +49,7 @@ export type ProxyAppId = Extract<
 >;
 
 /** Apps with a complete local gateway + failover data plane. */
-export const PROXY_APP_IDS: ProxyAppId[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-];
+export const PROXY_APP_IDS: ProxyAppId[] = ["codex"];
 
 export function isProxyAppId(appId: string): appId is ProxyAppId {
   return (PROXY_APP_IDS as string[]).includes(appId);

@@ -9,6 +9,7 @@ use std::str::FromStr;
 use tauri::Emitter;
 
 fn require_failover_app(app_type: &str) -> Result<(), String> {
+    crate::copilot_bridge::require_codex(app_type).map_err(|e| e.to_string())?;
     let app = crate::app_config::AppType::from_str(app_type)
         .map_err(|error| format!("无效的应用类型: {error}"))?;
     if !app.supports_local_proxy() {
@@ -26,6 +27,7 @@ fn require_failover_provider(
         .get_provider_by_id(provider_id, app_type)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("供应商不存在: {provider_id}"))?;
+    crate::copilot_bridge::require_copilot(&provider).map_err(|e| e.to_string())?;
     if !crate::proxy::provider_router::provider_supports_failover(app_type, &provider) {
         return Err("Codex Official 账号卡不支持自动故障转移".to_string());
     }
@@ -41,7 +43,8 @@ mod tests {
 
     #[test]
     fn failover_rejects_apps_without_a_proxy_data_plane() {
-        assert!(require_failover_app("claude").is_ok());
+        assert!(require_failover_app("codex").is_ok());
+        assert!(require_failover_app("claude").is_err());
         assert!(require_failover_app("pi").is_err());
     }
 
@@ -80,13 +83,7 @@ pub async fn get_failover_queue(
         .db
         .get_failover_queue(&app_type)
         .map_err(|e| e.to_string())?;
-    if app_type != "codex" {
-        return Ok(queue);
-    }
-    let providers = state
-        .db
-        .get_all_providers(&app_type)
-        .map_err(|e| e.to_string())?;
+    let providers = crate::copilot_bridge::providers(&state.db).map_err(|e| e.to_string())?;
     Ok(queue
         .into_iter()
         .filter(|item| {
@@ -111,7 +108,8 @@ pub async fn get_available_providers_for_failover(
     Ok(providers
         .into_iter()
         .filter(|provider| {
-            crate::proxy::provider_router::provider_supports_failover(&app_type, provider)
+            provider.is_github_copilot()
+                && crate::proxy::provider_router::provider_supports_failover(&app_type, provider)
         })
         .collect())
 }
@@ -189,10 +187,8 @@ pub async fn set_auto_failover_enabled(
     // 队列为空时把当前供应商自动加入作为 P1，避免用户陷入"必须先加队列才能开启"的死锁
     let mut auto_added_provider_id: Option<String> = None;
     let p1_provider_id = if enabled {
-        let all_providers = state
-            .db
-            .get_all_providers(&app_type)
-            .map_err(|e| e.to_string())?;
+        let all_providers =
+            crate::copilot_bridge::providers(&state.db).map_err(|e| e.to_string())?;
         let mut queue = state
             .db
             .get_failover_queue(&app_type)

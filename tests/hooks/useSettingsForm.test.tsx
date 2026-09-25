@@ -58,7 +58,7 @@ describe("useSettingsForm Hook", () => {
     expect(changeLanguageSpy).toHaveBeenCalledWith("en");
   });
 
-  it("should support japanese language preference from server data", async () => {
+  it("normalizes a legacy Japanese preference to English", async () => {
     useSettingsQueryMock.mockReturnValue({
       data: {
         showInTray: true,
@@ -74,14 +74,14 @@ describe("useSettingsForm Hook", () => {
     const { result } = renderHook(() => useSettingsForm());
 
     await waitFor(() => {
-      expect(result.current.settings?.language).toBe("ja");
+      expect(result.current.settings?.language).toBe("en");
     });
 
-    expect(result.current.initialLanguage).toBe("ja");
-    expect(changeLanguageSpy).toHaveBeenCalledWith("ja");
+    expect(result.current.initialLanguage).toBe("en");
+    expect(changeLanguageSpy).toHaveBeenCalledWith("en");
   });
 
-  it("should support traditional chinese language preference aliases", async () => {
+  it("normalizes a legacy Chinese preference to English", async () => {
     useSettingsQueryMock.mockReturnValue({
       data: {
         showInTray: true,
@@ -97,19 +97,19 @@ describe("useSettingsForm Hook", () => {
     const { result } = renderHook(() => useSettingsForm());
 
     await waitFor(() => {
-      expect(result.current.settings?.language).toBe("zh-TW");
+      expect(result.current.settings?.language).toBe("en");
     });
 
-    expect(result.current.initialLanguage).toBe("zh-TW");
-    expect(changeLanguageSpy).toHaveBeenCalledWith("zh-TW");
+    expect(result.current.initialLanguage).toBe("en");
+    expect(changeLanguageSpy).toHaveBeenCalledWith("en");
   });
 
-  it("should prioritize reading language from local storage in readPersistedLanguage", () => {
+  it("always uses English regardless of the stored language", () => {
     useSettingsQueryMock.mockReturnValue({
       data: null,
       isLoading: false,
     });
-    window.localStorage.setItem("language", "en");
+    window.localStorage.setItem("language", "ja");
 
     const { result } = renderHook(() => useSettingsForm());
 
@@ -182,7 +182,7 @@ describe("useSettingsForm Hook", () => {
     expect(settings.claudeConfigDir).toBe("/reset");
     expect(settings.codexConfigDir).toBeUndefined();
     expect(settings.piConfigDir).toBe("/pi-reset");
-    expect(settings.language).toBe("zh");
+    expect(settings.language).toBe("en");
     expect(result.current.initialLanguage).toBe("en");
     expect(changeLanguageSpy).toHaveBeenCalledWith("en");
   });
@@ -207,10 +207,10 @@ describe("useSettingsForm Hook", () => {
     });
 
     changeLanguageSpy.mockClear();
-    (i18n as any).language = "zh";
+    (i18n as any).language = "en";
 
     act(() => {
-      result.current.syncLanguage("zh");
+      result.current.syncLanguage("en");
     });
 
     expect(changeLanguageSpy).not.toHaveBeenCalled();

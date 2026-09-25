@@ -1,9 +1,22 @@
 {
+  "bridge": {
+    "setup": "Codex connection",
+    "readOnly": "Codex configuration is read-only. Copy the suggested settings and apply them yourself.",
+    "connectedConfig": "Codex already points to this proxy address. Review the model catalog path below.",
+    "manualSetup": "Add or update these connection fields in your Codex config.toml.",
+    "mergeHint": "Merge the top-level fields before any [tables], and update the matching provider table. Keep your other settings; do not replace the whole file.",
+    "suggestion": "Suggested TOML",
+    "copySuggestion": "Copy suggested settings",
+    "providerSettings": "These settings belong to the Copilot bridge. Saving will not edit Codex files.",
+    "proxy": "Copilot proxy",
+    "proxyHint": "Start or stop the Copilot proxy. Codex files are never changed."
+  },
   "app": {
     "title": "CC Switch",
-    "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
+    "description": "Codex and GitHub Copilot bridge with usage dashboard"
   },
   "common": {
+    "copied": "Copied",
     "add": "Add",
     "edit": "Edit",
     "delete": "Delete",
@@ -102,6 +115,7 @@
     "windowClose": "Close window"
   },
   "provider": {
+    "nameRequired": "Enter a provider name.",
     "connectivityCheck": "Connectivity check",
     "tabProvider": "Provider",
     "tabUniversal": "Universal",
@@ -349,7 +363,7 @@
     "tabProxy": "Routing",
     "authCenter": {
       "title": "OAuth Authentication Center",
-      "description": "Use your other subscriptions in Claude Code — please be mindful of compliance risks.",
+      "description": "Manage GitHub Copilot authentication and accounts.",
       "beta": "Beta",
       "copilotDescription": "Manage GitHub Copilot accounts",
       "codexOauthDescription": "Manage ChatGPT accounts",
@@ -358,7 +372,7 @@
     "advanced": {
       "configDir": {
         "title": "Configuration Directory",
-        "description": "Manage storage paths for Claude, Codex and Gemini configurations"
+        "description": "Choose the app data folder and the Codex folder to read."
       },
       "proxy": {
         "title": "Local Routing",
@@ -824,7 +838,7 @@
     "github": "GitHub",
     "starPrompt": "If CC Switch has helped you, please star us on GitHub — it means a lot to us",
     "manualInstallCommands": "Manual Install Commands",
-    "oneClickInstallHint": "Install or upgrade Claude Code / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes / Pi",
+    "oneClickInstallHint": "Install or upgrade the Codex CLI",
     "localEnvCheck": "Local environment check",
     "updateAllTools": "Update All ({{count}})",
     "currentVersion": "Current Version",
@@ -2899,9 +2913,9 @@
     "switchFailed": "Switch failed: {{error}}",
     "takeover": {
       "ariaLabel": "{{appLabel}} local routing",
-      "hint": "Select apps to route — once enabled, requests from that app will go through local routing",
-      "enabled": "{{app}} routing enabled",
-      "disabled": "{{app}} routing disabled",
+      "hint": "Codex configuration is read-only. Apply connection suggestions yourself.",
+      "enabled": "Copilot proxy started",
+      "disabled": "Copilot proxy stopped",
       "failed": "Failed to toggle routing: {{detail}}",
       "tooltip": {
         "active": "{{appLabel}} is routing - {{address}}:{{port}}\nSwitch provider for hot switching",
@@ -2979,7 +2993,7 @@
       "stopped": "Routing service stopped",
       "stopFailed": "Failed to stop routing service: {{detail}}"
     },
-    "stoppedWithRestore": "Routing service stopped, all routing configs restored",
+    "stoppedWithRestore": "Copilot proxy stopped",
     "stopWithRestoreFailed": "Stop failed: {{detail}}"
   },
   "streamCheck": {
@@ -2998,7 +3012,7 @@
   },
   "proxyConfig": {
     "proxyEnabled": "Routing Master Switch",
-    "appTakeover": "Routing Enabled",
+    "appTakeover": "Codex proxy",
     "perAppConfig": "Per-App Config",
     "circuitBreaker": "Circuit Breaker",
     "circuitBreakerSettings": "Circuit Breaker Settings",

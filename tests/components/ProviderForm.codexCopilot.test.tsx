@@ -12,8 +12,8 @@ import { createTestQueryClient } from "../utils/testQueryClient";
 vi.mock("@/components/providers/forms/CopilotAuthSection", () => ({
   CopilotAuthSection: () => null,
 }));
-vi.mock("@/components/providers/forms/CodexConfigEditor", () => ({
-  default: () => null,
+vi.mock("@/components/providers/forms/hooks/useCopilotAuth", () => ({
+  useCopilotAuth: () => ({ hasAnyAccount: true }),
 }));
 vi.mock("@/components/providers/forms/ProviderAdvancedConfig", () => ({
   ProviderAdvancedConfig: () => null,
@@ -90,9 +90,6 @@ function renderForm(meta?: ProviderMeta) {
       />
     </QueryClientProvider>,
   );
-  if (!meta) {
-    fireEvent.click(screen.getByRole("button", { name: /GitHub Copilot/ }));
-  }
   return onSubmit;
 }
 
@@ -136,9 +133,15 @@ describe("Codex Copilot provider form", () => {
     }
   });
 
-  it("defaults to GPT-6 Astra and shows all five preset model mappings", () => {
+  it("shows the existing model catalog without a TOML or default-model editor", () => {
     renderForm();
-    expect(screen.getAllByDisplayValue("gpt-6-astra")).toHaveLength(2);
+    expect(screen.getAllByDisplayValue("gpt-6-astra")).toHaveLength(1);
+    expect(
+      screen.queryByLabelText("codexConfig.defaultModelLabel"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("codexConfig.writeCommonConfig"),
+    ).not.toBeInTheDocument();
     for (const model of [
       "gpt-5.6-sol",
       "gpt-5.6-terra",
@@ -206,7 +209,7 @@ describe("Codex Copilot provider form", () => {
     expect(onSubmit.mock.calls[0][0].meta?.apiFormat).toBe("openai_chat");
   });
 
-  it("excludes Messages only for Copilot and resets the override on preset changes", async () => {
+  it("offers only Copilot transports and no other provider presets", async () => {
     renderForm();
     fireEvent.keyDown(formatControl(), { key: "ArrowDown" });
     expect(await screen.findAllByRole("option")).toHaveLength(3);
@@ -216,16 +219,10 @@ describe("Codex Copilot provider form", () => {
     fireEvent.click(
       screen.getByRole("option", { name: formatLabels.openai_chat }),
     );
-    fireEvent.click(screen.getByRole("button", { name: /DeepSeek/ }));
-    expect(formatControl()).toHaveTextContent("Responses（原生）");
-    expect(screen.getByText("模型映射")).toBeVisible();
-    fireEvent.keyDown(formatControl(), { key: "ArrowDown" });
     expect(
-      await screen.findByRole("option", { name: /Anthropic Messages/ }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("option", { name: "Responses（原生）" }));
-    fireEvent.click(screen.getByRole("button", { name: /GitHub Copilot/ }));
-    expect(formatControl()).toHaveTextContent(formatLabels.auto);
+      screen.queryByRole("button", { name: /DeepSeek/ }),
+    ).not.toBeInTheDocument();
+    expect(formatControl()).toHaveTextContent(formatLabels.openai_chat);
     expect(screen.getByText("模型映射")).toBeVisible();
   });
 });

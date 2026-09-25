@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import {
   act,
   fireEvent,
@@ -7,7 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { FormProvider, useForm } from "react-hook-form";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { CodexFormFields } from "@/components/providers/forms/CodexFormFields";
 import {
@@ -15,88 +15,34 @@ import {
   copilotGetModelsForAccount,
   type CopilotModel,
 } from "@/lib/api/copilot";
-import {
-  fetchModelsForConfig,
-  fetchXaiOauthModels,
-  showFetchModelsError,
-  type FetchedModel,
-} from "@/lib/api/model-fetch";
+import { showFetchModelsError } from "@/lib/api/model-fetch";
+import type { CodexCatalogModel } from "@/types";
 
 vi.mock("@/lib/api/copilot", () => ({
   copilotGetModels: vi.fn(),
   copilotGetModelsForAccount: vi.fn(),
 }));
-vi.mock("@/lib/api/model-fetch", () => ({
-  fetchModelsForConfig: vi.fn(),
-  fetchXaiOauthModels: vi.fn(),
-  showFetchModelsError: vi.fn(),
-}));
+vi.mock("@/lib/api/model-fetch", () => ({ showFetchModelsError: vi.fn() }));
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 vi.mock("@/components/providers/forms/CopilotAuthSection", () => ({
   CopilotAuthSection: () => null,
 }));
-vi.mock("@/components/providers/forms/XaiOAuthSection", () => ({
-  XaiOAuthSection: () => null,
-}));
-vi.mock("@/components/providers/forms/shared", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/components/providers/forms/shared")
-    >();
-  return {
-    ...actual,
-    ModelDropdown: ({ models }: { models: FetchedModel[] }) => (
-      <output data-testid="model-options">
-        {models.map((model) => model.id).join(",")}
-      </output>
-    ),
-  };
-});
 
 type Props = ComponentProps<typeof CodexFormFields>;
-type ProviderKind = "copilot" | "xai" | "config";
-
-function pendingModels() {
-  let resolve!: (models: Array<CopilotModel & FetchedModel>) => void;
-  let reject!: (reason: Error) => void;
-  const promise = new Promise<Array<CopilotModel & FetchedModel>>(
-    (res, rej) => {
-      resolve = res;
-      reject = rej;
-    },
-  );
-  return { promise, resolve, reject };
-}
-
-function advertisedModel(id = "model-1"): CopilotModel & FetchedModel {
+function props(overrides: Partial<Props> = {}): Props {
   return {
-    id,
-    name: "Model One",
-    vendor: "vendor",
-    ownedBy: "vendor",
-    model_picker_enabled: true,
-    supported_endpoints: ["/responses"],
-    context_window: 400_000,
-  };
-}
-
-function makeProps(kind: ProviderKind): Props {
-  return {
-    isCopilotPreset: kind === "copilot",
+    isCopilotPreset: true,
     isCopilotAuthenticated: true,
-    selectedGitHubAccountId: "github-account",
-    isXaiOauthPreset: kind === "xai",
-    isXaiOauthAuthenticated: true,
-    selectedXaiAccountId: "xai-account",
-    codexApiKey: "test-key",
+    selectedGitHubAccountId: "account-a",
+    codexApiKey: "",
     onApiKeyChange: vi.fn(),
     category: "third_party",
     shouldShowApiKeyLink: false,
     websiteUrl: "",
     shouldShowSpeedTest: false,
-    codexBaseUrl: "https://example.com/v1",
+    codexBaseUrl: "https://api.githubcopilot.com",
     onBaseUrlChange: vi.fn(),
     isFullUrl: false,
     onFullUrlChange: vi.fn(),
@@ -104,10 +50,9 @@ function makeProps(kind: ProviderKind): Props {
     onEndpointModalToggle: vi.fn(),
     autoSelect: false,
     onAutoSelectChange: vi.fn(),
-    codexModel: "model-1",
-    onModelChange: vi.fn(),
     apiFormat: "openai_chat",
     onApiFormatChange: vi.fn(),
+    copilotApiFormat: "auto",
     anthropicAuthField: "ANTHROPIC_AUTH_TOKEN",
     onAnthropicAuthFieldChange: vi.fn(),
     impersonateClaudeCode: false,
@@ -125,295 +70,155 @@ function makeProps(kind: ProviderKind): Props {
     onLocalProxyHeadersOverrideChange: vi.fn(),
     localProxyBodyOverride: "",
     onLocalProxyBodyOverrideChange: vi.fn(),
+    ...overrides,
   };
 }
-
-function Harness(props: Props) {
+function Harness(input: Props) {
   const form = useForm();
+  const [models, setModels] = useState<CodexCatalogModel[]>(
+    input.catalogModels ?? [],
+  );
+  useEffect(() => {
+    setModels(input.catalogModels ?? []);
+  }, [input.catalogModels]);
   return (
     <FormProvider {...form}>
-      <CodexFormFields {...props} />
+      <CodexFormFields
+        {...input}
+        catalogModels={models}
+        onCatalogModelsChange={(next) => {
+          input.onCatalogModelsChange?.(next);
+          setModels(next);
+        }}
+      />
     </FormProvider>
   );
 }
+function model(id: string, endpoint = "/responses"): CopilotModel {
+  return {
+    id,
+    name: id,
+    vendor: "OpenAI",
+    model_picker_enabled: true,
+    supported_endpoints: [endpoint],
+    context_window: 1048576,
+  };
+}
+const fetchButton = () =>
+  screen.getAllByRole("button", { name: "providerForm.fetchModels" })[0];
 
-const fetchMockFor = (kind: ProviderKind) =>
-  kind === "copilot"
-    ? vi.mocked(copilotGetModelsForAccount)
-    : kind === "xai"
-      ? vi.mocked(fetchXaiOauthModels)
-      : vi.mocked(fetchModelsForConfig);
-
-const fetchButton = () => screen.getByTitle("providerForm.fetchModels");
-const providerKinds: ProviderKind[] = ["copilot", "xai", "config"];
-
-describe("Codex model-fetch lifecycle", () => {
+describe("Copilot model catalog import", () => {
   beforeEach(() => {
-    vi.resetAllMocks();
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
-  it("fetches only models supporting the selected Copilot protocol", async () => {
-    const responsesModel = advertisedModel("responses-model");
-    const chatModel = {
-      ...advertisedModel("chat-model"),
-      supported_endpoints: ["/chat/completions"],
-    };
+  it("filters models by Copilot transport and imports them into the bridge catalog", async () => {
     vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
-      responsesModel,
-      chatModel,
+      model("gpt-6-astra"),
+      model("chat-only", "/chat/completions"),
     ]);
-    const props = {
-      ...makeProps("copilot"),
-      copilotApiFormat: "openai_chat" as const,
-    };
-    render(<Harness {...props} />);
+    const input = props({ copilotApiFormat: "openai_responses" });
+    render(<Harness {...input} />);
     fireEvent.click(fetchButton());
-    await waitFor(() => expect(fetchButton()).toBeEnabled());
-    expect(screen.getByTestId("model-options")).toHaveTextContent("chat-model");
-    expect(screen.getByTestId("model-options")).not.toHaveTextContent(
-      "responses-model",
-    );
-    expect(props.onModelChange).toHaveBeenCalledWith("chat-model");
-    expect(props.onCatalogModelsChange).toHaveBeenCalledWith([
-      expect.objectContaining({ model: "chat-model" }),
-    ]);
-  });
-
-  it("defaults new Copilot GPT models to image input while preserving saved modalities", async () => {
-    vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
-      advertisedModel("gpt-6-astra"),
-      advertisedModel("gpt-5.5"),
-      advertisedModel("claude-model"),
-    ]);
-    const props = {
-      ...makeProps("copilot"),
-      catalogModels: [{ model: "gpt-5.5", inputModalities: ["text"] }],
-    };
-    render(<Harness {...props} />);
-    fireEvent.click(fetchButton());
-    await waitFor(() => expect(fetchButton()).toBeEnabled());
-
-    expect(props.onCatalogModelsChange).toHaveBeenCalledWith([
-      expect.objectContaining({
-        model: "gpt-6-astra",
-        inputModalities: ["text", "image"],
-      }),
-      expect.objectContaining({
-        model: "gpt-5.5",
-        inputModalities: ["text"],
-      }),
-      expect.objectContaining({
-        model: "claude-model",
-        inputModalities: ["text"],
-      }),
-    ]);
-  });
-
-  it("discards a pending model list after the Copilot protocol changes", async () => {
-    const pending = pendingModels();
-    vi.mocked(copilotGetModelsForAccount).mockReturnValue(pending.promise);
-    const props = makeProps("copilot");
-    const { rerender } = render(<Harness {...props} />);
-    fireEvent.click(fetchButton());
-    rerender(<Harness {...props} copilotApiFormat="openai_chat" />);
-    await act(async () => pending.resolve([advertisedModel()]));
-    expect(props.onCatalogModelsChange).not.toHaveBeenCalled();
-    expect(props.onModelChange).not.toHaveBeenCalled();
-    expect(toast.success).not.toHaveBeenCalled();
-  });
-
-  it.each(["gpt-6-astra", "claude-model"])(
-    "prefers an available GPT model without replacing a valid selection (%s)",
-    async (currentModel) => {
-      vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
-        advertisedModel("claude-model"),
-        advertisedModel("gpt-available"),
-      ]);
-      const props = { ...makeProps("copilot"), codexModel: currentModel };
-      render(<Harness {...props} />);
-      fireEvent.click(fetchButton());
-      await waitFor(() => expect(fetchButton()).toBeEnabled());
-      if (currentModel === "claude-model") {
-        expect(props.onModelChange).not.toHaveBeenCalled();
-      } else {
-        expect(props.onModelChange).toHaveBeenCalledWith("gpt-available");
-      }
-    },
-  );
-
-  it.each(providerKinds)(
-    "loads %s models through the existing provider route",
-    async (kind) => {
-      const pending = pendingModels();
-      fetchMockFor(kind).mockReturnValue(pending.promise);
-      const props = makeProps(kind);
-      render(<Harness {...props} />);
-
-      fireEvent.click(fetchButton());
-      expect(fetchButton()).toBeDisabled();
-      expect(fetchMockFor(kind)).toHaveBeenCalledTimes(1);
-      if (kind === "copilot") {
-        expect(copilotGetModelsForAccount).toHaveBeenCalledWith(
-          "github-account",
-        );
-      } else if (kind === "xai") {
-        expect(fetchXaiOauthModels).toHaveBeenCalledWith("xai-account");
-      } else {
-        expect(fetchModelsForConfig).toHaveBeenCalledWith(
-          props.codexBaseUrl,
-          "test-key",
-          false,
-          undefined,
-          "",
-        );
-      }
-
-      await act(async () => pending.resolve([advertisedModel()]));
-      await waitFor(() => expect(fetchButton()).toBeEnabled());
-      expect(screen.getByTestId("model-options")).toHaveTextContent("model-1");
-      expect(toast.success).toHaveBeenCalledTimes(1);
-      expect(showFetchModelsError).not.toHaveBeenCalled();
-      if (kind === "copilot") {
-        expect(props.onCatalogModelsChange).toHaveBeenCalledWith([
-          {
-            model: "model-1",
-            displayName: "Model One",
-            contextWindow: 400_000,
-            supportsParallelToolCalls: false,
-            inputModalities: ["text"],
-          },
-        ]);
-      } else {
-        expect(props.onCatalogModelsChange).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each(providerKinds)(
-    "keeps the empty-list notification for %s",
-    async (kind) => {
-      fetchMockFor(kind).mockResolvedValue([]);
-      render(<Harness {...makeProps(kind)} />);
-      fireEvent.click(fetchButton());
-
-      await waitFor(() =>
-        expect(toast.info).toHaveBeenCalledWith(
-          "providerForm.fetchModelsEmpty",
-        ),
-      );
-      expect(fetchButton()).toBeEnabled();
-      expect(toast.success).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(providerKinds)(
-    "reports %s failures and releases loading state",
-    async (kind) => {
-      const error = new Error("model-list unavailable");
-      fetchMockFor(kind).mockRejectedValue(error);
-      render(<Harness {...makeProps(kind)} />);
-      fireEvent.click(fetchButton());
-
-      await waitFor(() =>
-        expect(showFetchModelsError).toHaveBeenCalledWith(
-          error,
-          expect.any(Function),
-        ),
-      );
-      expect(fetchButton()).toBeEnabled();
-      expect(toast.success).not.toHaveBeenCalled();
-      expect(console.warn).toHaveBeenCalledWith(
-        kind === "copilot"
-          ? "[Copilot] Failed to fetch models:"
-          : kind === "xai"
-            ? "[XaiOAuth] Failed to fetch models:"
-            : "[ModelFetch] Failed:",
-        error,
-      );
-    },
-  );
-
-  it.each(providerKinds)(
-    "ignores stale %s results after the request identity changes",
-    async (kind) => {
-      const pending = pendingModels();
-      fetchMockFor(kind).mockReturnValue(pending.promise);
-      const props = makeProps(kind);
-      const view = render(<Harness {...props} />);
-      fireEvent.click(fetchButton());
-      view.rerender(
-        <Harness
-          {...props}
-          selectedGitHubAccountId="another-github-account"
-          selectedXaiAccountId="another-xai-account"
-          codexBaseUrl="https://other.example/v1"
-        />,
-      );
-
-      await act(async () => pending.resolve([advertisedModel()]));
-      await waitFor(() => expect(fetchButton()).toBeEnabled());
-      expect(screen.queryByTestId("model-options")).not.toBeInTheDocument();
-      expect(props.onCatalogModelsChange).not.toHaveBeenCalled();
-      expect(toast.success).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps Copilot filtering, explicit context values and default-model selection", async () => {
-    vi.mocked(copilotGetModels).mockResolvedValue([
-      advertisedModel(),
-      {
-        ...advertisedModel("messages-only"),
-        supported_endpoints: ["/v1/messages"],
-      },
-    ]);
-    const props = {
-      ...makeProps("copilot"),
-      selectedGitHubAccountId: null,
-      codexModel: "unavailable",
-      catalogModels: [{ model: "model-1", contextWindow: 200_000 }],
-    };
-    render(<Harness {...props} />);
-    fireEvent.click(fetchButton());
-
     await waitFor(() =>
-      expect(props.onModelChange).toHaveBeenCalledWith("model-1"),
+      expect(screen.getAllByDisplayValue("gpt-6-astra")[0]).toBeVisible(),
+    );
+    expect(screen.queryByDisplayValue("chat-only")).not.toBeInTheDocument();
+    expect(copilotGetModelsForAccount).toHaveBeenCalledWith("account-a");
+  });
+
+  it("keeps explicit model declarations and defaults new GPT imports to image input", async () => {
+    vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
+      model("gpt-existing"),
+      model("gpt-new"),
+    ]);
+    const input = props({
+      catalogModels: [
+        {
+          model: "gpt-existing",
+          contextWindow: 400000,
+          inputModalities: ["text"],
+        },
+      ],
+    });
+    render(<Harness {...input} />);
+    fireEvent.click(fetchButton());
+    await waitFor(() =>
+      expect(input.onCatalogModelsChange).toHaveBeenCalledWith([
+        expect.objectContaining({
+          model: "gpt-existing",
+          contextWindow: 400000,
+          inputModalities: ["text"],
+        }),
+        expect.objectContaining({
+          model: "gpt-new",
+          inputModalities: ["text", "image"],
+        }),
+      ]),
+    );
+  });
+
+  it("discards results from an account that is no longer selected", async () => {
+    let resolve!: (value: CopilotModel[]) => void;
+    vi.mocked(copilotGetModelsForAccount).mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    const input = props();
+    const { rerender } = render(<Harness {...input} />);
+    fireEvent.click(fetchButton());
+    rerender(<Harness {...input} selectedGitHubAccountId="account-b" />);
+    await act(async () => {
+      resolve([model("stale-model")]);
+    });
+    expect(screen.queryByDisplayValue("stale-model")).not.toBeInTheDocument();
+    expect(input.onCatalogModelsChange).not.toHaveBeenCalled();
+  });
+
+  it("reports failures and releases the loading state", async () => {
+    const failure = new Error("offline");
+    vi.mocked(copilotGetModelsForAccount).mockRejectedValue(failure);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    render(<Harness {...props()} />);
+    fireEvent.click(fetchButton());
+    await waitFor(() =>
+      expect(showFetchModelsError).toHaveBeenCalledWith(
+        failure,
+        expect.any(Function),
+      ),
+    );
+    await waitFor(() => expect(fetchButton()).not.toBeDisabled());
+    warn.mockRestore();
+  });
+
+  it("reports an empty model list", async () => {
+    vi.mocked(copilotGetModelsForAccount).mockResolvedValue([]);
+    render(<Harness {...props()} />);
+    fireEvent.click(fetchButton());
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith("providerForm.fetchModelsEmpty"),
+    );
+  });
+
+  it("requires Copilot sign-in before fetching models", () => {
+    render(<Harness {...props({ isCopilotAuthenticated: false })} />);
+    fireEvent.click(fetchButton());
+    expect(toast.error).toHaveBeenCalled();
+    expect(copilotGetModelsForAccount).not.toHaveBeenCalled();
+  });
+
+  it("uses the default Copilot account when no account is pinned", async () => {
+    vi.mocked(copilotGetModels).mockResolvedValue([
+      model("gpt-default-account"),
+    ]);
+    render(<Harness {...props({ selectedGitHubAccountId: null })} />);
+    fireEvent.click(fetchButton());
+    await waitFor(() =>
+      expect(
+        screen.getAllByDisplayValue("gpt-default-account")[0],
+      ).toBeVisible(),
     );
     expect(copilotGetModels).toHaveBeenCalledTimes(1);
-    expect(copilotGetModelsForAccount).not.toHaveBeenCalled();
-    expect(props.onCatalogModelsChange).toHaveBeenCalledWith([
-      expect.objectContaining({ model: "model-1", contextWindow: 200_000 }),
-    ]);
-    expect(screen.getAllByTestId("model-options")[0]).not.toHaveTextContent(
-      "messages-only",
-    );
-  });
-
-  it.each(providerKinds)("preserves %s preflight validation", (kind) => {
-    render(
-      <Harness
-        {...makeProps(kind)}
-        isCopilotAuthenticated={false}
-        isXaiOauthAuthenticated={false}
-        codexApiKey=""
-        codexBaseUrl=""
-      />,
-    );
-    fireEvent.click(fetchButton());
-
-    expect(fetchMockFor(kind)).not.toHaveBeenCalled();
-    expect(fetchButton()).toBeEnabled();
-    if (kind === "config") {
-      expect(showFetchModelsError).toHaveBeenCalledWith(
-        null,
-        expect.any(Function),
-        { hasApiKey: false, hasBaseUrl: false },
-      );
-    } else {
-      expect(toast.error).toHaveBeenCalledTimes(1);
-    }
   });
 });

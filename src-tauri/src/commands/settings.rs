@@ -1,14 +1,6 @@
 #![allow(non_snake_case)]
 
-use tauri::{AppHandle, Emitter};
-use tauri_plugin_updater::UpdaterExt;
-
-/// 应用更新下载进度（通过 `update-download-progress` 事件发给前端）。
-#[derive(Clone, serde::Serialize)]
-struct UpdateDownloadProgress {
-    downloaded: u64,
-    total: Option<u64>,
-}
+use tauri::AppHandle;
 
 fn merge_settings_for_save(
     mut incoming: crate::settings::AppSettings,
@@ -59,70 +51,10 @@ pub async fn get_settings() -> Result<crate::settings::AppSettings, String> {
 
 /// 保存设置
 #[tauri::command]
-pub async fn save_settings(
-    state: tauri::State<'_, crate::store::AppState>,
-    settings: crate::settings::AppSettings,
-) -> Result<bool, String> {
+pub async fn save_settings(settings: crate::settings::AppSettings) -> Result<bool, String> {
     let existing = crate::settings::get_settings();
     let merged = merge_settings_for_save(settings, &existing);
-    let unify_codex_changed =
-        merged.unify_codex_session_history != existing.unify_codex_session_history;
-    let unify_codex_enabled = merged.unify_codex_session_history;
     crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
-
-    // 统一会话开关变更时立即重写当前官方 Codex 供应商的 live 配置，
-    // 不必等下一次切换才生效。
-    if unify_codex_changed {
-        // live 重写失败时回滚设置并把保存整体报失败：若设置保持已切换状态，
-        // live 仍跑旧桶，后续的历史迁移/还原会让会话再次分裂（开启=历史
-        // 迁走而新会话仍写 openai 桶；关闭=会话还原而 live 仍写 custom）。
-        // 报错让前端 saved=false 短路还原；回滚是整次保存的事务语义
-        // （本开关的保存只携带开关相关字段）。
-        if let Err(err) =
-            crate::services::provider::reapply_current_codex_official_live(state.inner())
-        {
-            log::warn!("统一 Codex 会话历史开关变更后重写 live 配置失败，回滚设置: {err}");
-            if let Err(rollback_err) = crate::settings::update_settings(existing) {
-                log::error!("回滚统一会话开关设置失败: {rollback_err}");
-            }
-            return Err(format!(
-                "统一 Codex 会话历史开关未生效（live 配置重写失败）: {err}"
-            ));
-        }
-
-        if unify_codex_enabled {
-            // 后台执行存量迁移（openai 桶 → custom 桶；仅当用户勾选了迁入既有
-            // 会话，函数内部自门控）。大会话目录可能要读数秒，不能阻塞设置保存；
-            // 失败时不写完成标记，下次启动自动重试。
-            tauri::async_runtime::spawn_blocking(|| {
-                match crate::codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket() {
-                    Ok(outcome) => {
-                        if let Some(reason) = outcome.skipped_reason {
-                            log::debug!("○ Codex official history unify migration skipped: {reason}");
-                        } else {
-                            log::info!(
-                                "✓ Codex official history unify migration completed: jsonl_files={}, state_rows={}",
-                                outcome.migrated_jsonl_files,
-                                outcome.migrated_state_rows
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("✗ Codex official history unify migration failed: {e}");
-                    }
-                }
-            });
-        } else {
-            // 清除标记与迁移意愿，让重新开启并再次勾选时能补迁
-            // 关闭期间落入 openai 桶的官方会话。
-            if let Err(err) = crate::settings::clear_codex_official_history_unify_migration() {
-                log::warn!("清除统一会话迁移标记失败: {err}");
-            }
-            if let Err(err) = crate::settings::clear_codex_unify_migrate_existing() {
-                log::warn!("清除统一会话迁移意愿失败: {err}");
-            }
-        }
-    }
     Ok(true)
 }
 
@@ -187,101 +119,6 @@ pub async fn restart_app(app: AppHandle) -> Result<bool, String> {
         app.restart();
     });
     Ok(true)
-}
-
-/// 下载并安装应用更新，然后由后端直接重启应用。
-///
-/// macOS 更新会原地替换 `.app` bundle。如果先返回前端、再让旧 WebView 调
-/// `process.relaunch()`，旧进程可能已经处在 bundle 被替换后的不稳定窗口期。
-/// 这里把退出清理、安装和重启串在同一个后端流程中，避免依赖旧前端继续执行。
-#[tauri::command]
-pub async fn install_update_and_restart(app: AppHandle) -> Result<bool, String> {
-    let updater = app
-        .updater_builder()
-        .build()
-        .map_err(|e| format!("初始化更新器失败: {e}"))?;
-
-    let Some(update) = updater
-        .check()
-        .await
-        .map_err(|e| format!("检查更新失败: {e}"))?
-    else {
-        return Ok(false);
-    };
-
-    log::info!("开始下载应用更新: {}", update.version);
-    let progress_handle = app.clone();
-    let mut downloaded: u64 = 0;
-    let bytes = update
-        .download(
-            move |chunk_len, content_len| {
-                downloaded = downloaded.saturating_add(chunk_len as u64);
-                let _ = progress_handle.emit(
-                    "update-download-progress",
-                    UpdateDownloadProgress {
-                        downloaded,
-                        total: content_len,
-                    },
-                );
-            },
-            || {},
-        )
-        .await
-        .map_err(|e| format!("下载更新失败: {e}"))?;
-
-    log::info!("开始安装应用更新: {}", update.version);
-
-    #[cfg(target_os = "windows")]
-    {
-        // Windows updater 会在 install() 内启动安装器并直接退出当前进程
-        // （插件内部 std::process::exit(0)，绕过 TrayIcon::drop、不发
-        // NIM_DELETE，会残留死图标——与托盘"退出"路径相同的问题）。
-        // 因此清理只能放在 install 前执行，且必须显式移除托盘图标。
-        crate::save_window_state_before_exit(&app);
-        crate::cleanup_before_exit(&app).await;
-        crate::remove_tray_icon_before_exit(&app);
-        crate::destroy_single_instance_lock(&app);
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        update.install(bytes).map_err(|e| {
-            format!(
-                "Windows 更新安装失败: {e}。已执行退出前清理，代理或 Live 接管可能已暂停；请重启应用或重新开启代理后再试。"
-            )
-        })?;
-        Ok(true)
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        // macOS/Linux install() 会返回；先安装，避免安装失败时误停代理/撤回接管。
-        update
-            .install(bytes)
-            .map_err(|e| format!("安装更新失败: {e}"))?;
-
-        crate::save_window_state_before_exit(&app);
-        crate::cleanup_before_exit(&app).await;
-
-        log::info!("应用更新安装完成，正在重启应用");
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        crate::restart_process(&app);
-    }
-}
-
-/// 检查是否有可用的应用更新，返回可用的新版本号（无更新时返回 None）。
-///
-/// 数据库版本过新的恢复界面用它判断：升级应用能否解决问题。若返回 None，说明
-/// 已是最新版本，但数据库仍不兼容（通常由第三方客户端或更高版本创建），应提示用户
-/// 升级无法解决，而不是让其反复尝试。
-#[tauri::command]
-pub async fn check_app_update_available(app: AppHandle) -> Result<Option<String>, String> {
-    let updater = app
-        .updater_builder()
-        .build()
-        .map_err(|e| format!("初始化更新器失败: {e}"))?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|e| format!("检查更新失败: {e}"))?;
-    Ok(update.map(|u| u.version))
 }
 
 /// 获取 app_config_dir 覆盖配置 (从 Store)

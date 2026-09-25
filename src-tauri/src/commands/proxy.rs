@@ -9,6 +9,7 @@ use crate::store::AppState;
 use std::str::FromStr;
 
 fn require_proxy_app(app_type: &str) -> Result<crate::app_config::AppType, String> {
+    crate::copilot_bridge::require_codex(app_type).map_err(|e| e.to_string())?;
     let app = crate::app_config::AppType::from_str(app_type)
         .map_err(|error| format!("无效的应用类型: {error}"))?;
     if !app.supports_local_proxy() {
@@ -22,32 +23,46 @@ fn require_proxy_app(app_type: &str) -> Result<crate::app_config::AppType, Strin
 pub async fn start_proxy_server(
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyServerInfo, String> {
-    state.proxy_service.start().await
+    let info = state.proxy_service.start().await?;
+    let mut config = state
+        .db
+        .get_proxy_config_for_app("codex")
+        .await
+        .map_err(|e| e.to_string())?;
+    config.enabled = true;
+    state
+        .db
+        .update_proxy_config_for_app(config)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(info)
 }
 
 /// 停止代理服务器（仅停止服务，不恢复/清理 Live 接管状态）
 #[tauri::command]
 pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let takeover = state.proxy_service.get_takeover_status().await?;
-    if takeover.claude
-        || takeover.codex
-        || takeover.gemini
-        || takeover.grokbuild
-        || takeover.opencode
-        || takeover.openclaw
-    {
-        return Err(
-            "仍有应用处于代理接管状态，请先在设置中关闭对应应用接管后再停止本地路由。".to_string(),
-        );
+    let mut config = state
+        .db
+        .get_proxy_config_for_app("codex")
+        .await
+        .map_err(|e| e.to_string())?;
+    config.enabled = false;
+    state
+        .db
+        .update_proxy_config_for_app(config)
+        .await
+        .map_err(|e| e.to_string())?;
+    if state.proxy_service.is_running().await {
+        state.proxy_service.stop().await?;
     }
-
-    state.proxy_service.stop().await
+    Ok(())
 }
 
 /// 停止代理服务器（恢复 Live 配置）
 #[tauri::command]
 pub async fn stop_proxy_with_restore(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.proxy_service.stop_with_restore().await
+    // Compatibility with the existing UI command name: there is no restore.
+    stop_proxy_server(state).await
 }
 
 /// 获取各应用接管状态
@@ -55,7 +70,10 @@ pub async fn stop_proxy_with_restore(state: tauri::State<'_, AppState>) -> Resul
 pub async fn get_proxy_takeover_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyTakeoverStatus, String> {
-    state.proxy_service.get_takeover_status().await
+    Ok(ProxyTakeoverStatus {
+        codex: state.proxy_service.is_running().await,
+        ..Default::default()
+    })
 }
 
 /// 为指定应用开启/关闭接管
@@ -65,10 +83,12 @@ pub async fn set_proxy_takeover_for_app(
     app_type: String,
     enabled: bool,
 ) -> Result<(), String> {
-    state
-        .proxy_service
-        .set_takeover_for_app(&app_type, enabled)
-        .await
+    require_proxy_app(&app_type)?;
+    if enabled {
+        start_proxy_server(state).await.map(|_| ())
+    } else {
+        stop_proxy_server(state).await
+    }
 }
 
 /// 获取代理服务器状态
@@ -282,7 +302,8 @@ pub async fn is_proxy_running(state: tauri::State<'_, AppState>) -> Result<bool,
 /// 检查是否处于 Live 接管模式
 #[tauri::command]
 pub async fn is_live_takeover_active(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    state.proxy_service.is_takeover_active().await
+    let _ = state;
+    Ok(false)
 }
 
 /// 代理模式下切换供应商（热切换）

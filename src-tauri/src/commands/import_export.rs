@@ -11,7 +11,6 @@ use crate::commands::sync_support::{
 use crate::database::backup::BackupEntry;
 use crate::database::Database;
 use crate::error::AppError;
-use crate::services::provider::ProviderService;
 use crate::services::skill::skill_state_write_guard;
 use crate::services::sync_protocol::sync_mutex;
 use crate::store::AppState;
@@ -83,10 +82,10 @@ pub async fn sync_current_providers_live(state: State<'_, AppState>) -> Result<V
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let app_state = AppState::new(db);
-        ProviderService::sync_current_to_live(&app_state)?;
+        crate::copilot_bridge::initialize(&app_state)?;
         Ok::<_, AppError>(json!({
             "success": true,
-            "message": "Live configuration synchronized"
+            "message": "Copilot bridge data refreshed; client files unchanged"
         }))
     })
     .await

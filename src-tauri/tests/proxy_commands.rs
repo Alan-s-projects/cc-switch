@@ -17,20 +17,20 @@ async fn default_cost_multiplier_commands_round_trip() {
 
     let state = create_test_state().expect("create test state");
 
-    let default = get_default_cost_multiplier_test_hook(&state, "claude")
+    let default = get_default_cost_multiplier_test_hook(&state, "codex")
         .await
         .expect("read default multiplier");
     assert_eq!(default, "1");
 
-    set_default_cost_multiplier_test_hook(&state, "claude", "1.5")
+    set_default_cost_multiplier_test_hook(&state, "codex", "1.5")
         .await
         .expect("set multiplier");
-    let updated = get_default_cost_multiplier_test_hook(&state, "claude")
+    let updated = get_default_cost_multiplier_test_hook(&state, "codex")
         .await
         .expect("read updated multiplier");
     assert_eq!(updated, "1.5");
 
-    let err = set_default_cost_multiplier_test_hook(&state, "claude", "not-a-number")
+    let err = set_default_cost_multiplier_test_hook(&state, "codex", "not-a-number")
         .await
         .expect_err("invalid multiplier should error");
     // 错误已改为 Localized 类型（支持 i18n）
@@ -52,20 +52,20 @@ async fn pricing_model_source_commands_round_trip() {
 
     let state = create_test_state().expect("create test state");
 
-    let default = get_pricing_model_source_test_hook(&state, "claude")
+    let default = get_pricing_model_source_test_hook(&state, "codex")
         .await
         .expect("read default pricing model source");
     assert_eq!(default, "response");
 
-    set_pricing_model_source_test_hook(&state, "claude", "request")
+    set_pricing_model_source_test_hook(&state, "codex", "request")
         .await
         .expect("set pricing model source");
-    let updated = get_pricing_model_source_test_hook(&state, "claude")
+    let updated = get_pricing_model_source_test_hook(&state, "codex")
         .await
         .expect("read updated pricing model source");
     assert_eq!(updated, "request");
 
-    let err = set_pricing_model_source_test_hook(&state, "claude", "invalid")
+    let err = set_pricing_model_source_test_hook(&state, "codex", "invalid")
         .await
         .expect_err("invalid pricing model source should error");
     // 错误已改为 Localized 类型（支持 i18n）

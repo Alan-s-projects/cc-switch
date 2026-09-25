@@ -2310,7 +2310,7 @@ fn codex_model_catalog_from_specs(
     json!({ "models": entries })
 }
 
-fn codex_model_catalog_from_settings(
+pub(crate) fn codex_model_catalog_from_settings(
     settings: &Value,
     config_text: &str,
     profile: CodexCatalogToolProfile,
@@ -8351,6 +8351,10 @@ model_catalog_json = "cc-switch-model-catalog.json"
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Requires Windows symlink privilege; run with --ignored when available"
+    )]
     fn resolve_catalog_rejects_symlink_escaping_config_dir() {
         // 词法包含可被符号链接绕过：~/.codex/link -> 外部目录，
         // "link/cc-switch-model-catalog.json" 词法上在 base 内，真实读取却落到
