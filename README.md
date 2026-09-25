@@ -12,7 +12,7 @@ Exit the previous CC Switch app, install the MSI, and open Atlas.
 
 1. The one **GitHub Copilot** entry starts with **Needs setup**. Choose **Edit**,
    sign in, refresh your models, and save.
-2. Start the proxy and open **Codex connection**.
+2. Start the proxy, then choose **Connect** beside **Edit** on the Copilot card.
 3. Review **Connect through Copilot** in **Side by side**, **Inline**, or **Proposed TOML**.
    Copy and apply the proposed changes yourself, then reload Codex.
 4. To reconnect using your OpenAI account, review **Return to OpenAI sign-in**,
@@ -42,6 +42,8 @@ The MSI is unsigned, installs per user, and supports replacing the provisional
 - Model capabilities, reasoning choices and input budgets from Copilot. Existing
   smaller context limits are retained; limits above the reported input budget are capped.
 - Proxy start/stop, outbound networking and request compatibility controls.
+- Close the window to keep Atlas in the tray; use the tray menu's **Quit** action
+  to exit. Lightweight mode is removed.
 - A manual health check beside **Edit** on the Copilot card shows endpoint
   reachability and latency without sending a model request.
 - Usage trends, request history, cache statistics, latency and estimated costs;

@@ -1,5 +1,7 @@
-Atlas 4.1.2 moves Codex TOML file selection onto the read-only connection preview.
+Atlas 4.1.2 simplifies connection setup and moves Codex TOML file selection onto the read-only preview.
 
+- Moves the connection shortcut from the header to a **Connect** button beside **Edit** on the Copilot card. It opens the same connection preview.
+- Removes Lightweight mode, its tray action, commands, and window-destruction/recreation code. Normal close-to-tray, reopening the window, and Quit remain available.
 - Removes the separate Codex configuration-directory override section from Advanced settings and cleans up its client-directory controls and callbacks.
 - Adds a TOML location field, Browse, and Auto-detect directly above the diff. Refresh or Enter loads a typed path; selecting a file loads it immediately.
 - Remembers the last valid manually selected file for previews only. Existing saved directory preferences remain available to automatic detection.

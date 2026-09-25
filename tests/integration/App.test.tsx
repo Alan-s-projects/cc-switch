@@ -29,7 +29,12 @@ vi.mock("@/hooks/useProxyStatus", () => ({
   useProxyStatus: () => ({ isRunning: false, status: {} }),
 }));
 vi.mock("@/components/providers/CopilotCard", () => ({
-  CopilotCard: () => <div>GitHub Copilot</div>,
+  CopilotCard: ({ onConnect }: { onConnect: () => void }) => (
+    <div>
+      GitHub Copilot
+      <button onClick={onConnect}>Connect</button>
+    </div>
+  ),
 }));
 vi.mock("@/components/providers/EditProviderDialog", () => ({
   EditProviderDialog: () => null,
@@ -76,9 +81,9 @@ describe("Atlas application scope", () => {
       "usage",
     );
   });
-  it("opens read-only connection previews", async () => {
+  it("opens read-only connection previews from the provider card", async () => {
     renderApp();
-    fireEvent.click(screen.getByTitle("bridge.setup"));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect(await screen.findByText("read-only-suggestions")).toBeVisible();
   });
 });

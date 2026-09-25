@@ -11,7 +11,6 @@ mod error;
 mod grok_config;
 mod init_status;
 mod legacy;
-mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
 mod model_capabilities;
@@ -259,12 +258,6 @@ pub fn run() {
             log::debug!("Args count: {}", args.len());
             for (i, arg) in args.iter().enumerate() {
                 log::debug!("  arg[{i}]: {}", url_for_log(arg));
-            }
-
-            if crate::lightweight::is_lightweight_mode() {
-                if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
-                    log::error!("退出轻量模式重建窗口失败: {e}");
-                }
             }
 
             // Show and focus window regardless
@@ -788,9 +781,6 @@ pub fn run() {
             commands::copilot_get_models_for_account,
             commands::copilot_get_usage,
             commands::copilot_get_usage_for_account,
-            commands::enter_lightweight_mode,
-            commands::exit_lightweight_mode,
-            commands::is_lightweight_mode,
             copilot_bridge::get_codex_setup_suggestion,
         ]);
 
@@ -871,10 +861,6 @@ pub fn run() {
                         let _ = window.show();
                         let _ = window.set_focus();
                         tray::apply_tray_policy(app_handle, true);
-                    } else if crate::lightweight::is_lightweight_mode() {
-                        if let Err(e) = crate::lightweight::exit_lightweight_mode(app_handle) {
-                            log::error!("退出轻量模式重建窗口失败: {e}");
-                        }
                     }
                 }
                 // 处理通过自定义 URL 协议触发的打开事件（例如 ccswitch://...）
