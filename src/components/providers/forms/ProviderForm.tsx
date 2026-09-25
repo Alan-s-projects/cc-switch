@@ -10,10 +10,6 @@ import type {
   CodexCopilotApiFormat,
 } from "@/types";
 import { CodexFormFields } from "./CodexFormFields";
-import {
-  ProviderAdvancedConfig,
-  type PricingModelSourceOption,
-} from "./ProviderAdvancedConfig";
 import { useCopilotAuth } from "./hooks/useCopilotAuth";
 import { mapCodexCatalogModelForForm } from "@/utils/codexModelCatalog";
 
@@ -116,21 +112,6 @@ export function ProviderForm({
     const value = settings.modelCatalog as { models?: unknown[] } | undefined;
     return (value?.models ?? []).map(mapCodexCatalogModelForForm);
   });
-  const [pricing, setPricing] = useState<{
-    enabled: boolean;
-    costMultiplier?: string;
-    pricingModelSource: PricingModelSourceOption;
-  }>({
-    enabled:
-      initialMeta?.costMultiplier !== undefined ||
-      initialMeta?.pricingModelSource !== undefined,
-    costMultiplier: initialMeta?.costMultiplier,
-    pricingModelSource:
-      initialMeta?.pricingModelSource === "request" ||
-      initialMeta?.pricingModelSource === "response"
-        ? initialMeta.pricingModelSource
-        : "inherit",
-  });
   useEffect(() => {
     onSubmittingChange?.(saving);
   }, [saving, onSubmittingChange]);
@@ -142,15 +123,6 @@ export function ProviderForm({
     event.preventDefault();
     if (!hasAnyAccount) {
       toast.error("Sign in to GitHub Copilot first.");
-      return;
-    }
-    if (
-      pricing.enabled &&
-      pricing.costMultiplier?.trim() &&
-      (!Number.isFinite(Number(pricing.costMultiplier)) ||
-        Number(pricing.costMultiplier) < 0)
-    ) {
-      toast.error(t("settings.globalProxy.defaultCostMultiplierInvalid"));
       return;
     }
     setSaving(true);
@@ -167,11 +139,6 @@ export function ProviderForm({
           authProvider: "github_copilot",
           accountId: accountId ?? undefined,
         },
-        costMultiplier: pricing.enabled ? pricing.costMultiplier : undefined,
-        pricingModelSource:
-          pricing.enabled && pricing.pricingModelSource !== "inherit"
-            ? pricing.pricingModelSource
-            : undefined,
       };
       await onSubmit({
         name: initialData?.name ?? "GitHub Copilot",
@@ -202,10 +169,6 @@ export function ProviderForm({
         onCopilotApiFormatChange={setFormat}
         catalogModels={catalog}
         onCatalogModelsChange={setCatalog}
-      />
-      <ProviderAdvancedConfig
-        pricingConfig={pricing}
-        onPricingConfigChange={setPricing}
       />
       {showButtons && (
         <div className="flex justify-end gap-2">

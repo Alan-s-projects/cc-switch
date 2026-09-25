@@ -470,12 +470,6 @@ pub struct ProviderMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub partner_promotion_key: Option<String>,
-    /// 成本倍数（用于计算实际成本）
-    #[serde(rename = "costMultiplier", skip_serializing_if = "Option::is_none")]
-    pub cost_multiplier: Option<String>,
-    /// 计费模式来源（response/request）
-    #[serde(rename = "pricingModelSource", skip_serializing_if = "Option::is_none")]
-    pub pricing_model_source: Option<String>,
     /// 每日消费限额（USD）
     #[serde(rename = "limitDailyUsd", skip_serializing_if = "Option::is_none")]
     pub limit_daily_usd: Option<String>,
@@ -1002,32 +996,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_meta_serializes_pricing_model_source() {
-        let meta = ProviderMeta {
-            pricing_model_source: Some("response".to_string()),
-            ..ProviderMeta::default()
-        };
-
-        let value = serde_json::to_value(&meta).expect("serialize ProviderMeta");
-
-        assert_eq!(
-            value
-                .get("pricingModelSource")
-                .and_then(|item| item.as_str()),
-            Some("response")
-        );
-        assert!(value.get("pricing_model_source").is_none());
-    }
-
-    #[test]
-    fn provider_meta_omits_pricing_model_source_when_none() {
-        let meta = ProviderMeta::default();
-        let value = serde_json::to_value(&meta).expect("serialize ProviderMeta");
-
-        assert!(value.get("pricingModelSource").is_none());
-    }
-
-    #[test]
     fn provider_meta_roundtrips_max_output_tokens() {
         let meta = ProviderMeta {
             max_output_tokens: Some(64000),
@@ -1097,11 +1065,12 @@ mod tests {
     }
 
     #[test]
-    fn provider_meta_ignores_retired_request_overrides() {
+    fn provider_meta_ignores_retired_metadata() {
         let meta: ProviderMeta = serde_json::from_value(json!({
             "providerType": "github_copilot",
             "githubAccountId": "account-1",
             "costMultiplier": "1.5",
+            "pricingModelSource": "request",
             "customUserAgent": "legacy-agent",
             "promptCacheRouting": "disabled",
             "codexChatReasoning": {
@@ -1121,7 +1090,8 @@ mod tests {
         );
         let value = serde_json::to_value(meta).expect("serialize ProviderMeta");
         assert_eq!(value["providerType"], "github_copilot");
-        assert_eq!(value["costMultiplier"], "1.5");
+        assert!(value.get("costMultiplier").is_none());
+        assert!(value.get("pricingModelSource").is_none());
         assert!(value.get("customUserAgent").is_none());
         assert!(value.get("promptCacheRouting").is_none());
         assert!(value.get("codexChatReasoning").is_none());

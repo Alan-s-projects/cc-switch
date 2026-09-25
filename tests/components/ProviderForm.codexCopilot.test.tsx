@@ -14,9 +14,6 @@ vi.mock("@/components/providers/forms/CopilotAuthSection", () => ({
 vi.mock("@/components/providers/forms/hooks/useCopilotAuth", () => ({
   useCopilotAuth: () => ({ hasAnyAccount: true }),
 }));
-vi.mock("@/components/providers/forms/ProviderAdvancedConfig", () => ({
-  ProviderAdvancedConfig: () => null,
-}));
 const config =
   'model_provider = "copilot"\n[model_providers.copilot]\nbase_url = "https://api.githubcopilot.com"\nwire_api = "responses"\n';
 const models = [

@@ -634,8 +634,7 @@ async fn log_usage_internal(
     use super::usage::logger::UsageLogger;
 
     let logger = UsageLogger::new(&state.db);
-    let (multiplier, pricing_model_source) =
-        logger.resolve_pricing_config(provider_id, app_type).await;
+    let (multiplier, pricing_model_source) = logger.resolve_pricing_config(app_type).await;
     let pricing_model = if pricing_model_source == PRICING_SOURCE_REQUEST {
         outbound_model
     } else {
@@ -852,7 +851,6 @@ mod tests {
     use super::*;
     use crate::database::Database;
     use crate::error::AppError;
-    use crate::provider::ProviderMeta;
     use crate::proxy::provider_router::ProviderRouter;
     use crate::proxy::providers::{
         codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore,
@@ -1047,7 +1045,7 @@ mod tests {
         db: &Database,
         id: &str,
         app_type: &str,
-        meta: ProviderMeta,
+        meta: serde_json::Value,
     ) -> Result<(), AppError> {
         let meta_json =
             serde_json::to_string(&meta).map_err(|e| AppError::Database(e.to_string()))?;
@@ -1062,67 +1060,118 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_log_usage_uses_provider_override_config() -> Result<(), AppError> {
+    async fn test_log_usage_ignores_legacy_provider_pricing_overrides() -> Result<(), AppError> {
         let db = Arc::new(Database::memory()?);
-        let app_type = "claude";
-
-        db.set_default_cost_multiplier(app_type, "1.5").await?;
-        db.set_pricing_model_source(app_type, "response").await?;
+        let app_type = "codex";
         seed_pricing(&db)?;
-
-        let meta = ProviderMeta {
-            cost_multiplier: Some("2".to_string()),
-            pricing_model_source: Some("request".to_string()),
-            ..ProviderMeta::default()
-        };
-        insert_provider(&db, "provider-1", app_type, meta)?;
-
         let state = build_state(db.clone());
-        let usage = TokenUsage {
-            input_tokens: 1_000_000,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            model: None,
-            message_id: None,
-        };
-
-        log_usage_internal(
-            &state,
-            "provider-1",
-            app_type,
-            "resp-model",
-            "req-model",
-            "req-model",
-            usage,
-            10,
-            None,
-            false,
-            200,
-            None,
-        )
-        .await;
-
-        let conn = crate::database::lock_conn!(db.conn);
-        let (model, request_model, total_cost, cost_multiplier): (String, String, String, String) =
-            conn.query_row(
-                "SELECT model, request_model, total_cost_usd, cost_multiplier
-                 FROM proxy_request_logs WHERE provider_id = ?1",
-                ["provider-1"],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        let cases = [
+            (
+                "provider-response",
+                "response",
+                "request",
+                "1.5",
+                "resp-model",
+                "1.5",
+            ),
+            (
+                "provider-request",
+                "request",
+                "response",
+                "2.5",
+                "req-model",
+                "5",
+            ),
+        ];
+        for (provider_id, source, legacy_source, multiplier, _, _) in cases {
+            db.set_default_cost_multiplier(app_type, multiplier).await?;
+            db.set_pricing_model_source(app_type, source).await?;
+            // Seed raw historical JSON so removed typed metadata fields cannot
+            // silently discard the conflicting overrides before they reach storage.
+            insert_provider(
+                &db,
+                provider_id,
+                app_type,
+                serde_json::json!({
+                    "providerType": "github_copilot",
+                    "costMultiplier": "9",
+                    "pricingModelSource": legacy_source
+                }),
+            )?;
+            let usage = TokenUsage {
+                input_tokens: 1_000_000,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                model: None,
+                message_id: None,
+            };
+            log_usage_internal(
+                &state,
+                provider_id,
+                app_type,
+                "resp-model",
+                "req-model",
+                "req-model",
+                usage,
+                10,
+                None,
+                false,
+                200,
+                None,
             )
-            .map_err(|e| AppError::Database(e.to_string()))?;
+            .await;
+        }
 
-        assert_eq!(model, "resp-model");
-        assert_eq!(request_model, "req-model");
-        assert_eq!(
-            Decimal::from_str(&cost_multiplier).unwrap(),
-            Decimal::from_str("2").unwrap()
-        );
-        assert_eq!(
-            Decimal::from_str(&total_cost).unwrap(),
-            Decimal::from_str("4").unwrap()
-        );
+        // Inspect both rows after changing the globals: prior records must retain
+        // their original pricing model, multiplier, and recorded cost.
+        let conn = crate::database::lock_conn!(db.conn);
+        for (provider_id, _, legacy_source, multiplier, expected_model, expected_cost) in cases {
+            let (model, request_model, pricing_model, total_cost, cost_multiplier): (
+                String,
+                String,
+                String,
+                String,
+                String,
+            ) = conn
+                .query_row(
+                    "SELECT model, request_model, pricing_model, total_cost_usd, cost_multiplier
+                     FROM proxy_request_logs WHERE provider_id = ?1",
+                    [provider_id],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            assert_eq!(model, "resp-model");
+            assert_eq!(request_model, "req-model");
+            assert_eq!(pricing_model, expected_model);
+            assert_eq!(
+                Decimal::from_str(&cost_multiplier).unwrap(),
+                Decimal::from_str(multiplier).unwrap()
+            );
+            assert_eq!(
+                Decimal::from_str(&total_cost).unwrap(),
+                Decimal::from_str(expected_cost).unwrap()
+            );
+
+            let raw_meta: String = conn
+                .query_row(
+                    "SELECT meta FROM providers WHERE id = ?1 AND app_type = ?2",
+                    rusqlite::params![provider_id, app_type],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            let meta: serde_json::Value = serde_json::from_str(&raw_meta).unwrap();
+            assert_eq!(meta["costMultiplier"], "9");
+            assert_eq!(meta["pricingModelSource"], legacy_source);
+        }
         Ok(())
     }
 
@@ -1143,7 +1192,7 @@ mod tests {
             .map_err(|e| AppError::Database(e.to_string()))?;
         }
 
-        insert_provider(&db, "provider-3", app_type, ProviderMeta::default())?;
+        insert_provider(&db, "provider-3", app_type, serde_json::json!({}))?;
 
         let state = build_state(db.clone());
         let usage = TokenUsage {
@@ -1206,9 +1255,7 @@ mod tests {
         db.set_pricing_model_source("claude", "request").await?;
 
         let logger = UsageLogger::new(&db);
-        let (multiplier, source) = logger
-            .resolve_pricing_config("nonexistent-provider", "claude-desktop")
-            .await;
+        let (multiplier, source) = logger.resolve_pricing_config("claude-desktop").await;
 
         assert_eq!(multiplier, Decimal::from_str("1.5").unwrap());
         assert_eq!(source, "request");
@@ -1216,7 +1263,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_log_usage_falls_back_to_global_defaults() -> Result<(), AppError> {
+    async fn test_log_usage_uses_global_defaults_without_provider_metadata() -> Result<(), AppError> {
         let db = Arc::new(Database::memory()?);
         let app_type = "claude";
 
@@ -1224,8 +1271,7 @@ mod tests {
         db.set_pricing_model_source(app_type, "response").await?;
         seed_pricing(&db)?;
 
-        let meta = ProviderMeta::default();
-        insert_provider(&db, "provider-2", app_type, meta)?;
+        insert_provider(&db, "provider-2", app_type, serde_json::json!({}))?;
 
         let state = build_state(db.clone());
         let usage = TokenUsage {

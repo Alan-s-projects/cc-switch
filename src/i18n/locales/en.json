@@ -565,7 +565,7 @@
       "testSuccess": "Connected! Latency {{latency}}ms",
       "testFailed": "Connection failed: {{error}}",
       "pricingDefaultsTitle": "Pricing Defaults",
-      "pricingDefaultsDescription": "Set the default multiplier and pricing model source per app.",
+      "pricingDefaultsDescription": "Set the global multiplier and pricing model source for Codex usage.",
       "pricingAppLabel": "App",
       "defaultCostMultiplierLabel": "Default Multiplier",
       "defaultCostMultiplierHint": "Multiplier for cost calculation, decimals supported.",
@@ -629,19 +629,6 @@
   },
   "managedAuth": {
     "accountRemoved": "Account removed"
-  },
-  "providerAdvanced": {
-    "pricingConfig": "Pricing Config",
-    "useCustomPricing": "Use separate config",
-    "pricingConfigDesc": "Configure separate pricing parameters for this provider. Uses global defaults when disabled.",
-    "costMultiplier": "Cost Multiplier",
-    "costMultiplierPlaceholder": "Leave empty to use global default (1)",
-    "costMultiplierHint": "Actual cost = Base cost × Multiplier, supports decimals like 1.5",
-    "pricingModelSourceLabel": "Pricing Mode",
-    "pricingModelSourceInherit": "Inherit global default",
-    "pricingModelSourceRequest": "Request model",
-    "pricingModelSourceResponse": "Response model",
-    "pricingModelSourceHint": "Choose whether to match pricing by request model or response model"
   },
   "codexConfig": {
     "reasoningLevelsNotSet": "Not set",

@@ -34,7 +34,7 @@ import { toast } from "sonner";
 import { proxyApi } from "@/lib/api/proxy";
 import { ModelsDevAutoSyncPanel } from "./ModelsDevAutoSyncPanel";
 
-const PRICING_APPS = ["claude", "codex", "gemini", "grokbuild"] as const;
+const PRICING_APPS = ["codex"] as const;
 type PricingApp = (typeof PRICING_APPS)[number];
 type PricingModelSource = "request" | "response";
 
@@ -53,12 +53,9 @@ export function PricingConfigPanel() {
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  // All applications with a first-class usage pipeline.
+  // Global accounting defaults for the Codex proxy.
   const [appConfigs, setAppConfigs] = useState<AppConfigState>({
-    claude: { multiplier: "1", source: "response" },
     codex: { multiplier: "1", source: "response" },
-    gemini: { multiplier: "1", source: "response" },
-    grokbuild: { multiplier: "1", source: "response" },
   });
   const [originalConfigs, setOriginalConfigs] = useState<AppConfigState | null>(
     null,
@@ -101,10 +98,7 @@ export function PricingConfigPanel() {
         if (!isMounted) return;
 
         const newState: AppConfigState = {
-          claude: { multiplier: "1", source: "response" },
           codex: { multiplier: "1", source: "response" },
-          gemini: { multiplier: "1", source: "response" },
-          grokbuild: { multiplier: "1", source: "response" },
         };
         for (const result of results) {
           newState[result.app] = {
