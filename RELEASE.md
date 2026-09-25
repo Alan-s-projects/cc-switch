@@ -6,6 +6,7 @@ Atlas 4.1.1 simplifies Copilot setup and makes the read-only Codex configuration
 - Shows current TOML on the left and proposed TOML on the right by default, with aligned changes and line numbers. Switch to an inline comparison or the complete proposed TOML.
 - Uses the same comparison for Copilot setup and restoring OpenAI sign-in. Copy and refresh remain available; configuration files stay read-only.
 - Restores the compact green on/off switch in the header for starting and stopping the local proxy.
+- Displays **CC Switch Atlas** in the application header.
 - Always minimizes the main window to the system tray when closed, keeping the proxy running. Removes the close-behavior setting; use the tray menu's Quit action to exit.
 - Retains protocol selection, model catalog and per-model reasoning controls, automatic Copilot compatibility, and usage statistics.
 
