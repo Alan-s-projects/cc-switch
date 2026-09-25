@@ -6,13 +6,13 @@ at **4.1.0**. Its only development branch is `atlas`.
 
 ## Install and connect
 
-Download `CC-Switch-atlas-4.1.3-Windows-x64.msi` from
+Download `CC-Switch-atlas-4.1.4-Windows-x64.msi` from
 [GitHub Releases](https://github.com/Alan-s-projects/cc-switch/releases).
 Exit the previous CC Switch app, install the MSI, and open Atlas.
 
 1. The one **GitHub Copilot** entry starts with **Needs setup**. Open
    **Settings → Copilot**, sign in, refresh your models, and save.
-2. Turn on **Proxy**, then choose **Connect** in the top bar.
+2. Turn on the proxy switch, then choose **Connect** in the top bar.
 3. Review **Connect through Copilot** in **Side by side**, **Inline**, or **Proposed TOML**.
    Copy and apply the proposed changes yourself, then reload Codex.
 4. To reconnect using your OpenAI account, review **Return to OpenAI sign-in**,
@@ -49,9 +49,13 @@ The MSI is unsigned, installs per user, and supports replacing the provisional
 
 ## Scope
 
+- A persistent top bar with **Overview**, **Usage**, **Connect**, and **Settings**
+  on the left. The selected page is highlighted. The green proxy switch stays on
+  the right and shows **Proxy Running** or **Proxy Stopped**.
 - A read-only home overview with account/quota, proxy address and activity,
   today's requests, estimated cost, success/cache rates, and the latest ten
-  requests with HTTP status codes. **Refresh overview** refreshes the page's data.
+  requests with HTTP status codes, grouped into **Provider**, **Proxy**,
+  **Today's usage**, and **Requests** cards. **Refresh overview** refreshes the page's data.
 - Home warnings identify a stopped proxy or a detected Codex TOML that points
   elsewhere. Connection checks run on opening/returning to the window and manual
   refresh; they never change the file.
@@ -67,9 +71,9 @@ The MSI is unsigned, installs per user, and supports replacing the provisional
   Unsupported images return an error instead of an incomplete text-only answer.
 - Close the window to keep Atlas in the tray; use the tray menu's **Quit** action
   to exit. Lightweight mode is removed.
-- A labeled **Health check** in the top bar shows endpoint
+- A labeled **Health check** in the Provider card shows endpoint
   reachability and latency without sending a model request.
-- A separate **Usage Statistics** page, opened by the chart button, with usage
+- A separate **Usage Statistics** page, opened by the **Usage** navigation button, with usage
   trends, request history, cache statistics, latency and estimated costs.
   Copilot subscription quota is shown separately.
 - Local application-data backups.
@@ -117,8 +121,12 @@ pnpm test:unit --maxWorkers=4 --minWorkers=1
 ./scripts/build-msi.ps1
 ```
 
-The build creates the MSI and its SHA256 file in `release/`. The sole workflow
-tests and builds Windows x64; an `atlas-<version>` tag publishes the installer.
+The local build creates the MSI and its SHA256 file in `release/`. There is no
+GitHub Actions build or publishing workflow. Run validation locally before pushing,
+use a PR and squash merge into `atlas`, then publish an `atlas-<version>` tag and
+upload the matching MSI and checksum to GitHub Releases. Build from the merged
+source, or verify its Git tree matches the tested local build. Upload only the
+explicit current-version files; `release/` can contain older installers.
 All three manifests must use the same version.
 
 Run backend tests with isolated application data:

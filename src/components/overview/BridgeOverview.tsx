@@ -152,115 +152,142 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
   };
   const pending = refreshing || overview.isFetching || connection.isFetching;
   return (
-    <section className="mt-5 space-y-4" aria-label="Bridge overview">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="font-semibold">Overview</h2>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={pending}
-          onClick={() => void refresh()}
-        >
-          <RefreshCw
-            aria-hidden
-            className={`mr-2 h-4 w-4 ${pending ? "animate-spin" : ""}`}
-          />
-          Refresh overview
-        </Button>
-      </div>
-      {status && !status.running && (
-        <div
-          role="alert"
-          className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-sm"
-        >
-          <p className="font-medium">Proxy is stopped</p>
-          <p className="mt-1 text-muted-foreground">
-            Turn on Proxy in the top bar before using Codex through this Copilot
-            bridge.
-          </p>
+    <section className="space-y-5" aria-label="Bridge overview">
+      <section
+        className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
+        aria-labelledby="bridge-proxy-title"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="bridge-proxy-title" className="text-base font-semibold">
+            Proxy
+          </h2>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={pending}
+            onClick={() => void refresh()}
+          >
+            <RefreshCw aria-hidden className="mr-2 h-4 w-4" />
+            Refresh overview
+          </Button>
         </div>
-      )}
-      {connection.error ? (
-        <div
-          role="alert"
-          className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-sm"
-        >
-          <p className="font-medium">Could not check Codex configuration</p>
-          <p className="mt-1 text-muted-foreground">
-            Open Connect to check the TOML location and review its settings.
-          </p>
-        </div>
-      ) : connection.data && !connection.data.configured ? (
-        <div
-          role="alert"
-          className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-sm"
-        >
-          <p className="font-medium">Codex is not connected to Atlas</p>
-          <p className="mt-1 text-muted-foreground">
-            {connection.data.configExists
-              ? "The detected TOML points elsewhere. "
-              : "No TOML was found at the detected location. "}
-            Open Connect, review the proposed TOML, and apply the changes
-            yourself.
-          </p>
-          <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-            {connection.data.configPath}
-          </p>
-        </div>
-      ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-5 py-4">
-        <div>
-          <p className="text-sm font-medium">
-            {status
-              ? status.running
-                ? "Proxy running"
-                : "Proxy stopped"
-              : "Checking proxy"}
-          </p>
-          <p className="mt-1 break-all font-mono text-sm text-muted-foreground">
-            {endpoint}
-          </p>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Active requests:{" "}
-          <span className="font-medium text-foreground">
-            {status?.active_connections ?? "—"}
-          </span>
-        </p>
-      </div>
-      {overview.error && (
-        <p role="alert" className="text-sm text-destructive">
-          Usage could not be refreshed.{" "}
-          {overview.data
-            ? "Showing the last snapshot."
-            : "Open Usage to retry."}
-        </p>
-      )}
-      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {metrics.map(([label, value]) => (
-          <div key={label} className="rounded-xl border bg-card px-5 py-4">
-            <dt className="text-xs text-muted-foreground">{label}</dt>
-            <dd className="mt-2 text-xl font-semibold tabular-nums">{value}</dd>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">
+              {status
+                ? status.running
+                  ? "Proxy running"
+                  : "Proxy stopped"
+                : "Checking proxy"}
+            </p>
+            <p className="mt-1 break-all font-mono text-sm text-muted-foreground">
+              {endpoint}
+            </p>
           </div>
-        ))}
-      </dl>
-      <p className="text-xs text-muted-foreground">
-        Token costs are estimates, not your Copilot bill. Cache reuse is the
-        share of input tokens read from cache.
-      </p>
-      <div className="flex items-baseline justify-between gap-3">
-        <h2 className="font-semibold">Latest 10 requests</h2>
+          <p className="text-sm text-muted-foreground">
+            Active requests:{" "}
+            <span className="font-medium text-foreground">
+              {status?.active_connections ?? "—"}
+            </span>
+          </p>
+        </div>
+        {status && !status.running && (
+          <div
+            role="alert"
+            className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-sm"
+          >
+            <p className="font-medium">Proxy is stopped</p>
+            <p className="mt-1 text-muted-foreground">
+              Turn on the proxy switch in the top bar before using Codex through
+              this Copilot bridge.
+            </p>
+          </div>
+        )}
+        {connection.error ? (
+          <div
+            role="alert"
+            className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-sm"
+          >
+            <p className="font-medium">Could not check Codex configuration</p>
+            <p className="mt-1 text-muted-foreground">
+              Open Connect to check the TOML location and review its settings.
+            </p>
+          </div>
+        ) : connection.data && !connection.data.configured ? (
+          <div
+            role="alert"
+            className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-sm"
+          >
+            <p className="font-medium">Codex is not connected to Atlas</p>
+            <p className="mt-1 text-muted-foreground">
+              {connection.data.configExists
+                ? "The detected TOML points elsewhere. "
+                : "No TOML was found at the detected location. "}
+              Open Connect, review the proposed TOML, and apply the changes
+              yourself.
+            </p>
+            <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+              {connection.data.configPath}
+            </p>
+          </div>
+        ) : null}
+      </section>
+      <section
+        className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
+        aria-labelledby="bridge-usage-title"
+      >
+        <h2 id="bridge-usage-title" className="text-base font-semibold">
+          Today's usage
+        </h2>
+        {overview.error && (
+          <p role="alert" className="text-sm text-destructive">
+            Usage could not be refreshed.{" "}
+            {overview.data
+              ? "Showing the last snapshot."
+              : "Open Usage to retry."}
+          </p>
+        )}
+        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {metrics.map(([label, value]) => (
+            <div key={label} className="rounded-xl border px-5 py-4">
+              <dt className="text-xs text-muted-foreground">{label}</dt>
+              <dd className="mt-2 text-xl font-semibold tabular-nums">{value}</dd>
+            </div>
+          ))}
+        </dl>
         <p className="text-xs text-muted-foreground">
-          Updates while this window is active
+          Token costs are estimates, not your Copilot bill. Cache reuse is the
+          share of input tokens read from cache.
         </p>
-      </div>
-      {overview.data ? (
-        <RecentRequests logs={overview.data.recent.data} />
-      ) : !overview.error ? (
-        <p className="text-sm text-muted-foreground">
-          Loading recent requests…
-        </p>
-      ) : null}
+      </section>
+      <section
+        className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
+        aria-labelledby="bridge-requests-title"
+      >
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <div>
+            <h2 id="bridge-requests-title" className="text-base font-semibold">
+              Requests
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Latest 10 completed requests
+            </p>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {overview.dataUpdatedAt > 0 && (
+              <>Updated {clock(overview.dataUpdatedAt / 1000)} · </>
+            )}
+            Updates while this window is active
+          </p>
+        </div>
+        {overview.data ? (
+          <RecentRequests logs={overview.data.recent.data} />
+        ) : !overview.error ? (
+          <p className="text-sm text-muted-foreground">
+            Loading recent requests…
+          </p>
+        ) : null}
+      </section>
     </section>
   );
 }

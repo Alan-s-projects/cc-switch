@@ -106,13 +106,19 @@ beforeEach(() => {
 describe("read-only bridge overview", () => {
   it("shows the local address, token-based cache reuse, cost, activity and recent statuses", async () => {
     renderOverview();
-    expect(screen.getByText("http://127.0.0.1:15721/v1")).toBeVisible();
-    expect(screen.getByText("Proxy running")).toBeVisible();
-    expect(await screen.findByText("$1.2500")).toBeVisible();
-    expect(screen.getByText("80.0%")).toBeVisible();
-    expect(screen.getByText("91.7%")).toBeVisible();
-    expect(screen.getByText("Active requests:").textContent).toContain("2");
-    const table = screen.getByRole("table", {
+    const proxy = within(screen.getByRole("region", { name: "Proxy" }));
+    const usage = within(screen.getByRole("region", { name: "Today's usage" }));
+    const requests = within(screen.getByRole("region", { name: "Requests" }));
+    expect(
+      screen.queryByRole("heading", { name: "Overview" }),
+    ).not.toBeInTheDocument();
+    expect(proxy.getByText("http://127.0.0.1:15721/v1")).toBeVisible();
+    expect(proxy.getByText("Proxy running")).toBeVisible();
+    expect(await usage.findByText("$1.2500")).toBeVisible();
+    expect(usage.getByText("80.0%")).toBeVisible();
+    expect(usage.getByText("91.7%")).toBeVisible();
+    expect(proxy.getByText("Active requests:").textContent).toContain("2");
+    const table = requests.getByRole("table", {
       name: "Latest 10 completed requests",
     });
     expect(within(table).getByText("gpt-6-astra")).toBeVisible();
@@ -121,7 +127,7 @@ describe("read-only bridge overview", () => {
     expect(within(table).getByText("2.50 s")).toBeVisible();
     expect(screen.getAllByRole("button")).toHaveLength(1);
     expect(
-      screen.getByRole("button", { name: "Refresh overview" }),
+      proxy.getByRole("button", { name: "Refresh overview" }),
     ).toBeVisible();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     await waitFor(() =>
@@ -146,9 +152,13 @@ describe("read-only bridge overview", () => {
         configPath: "C:/Users/test/.codex/config.toml",
       });
       renderOverview({ ...status, running: false, active_connections: 0 });
-      expect(screen.getByText("Proxy is stopped")).toBeVisible();
+      const proxy = within(screen.getByRole("region", { name: "Proxy" }));
+      expect(proxy.getByText("Proxy is stopped")).toBeVisible();
       expect(
-        await screen.findByText("Codex is not connected to Atlas"),
+        proxy.getByText(/Turn on the proxy switch in the top bar/),
+      ).toBeVisible();
+      expect(
+        await proxy.findByText("Codex is not connected to Atlas"),
       ).toBeVisible();
       expect(
         screen.getByText("C:/Users/test/.codex/config.toml"),

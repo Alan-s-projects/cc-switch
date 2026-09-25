@@ -3,6 +3,7 @@ import type { Provider } from "@/types";
 import { useCopilotAuth } from "./forms/hooks/useCopilotAuth";
 import { Badge } from "@/components/ui/badge";
 import CopilotQuotaFooter from "@/components/CopilotQuotaFooter";
+import { HealthCheckButton } from "./HealthCheckButton";
 
 export function CopilotCard({ provider }: { provider: Provider }) {
   const auth = useCopilotAuth();
@@ -19,13 +20,17 @@ export function CopilotCard({ provider }: { provider: Provider }) {
   const needsSetup = !account || models.length === 0;
   return (
     <section className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h2 className="text-base font-semibold">Provider</h2>
+        <HealthCheckButton providerId={provider.id} />
+      </div>
       <div className="flex items-center gap-4">
         <div className="rounded-xl bg-muted p-3">
           <Github className="h-7 w-7" />
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center gap-3">
-            <h2 className="text-lg font-semibold">GitHub Copilot</h2>
+            <h3 className="text-lg font-semibold">GitHub Copilot</h3>
             {needsSetup && (
               <Badge variant="secondary">
                 {auth.isLoadingStatus ? "Checking account" : "Needs setup"}
