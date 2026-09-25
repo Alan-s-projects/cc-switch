@@ -41,9 +41,9 @@ import { BackupListSection } from "@/components/settings/BackupListSection";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { ProxyTabContent } from "@/components/settings/ProxyTabContent";
 import { ConnectivityCheckConfigPanel } from "@/components/usage/ConnectivityCheckConfigPanel";
-import { UsageDashboard } from "@/components/usage/UsageDashboard";
 import { LogConfigPanel } from "@/components/settings/LogConfigPanel";
 import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
+import { CopilotSettingsPanel } from "@/components/settings/CopilotSettingsPanel";
 import { useSettings } from "@/hooks/useSettings";
 import { useImportExport } from "@/hooks/useImportExport";
 import { useTranslation } from "react-i18next";
@@ -53,14 +53,12 @@ interface SettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onImportSuccess?: () => void | Promise<void>;
-  defaultTab?: string;
 }
 
 export function SettingsPage({
   open,
   onOpenChange,
   onImportSuccess,
-  defaultTab = "general",
 }: SettingsDialogProps) {
   const { t } = useTranslation();
   const {
@@ -99,10 +97,10 @@ export function SettingsPage({
 
   useEffect(() => {
     if (open) {
-      setActiveTab(defaultTab);
+      setActiveTab("general");
       resetStatus();
     }
-  }, [open, resetStatus, defaultTab]);
+  }, [open, resetStatus]);
 
   useEffect(() => {
     if (requiresRestart) {
@@ -210,7 +208,7 @@ export function SettingsPage({
           onValueChange={setActiveTab}
           className="flex flex-col h-full"
         >
-          <TabsList className="grid w-full grid-cols-6 mb-6 glass rounded-lg">
+          <TabsList className="grid w-full grid-cols-5 mb-6 glass rounded-lg">
             <TabsTrigger value="general">
               {t("settings.tabGeneral")}
             </TabsTrigger>
@@ -218,11 +216,10 @@ export function SettingsPage({
             <TabsTrigger value="auth">
               {t("settings.tabAuth", { defaultValue: "认证" })}
             </TabsTrigger>
+            <TabsTrigger value="copilot">Copilot</TabsTrigger>
             <TabsTrigger value="advanced">
               {t("settings.tabAdvanced")}
             </TabsTrigger>
-            <TabsTrigger value="usage">{t("usage.title")}</TabsTrigger>
-            <TabsTrigger value="about">{t("common.about")}</TabsTrigger>
           </TabsList>
 
           <div className="flex-1 min-h-0 flex flex-col">
@@ -243,6 +240,7 @@ export function SettingsPage({
                       settings={settings}
                       onChange={handleAutoSave}
                     />
+                    <AboutSection isPortable={isPortable} />
                   </motion.div>
                 ) : null}
               </TabsContent>
@@ -265,6 +263,12 @@ export function SettingsPage({
                 >
                   <AuthCenterPanel />
                 </motion.div>
+              </TabsContent>
+
+              <TabsContent value="copilot" className="mt-0 pb-4">
+                <CopilotSettingsPanel
+                  onCancel={() => setActiveTab("general")}
+                />
               </TabsContent>
 
               <TabsContent value="advanced" className="space-y-6 mt-0 pb-4">
@@ -421,19 +425,6 @@ export function SettingsPage({
                     </Accordion>
                   </motion.div>
                 ) : null}
-              </TabsContent>
-
-              <TabsContent value="about" className="mt-0">
-                <AboutSection isPortable={isPortable} />
-              </TabsContent>
-
-              <TabsContent value="usage" className="mt-0">
-                <UsageDashboard
-                  refreshIntervalMs={settings?.usageDashboardRefreshIntervalMs}
-                  onRefreshIntervalChange={(usageDashboardRefreshIntervalMs) =>
-                    handleAutoSave({ usageDashboardRefreshIntervalMs })
-                  }
-                />
               </TabsContent>
             </div>
 

@@ -1,0 +1,210 @@
+import { QueryClientProvider } from "@tanstack/react-query";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BridgeOverview } from "@/components/overview/BridgeOverview";
+import type { ProxyStatus } from "@/types/proxy";
+import { createTestQueryClient } from "../utils/testQueryClient";
+
+const mocks = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  summary: vi.fn(),
+  logs: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+vi.mock("@/lib/windowActivity", () => ({ useWindowActive: () => true }));
+vi.mock("@/lib/api/usage", () => ({
+  usageApi: { getUsageSummary: mocks.summary, getRequestLogs: mocks.logs },
+}));
+vi.mock("@/lib/query/proxy", () => ({
+  proxyKeys: { status: ["proxyStatus"], globalConfig: ["globalProxyConfig"] },
+  useGlobalProxyConfig: () => ({
+    data: { listenAddress: "0.0.0.0", listenPort: 15721 },
+  }),
+}));
+
+const status: ProxyStatus = {
+  running: true,
+  address: "0.0.0.0",
+  port: 15721,
+  active_connections: 2,
+  total_requests: 12,
+  success_requests: 11,
+  failed_requests: 1,
+  success_rate: 91.7,
+  uptime_seconds: 600,
+  current_provider: "GitHub Copilot",
+  current_provider_id: "copilot",
+  last_request_at: null,
+  last_error: null,
+};
+const snapshot = {
+  summary: {
+    totalRequests: 12,
+    totalCost: "1.25",
+    totalInputTokens: 200,
+    totalOutputTokens: 50,
+    totalCacheCreationTokens: 0,
+    totalCacheReadTokens: 800,
+    successRate: 91.7,
+    realTotalTokens: 1050,
+    cacheHitRate: 0.8,
+  },
+  recent: {
+    data: [
+      {
+        requestId: "ok",
+        createdAt: 1790397000,
+        model: "gpt-6-astra",
+        statusCode: 200,
+        latencyMs: 2500,
+        inputTokens: 1000,
+        outputTokens: 200,
+        totalCostUsd: "0.01",
+      },
+      {
+        requestId: "failed",
+        createdAt: 1790396990,
+        model: "gpt-6-luna",
+        statusCode: 400,
+        latencyMs: 180,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalCostUsd: "0",
+      },
+    ],
+  },
+};
+function renderOverview(proxyStatus = status) {
+  const client = createTestQueryClient();
+  const rendered = render(
+    <QueryClientProvider client={client}>
+      <BridgeOverview status={proxyStatus} />
+    </QueryClientProvider>,
+  );
+  return { ...rendered, client };
+}
+beforeEach(() => {
+  mocks.invoke.mockReset().mockResolvedValue({
+    configured: true,
+    configExists: true,
+    configPath: "C:/Users/test/.codex/config.toml",
+  });
+  mocks.summary.mockReset().mockResolvedValue(snapshot.summary);
+  mocks.logs.mockReset().mockResolvedValue(snapshot.recent);
+});
+
+describe("read-only bridge overview", () => {
+  it("shows the local address, token-based cache reuse, cost, activity and recent statuses", async () => {
+    renderOverview();
+    expect(screen.getByText("http://127.0.0.1:15721/v1")).toBeVisible();
+    expect(screen.getByText("Proxy running")).toBeVisible();
+    expect(await screen.findByText("$1.2500")).toBeVisible();
+    expect(screen.getByText("80.0%")).toBeVisible();
+    expect(screen.getByText("91.7%")).toBeVisible();
+    expect(screen.getByText("Active requests:").textContent).toContain("2");
+    const table = screen.getByRole("table", {
+      name: "Latest 10 completed requests",
+    });
+    expect(within(table).getByText("gpt-6-astra")).toBeVisible();
+    expect(within(table).getByText("400")).toBeVisible();
+    expect(within(table).getByText("200")).toBeVisible();
+    expect(within(table).getByText("2.50 s")).toBeVisible();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: "Refresh overview" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("get_codex_setup_suggestion", {
+        configPath: null,
+      }),
+    );
+    expect(
+      mocks.invoke.mock.calls.every(
+        ([command]) => command === "get_codex_setup_suggestion",
+      ),
+    ).toBe(true);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each([true, false])(
+    "warns about a stopped proxy and mismatched/missing detected TOML (exists=%s)",
+    async (configExists) => {
+      mocks.invoke.mockResolvedValue({
+        configured: false,
+        configExists,
+        configPath: "C:/Users/test/.codex/config.toml",
+      });
+      renderOverview({ ...status, running: false, active_connections: 0 });
+      expect(screen.getByText("Proxy is stopped")).toBeVisible();
+      expect(
+        await screen.findByText("Codex is not connected to Atlas"),
+      ).toBeVisible();
+      expect(
+        screen.getByText("C:/Users/test/.codex/config.toml"),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          configExists ? /detected TOML points elsewhere/ : /No TOML was found/,
+        ),
+      ).toBeVisible();
+      expect(screen.getAllByRole("alert")).toHaveLength(2);
+    },
+  );
+
+  it("reports read failures separately from a known misconfiguration and retains the last usage snapshot", async () => {
+    mocks.invoke.mockRejectedValue(new Error("Unable to read file"));
+    const { client } = renderOverview();
+    expect(await screen.findByText("$1.2500")).toBeVisible();
+    mocks.summary.mockRejectedValue(new Error("Database unavailable"));
+    await act(() =>
+      client.invalidateQueries({ queryKey: ["bridge-overview"] }),
+    );
+    expect(
+      await screen.findByText("Could not check Codex configuration"),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("Codex is not connected to Atlas"),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByText(/Showing the last snapshot/)).toBeVisible();
+    expect(screen.getByText("$1.2500")).toBeVisible();
+  });
+
+  it("does not invent success or cache rates when no requests are recorded", async () => {
+    mocks.summary.mockResolvedValue({
+      ...snapshot.summary,
+      totalRequests: 0,
+      totalInputTokens: 0,
+      totalCacheReadTokens: 0,
+    });
+    mocks.logs.mockResolvedValue({ data: [] });
+    renderOverview();
+    expect(await screen.findByText("No requests recorded yet.")).toBeVisible();
+    for (const label of ["Success today", "Cache reuse today"]) {
+      expect(screen.getByText(label).nextElementSibling).toHaveTextContent("—");
+    }
+  });
+
+  it("explicitly refreshes usage, recent requests and the read-only connection check", async () => {
+    renderOverview();
+    expect(await screen.findByText("$1.2500")).toBeVisible();
+    const refresh = screen.getByRole("button", { name: "Refresh overview" });
+    await waitFor(() => expect(refresh).toBeEnabled());
+    mocks.summary.mockResolvedValue({ ...snapshot.summary, totalCost: "2.5" });
+    fireEvent.click(refresh);
+    expect(await screen.findByText("$2.5000")).toBeVisible();
+    expect(mocks.summary).toHaveBeenCalledTimes(2);
+    expect(mocks.logs).toHaveBeenCalledTimes(2);
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+  });
+});

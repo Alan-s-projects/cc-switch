@@ -3,6 +3,7 @@ import { proxyApi } from "@/lib/api/proxy";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import type { GlobalProxyConfig } from "@/types/proxy";
+import { useWindowActive } from "@/lib/windowActivity";
 
 export const proxyKeys = {
   status: ["proxyStatus"] as const,
@@ -15,11 +16,15 @@ export const proxyKeys = {
  * 获取代理服务器状态
  */
 export function useProxyStatusQuery() {
+  const active = useWindowActive();
   return useQuery({
     queryKey: proxyKeys.status,
     queryFn: () => proxyApi.getProxyStatus(),
-    // 仅在服务运行时轮询
-    refetchInterval: (query) => (query.state.data?.running ? 2000 : false),
+    enabled: active,
+    // Lightweight in-memory status only; never poll while the window is inactive.
+    refetchInterval: (query) =>
+      active && query.state.data?.running ? 5000 : false,
+    refetchIntervalInBackground: false,
     // 保持之前的数据，避免闪烁
     placeholderData: (previousData) => previousData,
   });

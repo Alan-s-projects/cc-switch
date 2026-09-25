@@ -1,25 +1,43 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CopilotSettingsPanel } from "@/components/settings/CopilotSettingsPanel";
 import type { ProviderFormProps } from "@/components/providers/forms/ProviderForm";
 import type { Provider } from "@/types";
 
-const mocks = vi.hoisted(() => ({ readLive: vi.fn() }));
-vi.mock("@/lib/api", () => ({
-  providersApi: { readLiveSettings: mocks.readLive },
+const mocks = vi.hoisted(() => ({
+  readLive: vi.fn(),
+  update: vi.fn(),
+  updateTray: vi.fn(),
 }));
-vi.mock("@/components/common/FullScreenPanel", () => ({
-  FullScreenPanel: ({
-    isOpen,
-    children,
-  }: {
-    isOpen: boolean;
-    children: React.ReactNode;
-  }) => (isOpen ? children : null),
+vi.mock("@/lib/api", () => ({
+  providersApi: {
+    readLiveSettings: mocks.readLive,
+    updateTrayMenu: mocks.updateTray,
+  },
+}));
+vi.mock("@/lib/query", () => ({
+  useProvidersQuery: () => ({
+    data: {
+      providers: { [provider.id]: provider },
+      currentProviderId: provider.id,
+    },
+    isLoading: false,
+  }),
+  useUpdateProviderMutation: () => ({ mutateAsync: mocks.update }),
 }));
 vi.mock("@/components/providers/AuthSettingsPanel", () => ({
-  AuthSettingsPanel: ({ target }: { target: string | null }) =>
-    target ? <div>account-panel</div> : null,
+  AuthSettingsPanel: ({
+    target,
+    onClose,
+  }: {
+    target: string | null;
+    onClose: () => void;
+  }) =>
+    target ? (
+      <div>
+        account-panel<button onClick={onClose}>close-accounts</button>
+      </div>
+    ) : null,
 }));
 vi.mock("@/components/providers/forms/ProviderForm", () => ({
   ProviderForm: ({
@@ -31,6 +49,7 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
       <output data-testid="settings">
         {JSON.stringify(initialData?.settingsConfig)}
       </output>
+      <input aria-label="Model draft" defaultValue="gpt-6-astra" />
       <button onClick={() => onManageAuthAccounts?.("github_copilot")}>
         accounts
       </button>
@@ -62,44 +81,42 @@ const provider: Provider = {
 };
 
 describe("Copilot provider editing", () => {
+  beforeEach(() => {
+    mocks.update.mockReset().mockResolvedValue(undefined);
+    mocks.updateTray.mockReset().mockResolvedValue(undefined);
+  });
   it("preserves stored models and account binding without importing live configuration", async () => {
-    const submit = vi.fn().mockResolvedValue(undefined);
-    const close = vi.fn();
-    render(
-      <EditProviderDialog
-        open
-        provider={provider}
-        appId="codex"
-        onSubmit={submit}
-        onOpenChange={close}
-      />,
-    );
+    render(<CopilotSettingsPanel onCancel={vi.fn()} />);
     expect(screen.getByTestId("settings")).toHaveTextContent("gpt-6-astra");
     fireEvent.click(screen.getByRole("button", { name: "save" }));
     await waitFor(() =>
-      expect(submit).toHaveBeenCalledWith({
+      expect(mocks.update).toHaveBeenCalledWith({
         provider,
       }),
     );
     expect(mocks.readLive).not.toHaveBeenCalled();
-    expect(close).toHaveBeenCalledWith(false);
+    expect(mocks.updateTray).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("settings")).toBeVisible();
   });
 
-  it("closes account management when the provider dialog closes externally", async () => {
-    const props = {
-      provider,
-      appId: "codex" as const,
-      onSubmit: vi.fn(),
-      onOpenChange: vi.fn(),
-    };
-    const { rerender } = render(<EditProviderDialog {...props} open />);
+  it("keeps draft fields while managing accounts and closes the account panel when leaving the tab", async () => {
+    const onCancel = vi.fn();
+    const { rerender } = render(<CopilotSettingsPanel onCancel={onCancel} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Model draft" }), {
+      target: { value: "draft-model" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "accounts" }));
     expect(screen.getByText("account-panel")).toBeVisible();
-    rerender(<EditProviderDialog {...props} open={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "close-accounts" }));
+    expect(screen.getByRole("textbox", { name: "Model draft" })).toHaveValue(
+      "draft-model",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "accounts" }));
+    rerender(<></>);
     await waitFor(() =>
       expect(screen.queryByText("account-panel")).not.toBeInTheDocument(),
     );
-    rerender(<EditProviderDialog {...props} open />);
+    rerender(<CopilotSettingsPanel onCancel={onCancel} />);
     expect(screen.queryByText("account-panel")).not.toBeInTheDocument();
   });
 });

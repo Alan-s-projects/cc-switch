@@ -1,13 +1,11 @@
-import { RefreshCw } from "lucide-react";
 import type { ProviderMeta } from "@/types";
 import { useCopilotQuota } from "@/lib/query/copilot";
-import { Button } from "@/components/ui/button";
 import { extractErrorMessage } from "@/utils/errorUtils";
 
 export default function CopilotQuotaFooter({ meta }: { meta?: ProviderMeta }) {
   const accountId =
     meta?.authBinding?.accountId ?? meta?.githubAccountId ?? null;
-  const { data, error, isFetching, refetch } = useCopilotQuota(accountId, {
+  const { data, error, isFetching } = useCopilotQuota(accountId, {
     autoQuery: true,
   });
   const used = Math.max(0, Math.min(100, data?.tiers[0]?.utilization ?? 0));
@@ -15,17 +13,6 @@ export default function CopilotQuotaFooter({ meta }: { meta?: ProviderMeta }) {
     <div className="space-y-3 border-t pt-4 text-sm">
       <div className="flex items-center justify-between gap-3">
         <span className="font-medium">Copilot premium requests</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={isFetching}
-          onClick={() => void refetch()}
-        >
-          <RefreshCw
-            className={`mr-2 h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`}
-          />
-          Refresh
-        </Button>
       </div>
       {error ? (
         <p role="alert" className="text-destructive">
@@ -52,7 +39,9 @@ export default function CopilotQuotaFooter({ meta }: { meta?: ProviderMeta }) {
         </>
       ) : (
         <p className="text-muted-foreground">
-          {isFetching ? "Loading quota…" : "Refresh to load quota."}
+          {isFetching
+            ? "Loading quota…"
+            : "Use Refresh overview to load quota."}
         </p>
       )}
     </div>
