@@ -6,13 +6,13 @@ at **4.1.0**. Its only development branch is `atlas`.
 
 ## Install and connect
 
-Download `CC-Switch-atlas-4.1.1-Windows-x64.msi` from
+Download `CC-Switch-atlas-4.1.2-Windows-x64.msi` from
 [GitHub Releases](https://github.com/Alan-s-projects/cc-switch/releases).
 Exit the previous CC Switch app, install the MSI, and open Atlas.
 
 1. The one **GitHub Copilot** entry starts with **Needs setup**. Choose **Edit**,
    sign in, refresh your models, and save.
-2. Start the proxy and open **Codex connection**.
+2. Start the proxy, then choose **Connect** beside **Edit** on the Copilot card.
 3. Review **Connect through Copilot** in **Side by side**, **Inline**, or **Proposed TOML**.
    Copy and apply the proposed changes yourself, then reload Codex.
 4. To reconnect using your OpenAI account, review **Return to OpenAI sign-in**,
@@ -24,6 +24,17 @@ including conflicting authentication and catalog settings, while keeping unrelat
 preferences and comments. Atlas reuses the active custom provider ID when possible.
 Its own generated catalog is `.cc-switch/copilot-model-catalog.json`; the preview
 includes its absolute path. A port change requires applying a new preview manually.
+
+If automatic detection cannot find your `config.toml`, enter its full path or use
+**Browse** on the Codex connection page. **Refresh** reads that file; **Auto-detect**
+returns to automatic selection. Atlas remembers the last valid manual selection
+for previews only. It does not change Codex's configuration directory or write the file.
+
+Optional **Recommended settings** checkboxes remove fixed context-window,
+auto-compaction, and reasoning overrides from the proposed TOML. Choose the
+defaults you want, review the diff, then use **Copy proposed TOML**.
+Context and compaction can follow model defaults as described in the
+[official Codex configuration sample](https://learn.chatgpt.com/docs/config-file/config-sample).
 
 When upgrading from an older CC Switch build, that older app may restore its saved
 Codex configuration when it exits. Review the Atlas connection preview afterwards.
@@ -37,6 +48,8 @@ The MSI is unsigned, installs per user, and supports replacing the provisional
 - Model capabilities, reasoning choices and input budgets from Copilot. Existing
   smaller context limits are retained; limits above the reported input budget are capped.
 - Proxy start/stop, outbound networking and request compatibility controls.
+- Close the window to keep Atlas in the tray; use the tray menu's **Quit** action
+  to exit. Lightweight mode is removed.
 - A manual health check beside **Edit** on the Copilot card shows endpoint
   reachability and latency without sending a model request.
 - Usage trends, request history, cache statistics, latency and estimated costs;

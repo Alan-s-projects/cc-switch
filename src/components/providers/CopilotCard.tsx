@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { Activity, Github, Loader2, Pencil } from "lucide-react";
+import { Activity, FileText, Github, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import type { Provider } from "@/types";
 import { useCopilotAuth } from "./forms/hooks/useCopilotAuth";
@@ -11,9 +11,11 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 
 export function CopilotCard({
   provider,
+  onConnect,
   onEdit,
 }: {
   provider: Provider;
+  onConnect: () => void;
   onEdit: () => void;
 }) {
   const auth = useCopilotAuth();
@@ -104,6 +106,10 @@ export function CopilotCard({
             ) : (
               <Activity aria-hidden className="h-4 w-4" />
             )}
+          </Button>
+          <Button type="button" variant="outline" onClick={onConnect}>
+            <FileText aria-hidden className="mr-2 h-4 w-4" />
+            Connect
           </Button>
           <Button onClick={onEdit}>
             <Pencil className="mr-2 h-4 w-4" />

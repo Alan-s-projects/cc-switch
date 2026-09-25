@@ -1,12 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Settings,
-  ArrowLeft,
-  BarChart2,
-  FileText,
-  Loader2,
-} from "lucide-react";
+import { Settings, ArrowLeft, BarChart2, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useProvidersQuery, useUpdateProviderMutation } from "@/lib/query";
 import { providersApi } from "@/lib/api";
@@ -118,14 +112,6 @@ export default function App() {
           <Button
             variant="ghost"
             size="icon"
-            title={t("bridge.setup")}
-            onClick={() => setView("setup")}
-          >
-            <FileText className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
             title={t("common.settings")}
             onClick={() => openSettings("general")}
           >
@@ -151,6 +137,7 @@ export default function App() {
             ) : provider ? (
               <CopilotCard
                 provider={provider}
+                onConnect={() => setView("setup")}
                 onEdit={() => setEditing(true)}
               />
             ) : (

@@ -52,10 +52,10 @@ const reachable: StreamCheckResult = {
 };
 const connectivityOnly =
   "Connectivity only; sign-in and model requests are not tested.";
-const renderCard = () =>
+const renderCard = (onConnect = vi.fn(), onEdit = vi.fn()) =>
   render(
     <QueryClientProvider client={createTestQueryClient()}>
-      <CopilotCard provider={provider} onEdit={vi.fn()} />
+      <CopilotCard provider={provider} onConnect={onConnect} onEdit={onEdit} />
     </QueryClientProvider>,
   );
 const healthCheck = () => screen.getByRole("button", { name: "Health check" });
@@ -68,14 +68,20 @@ describe("Copilot connectivity health check", () => {
     mocks.error.mockClear();
   });
 
-  it("probes only on click, blocks duplicate checks, and treats HTTP 401 as connectivity rather than authentication", async () => {
+  it("probes only from Health check, blocks duplicates, and describes HTTP 401 as connectivity", async () => {
     let resolve!: (result: StreamCheckResult) => void;
     mocks.probe.mockReturnValue(
       new Promise<StreamCheckResult>((done) => {
         resolve = done;
       }),
     );
-    renderCard();
+    const onConnect = vi.fn();
+    const onEdit = vi.fn();
+    renderCard(onConnect, onEdit);
+    expect(mocks.probe).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(onConnect).toHaveBeenCalledTimes(1);
+    expect(onEdit).not.toHaveBeenCalled();
     expect(mocks.probe).not.toHaveBeenCalled();
     expect(healthCheck()).toBeEnabled();
     fireEvent.click(healthCheck());

@@ -1,12 +1,8 @@
-import { useMemo } from "react";
 import { FolderSearch, Undo2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
-import type { AppId } from "@/lib/api";
 import type { ResolvedDirectories } from "@/hooks/useSettings";
-
-type DirectoryAppId = Exclude<AppId, "claude-desktop" | "mcode">;
 
 interface DirectorySettingsProps {
   appConfigDir?: string;
@@ -14,17 +10,6 @@ interface DirectorySettingsProps {
   onAppConfigChange: (value?: string) => void;
   onBrowseAppConfig: () => Promise<void>;
   onResetAppConfig: () => Promise<void>;
-  claudeDir?: string;
-  codexDir?: string;
-  geminiDir?: string;
-  grokDir?: string;
-  opencodeDir?: string;
-  openclawDir?: string;
-  hermesDir?: string;
-  piDir?: string;
-  onDirectoryChange: (app: DirectoryAppId, value?: string) => void;
-  onBrowseDirectory: (app: DirectoryAppId) => Promise<void>;
-  onResetDirectory: (app: DirectoryAppId) => Promise<void>;
 }
 
 export function DirectorySettings({
@@ -33,10 +18,6 @@ export function DirectorySettings({
   onAppConfigChange,
   onBrowseAppConfig,
   onResetAppConfig,
-  codexDir,
-  onDirectoryChange,
-  onBrowseDirectory,
-  onResetDirectory,
 }: DirectorySettingsProps) {
   const { t } = useTranslation();
 
@@ -78,94 +59,6 @@ export function DirectorySettings({
           </Button>
         </div>
       </section>
-
-      {/* Claude/Codex 配置目录 - 独立区块 */}
-      <section className="space-y-4">
-        <header className="space-y-1">
-          <h3 className="text-sm font-medium">
-            {t("settings.configDirectoryOverride")}
-          </h3>
-          <p className="text-xs text-muted-foreground">
-            {t("settings.configDirectoryDescription")}
-          </p>
-        </header>
-
-        <DirectoryInput
-          label={t("settings.codexConfigDir")}
-          description={undefined}
-          value={codexDir}
-          resolvedValue={resolvedDirs.codex}
-          placeholder={t("settings.browsePlaceholderCodex")}
-          onChange={(val) => onDirectoryChange("codex", val)}
-          onBrowse={() => onBrowseDirectory("codex")}
-          onReset={() => onResetDirectory("codex")}
-        />
-      </section>
-    </div>
-  );
-}
-
-interface DirectoryInputProps {
-  label: string;
-  description?: string;
-  value?: string;
-  resolvedValue: string;
-  placeholder?: string;
-  onChange: (value?: string) => void;
-  onBrowse: () => Promise<void>;
-  onReset: () => Promise<void>;
-}
-
-function DirectoryInput({
-  label,
-  description,
-  value,
-  resolvedValue,
-  placeholder,
-  onChange,
-  onBrowse,
-  onReset,
-}: DirectoryInputProps) {
-  const { t } = useTranslation();
-  const displayValue = useMemo(
-    () => value ?? resolvedValue ?? "",
-    [value, resolvedValue],
-  );
-
-  return (
-    <div className="space-y-1.5">
-      <div className="space-y-1">
-        <p className="text-xs font-medium text-foreground">{label}</p>
-        {description ? (
-          <p className="text-xs text-muted-foreground">{description}</p>
-        ) : null}
-      </div>
-      <div className="flex items-center gap-2">
-        <Input
-          value={displayValue}
-          placeholder={placeholder}
-          className="text-xs"
-          onChange={(event) => onChange(event.target.value)}
-        />
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          onClick={onBrowse}
-          title={t("settings.browseDirectory")}
-        >
-          <FolderSearch className="h-4 w-4" />
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          onClick={onReset}
-          title={t("settings.resetDefault")}
-        >
-          <Undo2 className="h-4 w-4" />
-        </Button>
-      </div>
     </div>
   );
 }

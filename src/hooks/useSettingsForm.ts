@@ -12,12 +12,6 @@ export type SettingsFormState = Omit<Settings, "language"> & {
 // Accept legacy preferences when reading app data, but Atlas is English-only.
 const normalizeLanguage = (_lang?: string | null): Language => "en";
 
-const sanitizeDir = (value?: string | null): string | undefined => {
-  if (!value) return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-};
-
 export interface UseSettingsFormResult {
   settings: SettingsFormState | null;
   isLoading: boolean;
@@ -71,13 +65,6 @@ export function useSettingsForm(): UseSettingsFormResult {
       preserveCodexOfficialAuthOnSwitch:
         data.preserveCodexOfficialAuthOnSwitch ?? false,
       unifyCodexSessionHistory: data.unifyCodexSessionHistory ?? false,
-      claudeConfigDir: sanitizeDir(data.claudeConfigDir),
-      codexConfigDir: sanitizeDir(data.codexConfigDir),
-      geminiConfigDir: sanitizeDir(data.geminiConfigDir),
-      grokConfigDir: sanitizeDir(data.grokConfigDir),
-      opencodeConfigDir: sanitizeDir(data.opencodeConfigDir),
-      openclawConfigDir: sanitizeDir(data.openclawConfigDir),
-      piConfigDir: sanitizeDir(data.piConfigDir),
       language: normalizedLanguage,
     };
 
@@ -129,13 +116,6 @@ export function useSettingsForm(): UseSettingsFormResult {
         preserveCodexOfficialAuthOnSwitch:
           serverData.preserveCodexOfficialAuthOnSwitch ?? false,
         unifyCodexSessionHistory: serverData.unifyCodexSessionHistory ?? false,
-        claudeConfigDir: sanitizeDir(serverData.claudeConfigDir),
-        codexConfigDir: sanitizeDir(serverData.codexConfigDir),
-        geminiConfigDir: sanitizeDir(serverData.geminiConfigDir),
-        grokConfigDir: sanitizeDir(serverData.grokConfigDir),
-        opencodeConfigDir: sanitizeDir(serverData.opencodeConfigDir),
-        openclawConfigDir: sanitizeDir(serverData.openclawConfigDir),
-        piConfigDir: sanitizeDir(serverData.piConfigDir),
         language: normalizedLanguage,
       };
 

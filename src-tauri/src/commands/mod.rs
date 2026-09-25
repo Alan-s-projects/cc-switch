@@ -12,7 +12,6 @@ mod settings;
 mod stream_check;
 pub(crate) mod sync_support;
 
-mod lightweight;
 mod usage;
 
 pub use auth::*;
@@ -26,5 +25,4 @@ pub use proxy::*;
 pub use settings::*;
 pub use stream_check::*;
 
-pub use lightweight::*;
 pub use usage::*;
