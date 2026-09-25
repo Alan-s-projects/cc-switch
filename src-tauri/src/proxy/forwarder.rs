@@ -17,7 +17,7 @@ use super::{
     thinking_rectifier::{
         normalize_thinking_type, rectify_anthropic_request, should_rectify_thinking_signature,
     },
-    types::{CopilotOptimizerConfig, OptimizerConfig, ProxyStatus, RectifierConfig},
+    types::{CopilotOptimizerConfig, ProxyStatus, RectifierConfig},
     ProxyError,
 };
 use crate::commands::CopilotAuthState;
@@ -240,8 +240,6 @@ pub struct RequestForwarder {
     session_client_provided: bool,
     /// 整流器配置
     rectifier_config: RectifierConfig,
-    /// 优化器配置
-    optimizer_config: OptimizerConfig,
     /// Copilot 优化器配置
     copilot_optimizer_config: CopilotOptimizerConfig,
     /// 非流式请求超时（秒）
@@ -309,7 +307,6 @@ impl RequestForwarder {
         streaming_first_byte_timeout: u64,
         _streaming_idle_timeout: u64,
         rectifier_config: RectifierConfig,
-        optimizer_config: OptimizerConfig,
         copilot_optimizer_config: CopilotOptimizerConfig,
     ) -> Self {
         // max_retries 是「失败后重试次数」语义，attempt 上限 = retries + 1。
@@ -323,7 +320,6 @@ impl RequestForwarder {
             session_id,
             session_client_provided,
             rectifier_config,
-            optimizer_config,
             copilot_optimizer_config,
             non_streaming_timeout: std::time::Duration::from_secs(non_streaming_timeout),
             streaming_first_byte_timeout: std::time::Duration::from_secs(
@@ -466,21 +462,7 @@ impl RequestForwarder {
             let mut budget_rectifier_retried = false;
             let mut media_rectifier_retried = false;
 
-            // PRE-SEND 优化器：每个 provider 独立决定是否优化
-            // clone body 以避免 Bedrock 优化字段泄漏到非 Bedrock provider（failover 场景）
-            let mut provider_body =
-                if self.optimizer_config.enabled && is_bedrock_provider(provider) {
-                    let mut b = body.clone();
-                    if self.optimizer_config.thinking_optimizer {
-                        super::thinking_optimizer::optimize(&mut b, &self.optimizer_config);
-                    }
-                    if self.optimizer_config.cache_injection {
-                        super::cache_injector::inject(&mut b, &self.optimizer_config);
-                    }
-                    b
-                } else {
-                    body.clone()
-                };
+            let mut provider_body = body.clone();
 
             attempted_providers += 1;
 
@@ -1471,15 +1453,10 @@ impl RequestForwarder {
             if codex_impersonate_claude_code {
                 prepend_claude_code_system_prompt(&mut anthropic_body);
             }
-            // Enable Anthropic prompt caching (no beta header required). Reuse the
-            // configured TTL rather than silently forcing 5m on this conversion path.
-            // otherwise system/tools/history are re-sent at full price every round,
-            // inflating cost and first-token latency. The injector handles the
-            // string→array `system` conversion and the new-breakpoint budget.
-            super::cache_injector::inject(
-                &mut anthropic_body,
-                &codex_anthropic_cache_config(&self.optimizer_config),
-            );
+            // Automatically add Anthropic prompt-cache breakpoints to the converted
+            // request using the standard 5-minute TTL. The injector converts string
+            // system prompts to blocks and respects the breakpoint budget.
+            super::cache_injector::inject(&mut anthropic_body);
             anthropic_body
         } else if needs_transform {
             if adapter.name() == "Claude" {
@@ -2603,17 +2580,6 @@ fn extract_error_message(error: &ProxyError) -> Option<String> {
     }
 }
 
-/// 检测 Provider 是否为 Bedrock（通过 CLAUDE_CODE_USE_BEDROCK 环境变量判断）
-fn is_bedrock_provider(provider: &Provider) -> bool {
-    provider
-        .settings_config
-        .get("env")
-        .and_then(|e| e.get("CLAUDE_CODE_USE_BEDROCK"))
-        .and_then(|v| v.as_str())
-        .map(|v| v == "1")
-        .unwrap_or(false)
-}
-
 fn build_retryable_failure_log(
     provider_name: &str,
     attempted_providers: usize,
@@ -2871,19 +2837,6 @@ fn responses_error_envelope_message(body: &[u8]) -> Option<String> {
             _ => "response generation failed",
         });
     Some(format!("{error_type}: {message}"))
-}
-
-/// Prompt caching is part of the Codex→Anthropic protocol bridge rather than an
-/// optional Bedrock optimizer. Codex requests do not contain Anthropic
-/// `cache_control`, so keep bridge caching on by default while still honoring the
-/// dedicated cache-injection switch. Injected breakpoints always use Anthropic's
-/// standard 5-minute TTL.
-fn codex_anthropic_cache_config(config: &OptimizerConfig) -> OptimizerConfig {
-    OptimizerConfig {
-        enabled: true,
-        thinking_optimizer: false,
-        cache_injection: config.cache_injection,
-    }
 }
 
 /// A streaming request may receive a whole JSON document even when the gateway
@@ -3592,7 +3545,6 @@ mod tests {
             session_id: String::new(),
             session_client_provided: false,
             rectifier_config: RectifierConfig::default(),
-            optimizer_config: OptimizerConfig::default(),
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
             non_streaming_timeout,
             streaming_first_byte_timeout,
@@ -4181,20 +4133,6 @@ mod tests {
         assert!(
             matches!(failed, Some(Err(ProxyError::TransformError(message))) if message.contains("backend unavailable"))
         );
-    }
-
-    #[test]
-    fn codex_anthropic_cache_is_default_on_but_honors_sub_switch() {
-        let default = codex_anthropic_cache_config(&OptimizerConfig::default());
-        assert!(default.enabled);
-        assert!(default.cache_injection);
-
-        let disabled = codex_anthropic_cache_config(&OptimizerConfig {
-            cache_injection: false,
-            ..OptimizerConfig::default()
-        });
-        assert!(disabled.enabled);
-        assert!(!disabled.cache_injection);
     }
 
     #[test]

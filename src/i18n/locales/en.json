@@ -102,15 +102,6 @@
         "mediaHeuristic": "Text-Only Model Preflight",
         "mediaHeuristicDescription": "Before sending, strips images for models in the built-in confirmed text-only registry. Turning this off only disables the proxy's registry-based preflight; declared text-only handling and upstream-error fallback remain, and Codex model-catalog capability declarations are unchanged"
       },
-      "optimizer": {
-        "title": "Bedrock Request Optimizer",
-        "description": "Automatically optimize Thinking and Cache configuration before sending requests (only applies to Bedrock providers)",
-        "enabled": "Enable Optimizer",
-        "thinkingOptimizer": "Thinking Optimization",
-        "thinkingOptimizerDescription": "Automatically enable Adaptive Thinking for Opus/Sonnet, and inject Extended Thinking for legacy models",
-        "cacheInjection": "Cache Injection",
-        "cacheInjectionDescription": "Automatically inject standard 5-minute cache breakpoints at key positions to reduce duplicate token billing"
-      },
       "logConfig": {
         "title": "Application Diagnostic Logs",
         "description": "Control the output level for application diagnostic logs",

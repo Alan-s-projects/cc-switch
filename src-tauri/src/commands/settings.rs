@@ -229,27 +229,6 @@ pub async fn set_rectifier_config(
     Ok(true)
 }
 
-/// 获取优化器配置
-#[tauri::command]
-pub async fn get_optimizer_config(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::proxy::types::OptimizerConfig, String> {
-    state.db.get_optimizer_config().map_err(|e| e.to_string())
-}
-
-/// 设置优化器配置
-#[tauri::command]
-pub async fn set_optimizer_config(
-    state: tauri::State<'_, crate::AppState>,
-    config: crate::proxy::types::OptimizerConfig,
-) -> Result<bool, String> {
-    state
-        .db
-        .set_optimizer_config(&config)
-        .map_err(|e| e.to_string())?;
-    Ok(true)
-}
-
 /// 获取 Copilot 优化器配置
 #[tauri::command]
 pub async fn get_copilot_optimizer_config(

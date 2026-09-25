@@ -708,8 +708,6 @@ pub fn run() {
             commands::save_settings,
             commands::get_rectifier_config,
             commands::set_rectifier_config,
-            commands::get_optimizer_config,
-            commands::set_optimizer_config,
             commands::get_copilot_optimizer_config,
             commands::set_copilot_optimizer_config,
             commands::get_log_config,
