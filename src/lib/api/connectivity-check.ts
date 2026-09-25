@@ -19,8 +19,8 @@ export interface StreamCheckResult {
   status: HealthStatus;
   success: boolean;
   message: string;
-  responseTimeMs?: number;
-  httpStatus?: number;
+  responseTimeMs?: number | null;
+  httpStatus?: number | null;
   testedAt: number;
   retryCount: number;
 }
