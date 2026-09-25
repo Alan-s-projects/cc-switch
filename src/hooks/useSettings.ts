@@ -7,7 +7,6 @@ import type { Settings } from "@/types";
 import { useSettingsForm, type SettingsFormState } from "./useSettingsForm";
 import {
   useDirectorySettings,
-  type DirectoryAppId,
   type ResolvedDirectories,
 } from "./useDirectorySettings";
 import { useSettingsMetadata } from "./useSettingsMetadata";
@@ -25,11 +24,8 @@ export interface UseSettingsResult {
   resolvedDirs: ResolvedDirectories;
   requiresRestart: boolean;
   updateSettings: (updates: Partial<SettingsFormState>) => void;
-  updateDirectory: (app: DirectoryAppId, value?: string) => void;
   updateAppConfigDir: (value?: string) => void;
-  browseDirectory: (app: DirectoryAppId) => Promise<void>;
   browseAppConfigDir: () => Promise<void>;
-  resetDirectory: (app: DirectoryAppId) => Promise<void>;
   resetAppConfigDir: () => Promise<void>;
   saveSettings: (
     overrides?: Partial<SettingsFormState>,
@@ -78,17 +74,11 @@ export function useSettings(): UseSettingsResult {
     resolvedDirs,
     isLoading: isDirectoryLoading,
     initialAppConfigDir,
-    updateDirectory,
     updateAppConfigDir,
-    browseDirectory,
     browseAppConfigDir,
-    resetDirectory,
     resetAppConfigDir,
     resetAllDirectories,
-  } = useDirectorySettings({
-    settings,
-    onUpdateSettings: updateSettings,
-  });
+  } = useDirectorySettings();
 
   // 3️⃣ 元数据管理
   const {
@@ -103,9 +93,7 @@ export function useSettings(): UseSettingsResult {
   const resetSettings = useCallback(() => {
     resetForm(data ?? null);
     syncLanguage(initialLanguage);
-    resetAllDirectories({
-      codex: sanitizeDir(data?.codexConfigDir),
-    });
+    resetAllDirectories();
     setRequiresRestart(false);
   }, [
     data,
@@ -124,30 +112,7 @@ export function useSettings(): UseSettingsResult {
       if (!mergedSettings) return null;
 
       try {
-        const sanitizedClaudeDir = sanitizeDir(mergedSettings.claudeConfigDir);
-        const sanitizedCodexDir = sanitizeDir(mergedSettings.codexConfigDir);
-        const sanitizedGeminiDir = sanitizeDir(mergedSettings.geminiConfigDir);
-        const sanitizedGrokDir = sanitizeDir(mergedSettings.grokConfigDir);
-        const sanitizedOpencodeDir = sanitizeDir(
-          mergedSettings.opencodeConfigDir,
-        );
-        const sanitizedOpenclawDir = sanitizeDir(
-          mergedSettings.openclawConfigDir,
-        );
-        const sanitizedPiDir = sanitizeDir(mergedSettings.piConfigDir);
-        const restSettings = mergedSettings;
-
-        const payload: Settings = {
-          ...restSettings,
-          claudeConfigDir: sanitizedClaudeDir,
-          codexConfigDir: sanitizedCodexDir,
-          geminiConfigDir: sanitizedGeminiDir,
-          grokConfigDir: sanitizedGrokDir,
-          opencodeConfigDir: sanitizedOpencodeDir,
-          openclawConfigDir: sanitizedOpenclawDir,
-          piConfigDir: sanitizedPiDir,
-          language: mergedSettings.language,
-        };
+        const payload: Settings = { ...mergedSettings };
 
         // 保存到配置文件
         await saveMutation.mutateAsync(payload);
@@ -214,31 +179,9 @@ export function useSettings(): UseSettingsResult {
       if (!mergedSettings) return null;
       try {
         const sanitizedAppDir = sanitizeDir(appConfigDir);
-        const sanitizedClaudeDir = sanitizeDir(mergedSettings.claudeConfigDir);
-        const sanitizedCodexDir = sanitizeDir(mergedSettings.codexConfigDir);
-        const sanitizedGeminiDir = sanitizeDir(mergedSettings.geminiConfigDir);
-        const sanitizedGrokDir = sanitizeDir(mergedSettings.grokConfigDir);
-        const sanitizedOpencodeDir = sanitizeDir(
-          mergedSettings.opencodeConfigDir,
-        );
-        const sanitizedOpenclawDir = sanitizeDir(
-          mergedSettings.openclawConfigDir,
-        );
-        const sanitizedPiDir = sanitizeDir(mergedSettings.piConfigDir);
         const previousAppDir = initialAppConfigDir;
-        const restSettings = mergedSettings;
 
-        const payload: Settings = {
-          ...restSettings,
-          claudeConfigDir: sanitizedClaudeDir,
-          codexConfigDir: sanitizedCodexDir,
-          geminiConfigDir: sanitizedGeminiDir,
-          grokConfigDir: sanitizedGrokDir,
-          opencodeConfigDir: sanitizedOpencodeDir,
-          openclawConfigDir: sanitizedOpenclawDir,
-          piConfigDir: sanitizedPiDir,
-          language: mergedSettings.language,
-        };
+        const payload: Settings = { ...mergedSettings };
 
         await saveMutation.mutateAsync(payload);
 
@@ -327,11 +270,8 @@ export function useSettings(): UseSettingsResult {
     resolvedDirs,
     requiresRestart,
     updateSettings,
-    updateDirectory,
     updateAppConfigDir,
-    browseDirectory,
     browseAppConfigDir,
-    resetDirectory,
     resetAppConfigDir,
     saveSettings,
     autoSaveSettings,

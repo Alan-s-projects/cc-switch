@@ -110,21 +110,11 @@ const createDirectorySettingsMock = (
   appConfigDir: undefined,
   resolvedDirs: {
     appConfig: "/home/mock/.cc-switch",
-    claude: "/default/claude",
-    codex: "/default/codex",
-    gemini: "/default/gemini",
-    opencode: "/default/opencode",
-    openclaw: "/default/openclaw",
-    hermes: "/default/hermes",
-    pi: "/default/pi",
   },
   isLoading: false,
   initialAppConfigDir: undefined,
-  updateDirectory: vi.fn(),
   updateAppConfigDir: vi.fn(),
-  browseDirectory: vi.fn(),
   browseAppConfigDir: vi.fn(),
-  resetDirectory: vi.fn(),
   resetAppConfigDir: vi.fn(),
   resetAllDirectories: vi.fn(),
   ...overrides,
@@ -194,10 +184,11 @@ describe("useSettings hook", () => {
     getQueryDataMock.mockImplementation(() => serverSettings);
   });
 
-  it("sanitizes the Pi directory without projecting providers", async () => {
+  it("preserves historical client-directory preferences without projecting providers", async () => {
     settingsFormMock = createSettingsFormMock({
       settings: {
         ...serverSettings,
+        codexConfigDir: "  /existing/codex  ",
         piConfigDir: "  /custom/pi  ",
       },
     });
@@ -209,7 +200,8 @@ describe("useSettings hook", () => {
     });
 
     const payload = mutateAsyncMock.mock.calls[0][0] as Settings;
-    expect(payload.piConfigDir).toBe("/custom/pi");
+    expect(payload.codexConfigDir).toBe("  /existing/codex  ");
+    expect(payload.piConfigDir).toBe("  /custom/pi  ");
     expect(syncCurrentProvidersLiveMock).not.toHaveBeenCalled();
     expect(invalidatePiDirectoryCachesMock).not.toHaveBeenCalled();
   });
@@ -245,9 +237,7 @@ describe("useSettings hook", () => {
     expect(settingsFormMock.syncLanguage).toHaveBeenCalledWith(
       settingsFormMock.initialLanguage,
     );
-    expect(directorySettingsMock.resetAllDirectories).toHaveBeenCalledWith({
-      codex: undefined,
-    });
+    expect(directorySettingsMock.resetAllDirectories).toHaveBeenCalledWith();
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(false);
   });
 

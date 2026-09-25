@@ -39,11 +39,8 @@ interface SettingsMock {
   resolvedDirs: Record<string, string>;
   requiresRestart: boolean;
   updateSettings: ReturnType<typeof vi.fn>;
-  updateDirectory: ReturnType<typeof vi.fn>;
   updateAppConfigDir: ReturnType<typeof vi.fn>;
-  browseDirectory: ReturnType<typeof vi.fn>;
   browseAppConfigDir: ReturnType<typeof vi.fn>;
-  resetDirectory: ReturnType<typeof vi.fn>;
   resetAppConfigDir: ReturnType<typeof vi.fn>;
   saveSettings: ReturnType<typeof vi.fn>;
   autoSaveSettings: ReturnType<typeof vi.fn>;
@@ -65,16 +62,12 @@ const createSettingsMock = (overrides: Partial<SettingsMock> = {}) => {
     isPortable: false,
     appConfigDir: "/app-config",
     resolvedDirs: {
-      claude: "/claude",
-      codex: "/codex",
+      appConfig: "/app-config",
     },
     requiresRestart: false,
     updateSettings: vi.fn(),
-    updateDirectory: vi.fn(),
     updateAppConfigDir: vi.fn(),
-    browseDirectory: vi.fn(),
     browseAppConfigDir: vi.fn(),
-    resetDirectory: vi.fn(),
     resetAppConfigDir: vi.fn(),
     saveSettings: vi.fn().mockResolvedValue({ requiresRestart: false }),
     autoSaveSettings: vi.fn().mockResolvedValue({ requiresRestart: false }),
@@ -190,23 +183,11 @@ vi.mock("@/components/settings/WindowSettings", () => ({
 
 vi.mock("@/components/settings/DirectorySettings", () => ({
   DirectorySettings: ({
-    onBrowseDirectory,
-    onResetDirectory,
-    onDirectoryChange,
     onBrowseAppConfig,
     onResetAppConfig,
     onAppConfigChange,
   }: any) => (
     <div>
-      <button onClick={() => onBrowseDirectory("claude")}>
-        browse-directory
-      </button>
-      <button onClick={() => onResetDirectory("claude")}>
-        reset-directory
-      </button>
-      <button onClick={() => onDirectoryChange("codex", "/new/path")}>
-        change-directory
-      </button>
       <button onClick={() => onBrowseAppConfig()}>browse-app-config</button>
       <button onClick={() => onResetAppConfig()}>reset-app-config</button>
       <button onClick={() => onAppConfigChange("/app/new")}>
@@ -422,23 +403,11 @@ describe("SettingsPage Component", () => {
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
-  it("should trigger directory management callbacks inside advanced tab", () => {
+  it("should trigger Atlas data-directory callbacks inside advanced tab", () => {
     renderSettingsPage();
 
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
     fireEvent.click(screen.getByText("settings.advanced.configDir.title"));
-
-    fireEvent.click(screen.getByText("browse-directory"));
-    expect(settingsMock.browseDirectory).toHaveBeenCalledWith("claude");
-
-    fireEvent.click(screen.getByText("reset-directory"));
-    expect(settingsMock.resetDirectory).toHaveBeenCalledWith("claude");
-
-    fireEvent.click(screen.getByText("change-directory"));
-    expect(settingsMock.updateDirectory).toHaveBeenCalledWith(
-      "codex",
-      "/new/path",
-    );
 
     fireEvent.click(screen.getByText("browse-app-config"));
     expect(settingsMock.browseAppConfigDir).toHaveBeenCalledTimes(1);

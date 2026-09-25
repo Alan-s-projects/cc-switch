@@ -201,7 +201,7 @@ describe("SettingsPage integration", () => {
     expect(getAppConfigDirOverride()).toBe("/custom/app");
   });
 
-  it("allows browsing and resetting directories", async () => {
+  it("allows browsing and resetting the Atlas data directory", async () => {
     renderDialog();
 
     await waitFor(() =>
@@ -211,33 +211,21 @@ describe("SettingsPage integration", () => {
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
     fireEvent.click(screen.getByText("settings.advanced.configDir.title"));
 
-    const browseButtons = screen.getAllByTitle("settings.browseDirectory");
-    const resetButtons = screen.getAllByTitle("settings.resetDefault");
+    const browseButton = screen.getByTitle("settings.browseDirectory");
+    const resetButton = screen.getByTitle("settings.resetDefault");
 
     const appInput = (await screen.findByPlaceholderText(
       "settings.browsePlaceholderApp",
     )) as HTMLInputElement;
     expect(appInput.value).toBe("/home/mock/.cc-switch");
 
-    fireEvent.click(browseButtons[0]);
+    fireEvent.click(browseButton);
     await waitFor(() =>
       expect(appInput.value).toBe("/home/mock/.cc-switch/picked"),
     );
 
-    fireEvent.click(resetButtons[0]);
+    fireEvent.click(resetButton);
     await waitFor(() => expect(appInput.value).toBe("/home/mock/.cc-switch"));
-
-    const codexInput = (await screen.findByPlaceholderText(
-      "settings.browsePlaceholderCodex",
-    )) as HTMLInputElement;
-    fireEvent.change(codexInput, { target: { value: "/custom/codex" } });
-    await waitFor(() => expect(codexInput.value).toBe("/custom/codex"));
-
-    fireEvent.click(browseButtons[1]);
-    await waitFor(() => expect(codexInput.value).toBe("/custom/codex/picked"));
-
-    fireEvent.click(resetButtons[1]);
-    await waitFor(() => expect(codexInput.value).toBe("/home/mock/.codex"));
   });
 
   it("notifies when export fails", async () => {

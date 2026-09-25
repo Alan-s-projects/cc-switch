@@ -2,32 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { homeDir, join } from "@tauri-apps/api/path";
-import { settingsApi, type AppId } from "@/lib/api";
-import type { SettingsFormState } from "./useSettingsForm";
-
-export type DirectoryAppId = AppId;
-type AppDirectoryKey = "codex";
-type DirectoryKey = "appConfig" | AppDirectoryKey;
+import { settingsApi } from "@/lib/api";
 
 export interface ResolvedDirectories {
   appConfig: string;
-  codex: string;
 }
-
-// Single source of truth for per-app directory metadata.
-const APP_DIRECTORY_META: Record<
-  DirectoryAppId,
-  { key: AppDirectoryKey; defaultFolder: string }
-> = {
-  codex: { key: "codex", defaultFolder: ".codex" },
-};
-
-const DIRECTORY_KEY_TO_SETTINGS_FIELD: Record<
-  AppDirectoryKey,
-  keyof SettingsFormState
-> = {
-  codex: "codexConfigDir",
-};
 
 const sanitizeDir = (value?: string | null): string | undefined => {
   if (!value) return undefined;
@@ -48,43 +27,16 @@ const computeDefaultAppConfigDir = async (): Promise<string | undefined> => {
   }
 };
 
-const computeDefaultConfigDir = async (
-  app: DirectoryAppId,
-): Promise<string | undefined> => {
-  try {
-    const home = await homeDir();
-    return await join(home, APP_DIRECTORY_META[app].defaultFolder);
-  } catch (error) {
-    console.error(
-      "[useDirectorySettings] Failed to resolve default config dir",
-      error,
-    );
-    return undefined;
-  }
-};
-
-export interface UseDirectorySettingsProps {
-  settings: SettingsFormState | null;
-  onUpdateSettings: (updates: Partial<SettingsFormState>) => void;
-}
-
 export interface UseDirectorySettingsResult {
   appConfigDir?: string;
   resolvedDirs: ResolvedDirectories;
   isLoading: boolean;
   initialAppConfigDir?: string;
-  updateDirectory: (app: DirectoryAppId, value?: string) => void;
   updateAppConfigDir: (value?: string) => void;
-  browseDirectory: (app: DirectoryAppId) => Promise<void>;
   browseAppConfigDir: () => Promise<void>;
-  resetDirectory: (app: DirectoryAppId) => Promise<void>;
   resetAppConfigDir: () => Promise<void>;
-  resetAllDirectories: (overrides?: ResolvedAppDirectoryOverrides) => void;
+  resetAllDirectories: () => void;
 }
-
-export type ResolvedAppDirectoryOverrides = Partial<
-  Record<AppDirectoryKey, string | undefined>
->;
 
 /**
  * useDirectorySettings - 目录管理
@@ -95,10 +47,7 @@ export type ResolvedAppDirectoryOverrides = Partial<
  * - 目录重置
  * - 默认值计算
  */
-export function useDirectorySettings({
-  settings,
-  onUpdateSettings,
-}: UseDirectorySettingsProps): UseDirectorySettingsResult {
+export function useDirectorySettings(): UseDirectorySettingsResult {
   const { t } = useTranslation();
 
   const [appConfigDir, setAppConfigDir] = useState<string | undefined>(
@@ -106,13 +55,11 @@ export function useDirectorySettings({
   );
   const [resolvedDirs, setResolvedDirs] = useState<ResolvedDirectories>({
     appConfig: "",
-    codex: "",
   });
   const [isLoading, setIsLoading] = useState(true);
 
   const defaultsRef = useRef<ResolvedDirectories>({
     appConfig: "",
-    codex: "",
   });
   const initialAppConfigDirRef = useRef<string | undefined>(undefined);
 
@@ -123,13 +70,10 @@ export function useDirectorySettings({
 
     const load = async () => {
       try {
-        const [overrideRaw, codexDir, defaultAppConfig, defaultCodexDir] =
-          await Promise.all([
-            settingsApi.getAppConfigDirOverride(),
-            settingsApi.getConfigDir("codex"),
-            computeDefaultAppConfigDir(),
-            computeDefaultConfigDir("codex"),
-          ]);
+        const [overrideRaw, defaultAppConfig] = await Promise.all([
+          settingsApi.getAppConfigDirOverride(),
+          computeDefaultAppConfigDir(),
+        ]);
 
         if (!active) return;
 
@@ -137,7 +81,6 @@ export function useDirectorySettings({
 
         defaultsRef.current = {
           appConfig: defaultAppConfig ?? "",
-          codex: defaultCodexDir ?? "",
         };
 
         setAppConfigDir(normalizedOverride);
@@ -145,7 +88,6 @@ export function useDirectorySettings({
 
         setResolvedDirs({
           appConfig: normalizedOverride ?? defaultsRef.current.appConfig,
-          codex: codexDir || defaultsRef.current.codex,
         });
       } catch (error) {
         console.error(
@@ -165,65 +107,18 @@ export function useDirectorySettings({
     };
   }, []);
 
-  const updateDirectoryState = useCallback(
-    (key: DirectoryKey, value?: string) => {
-      const sanitized = sanitizeDir(value);
-      if (key === "appConfig") {
-        setAppConfigDir(sanitized);
-      } else {
-        onUpdateSettings({
-          [DIRECTORY_KEY_TO_SETTINGS_FIELD[key]]: sanitized,
-        });
-      }
+  const updateAppConfigDir = useCallback((value?: string) => {
+    const sanitized = sanitizeDir(value);
+    setAppConfigDir(sanitized);
 
-      setResolvedDirs((prev) => {
-        const next = sanitized ?? defaultsRef.current[key];
-        // Same-ref early-return: unchanged value shouldn't cascade renders
-        // through the settings tree.
-        if (prev[key] === next) return prev;
-        return { ...prev, [key]: next };
-      });
-    },
-    [onUpdateSettings],
-  );
-
-  const updateAppConfigDir = useCallback(
-    (value?: string) => {
-      updateDirectoryState("appConfig", value);
-    },
-    [updateDirectoryState],
-  );
-
-  const updateDirectory = useCallback(
-    (app: DirectoryAppId, value?: string) => {
-      updateDirectoryState(APP_DIRECTORY_META[app].key, value);
-    },
-    [updateDirectoryState],
-  );
-
-  const browseDirectory = useCallback(
-    async (app: DirectoryAppId) => {
-      const key = APP_DIRECTORY_META[app].key;
-      const settingsField = DIRECTORY_KEY_TO_SETTINGS_FIELD[key];
-      const currentValue =
-        (settings?.[settingsField] as string | undefined) ?? resolvedDirs[key];
-
-      try {
-        const picked = await settingsApi.selectConfigDirectory(currentValue);
-        const sanitized = sanitizeDir(picked ?? undefined);
-        if (!sanitized) return;
-        updateDirectoryState(key, sanitized);
-      } catch (error) {
-        console.error("[useDirectorySettings] Failed to pick directory", error);
-        toast.error(
-          t("settings.selectFileFailed", {
-            defaultValue: "Could not select a directory",
-          }),
-        );
-      }
-    },
-    [settings, resolvedDirs, t, updateDirectoryState],
-  );
+    setResolvedDirs((prev) => {
+      const next = sanitized ?? defaultsRef.current.appConfig;
+      // Same-ref early-return: unchanged value shouldn't cascade renders
+      // through the settings tree.
+      if (prev.appConfig === next) return prev;
+      return { appConfig: next };
+    });
+  }, []);
 
   const browseAppConfigDir = useCallback(async () => {
     const currentValue = appConfigDir ?? resolvedDirs.appConfig;
@@ -231,7 +126,7 @@ export function useDirectorySettings({
       const picked = await settingsApi.selectConfigDirectory(currentValue);
       const sanitized = sanitizeDir(picked ?? undefined);
       if (!sanitized) return;
-      updateDirectoryState("appConfig", sanitized);
+      updateAppConfigDir(sanitized);
     } catch (error) {
       console.error(
         "[useDirectorySettings] Failed to pick app config directory",
@@ -243,24 +138,7 @@ export function useDirectorySettings({
         }),
       );
     }
-  }, [appConfigDir, resolvedDirs.appConfig, t, updateDirectoryState]);
-
-  const resetDirectory = useCallback(
-    async (app: DirectoryAppId) => {
-      const key = APP_DIRECTORY_META[app].key;
-      if (!defaultsRef.current[key]) {
-        const fallback = await computeDefaultConfigDir(app);
-        if (fallback) {
-          defaultsRef.current = {
-            ...defaultsRef.current,
-            [key]: fallback,
-          };
-        }
-      }
-      updateDirectoryState(key, undefined);
-    },
-    [updateDirectoryState],
-  );
+  }, [appConfigDir, resolvedDirs.appConfig, t, updateAppConfigDir]);
 
   const resetAppConfigDir = useCallback(async () => {
     if (!defaultsRef.current.appConfig) {
@@ -272,31 +150,24 @@ export function useDirectorySettings({
         };
       }
     }
-    updateDirectoryState("appConfig", undefined);
-  }, [updateDirectoryState]);
+    updateAppConfigDir(undefined);
+  }, [updateAppConfigDir]);
 
-  const resetAllDirectories = useCallback(
-    (overrides?: ResolvedAppDirectoryOverrides) => {
-      setAppConfigDir(initialAppConfigDirRef.current);
-      setResolvedDirs({
-        appConfig:
-          initialAppConfigDirRef.current ?? defaultsRef.current.appConfig,
-        codex: overrides?.codex ?? defaultsRef.current.codex,
-      });
-    },
-    [],
-  );
+  const resetAllDirectories = useCallback(() => {
+    setAppConfigDir(initialAppConfigDirRef.current);
+    setResolvedDirs({
+      appConfig:
+        initialAppConfigDirRef.current ?? defaultsRef.current.appConfig,
+    });
+  }, []);
 
   return {
     appConfigDir,
     resolvedDirs,
     isLoading,
     initialAppConfigDir: initialAppConfigDirRef.current,
-    updateDirectory,
     updateAppConfigDir,
-    browseDirectory,
     browseAppConfigDir,
-    resetDirectory,
     resetAppConfigDir,
     resetAllDirectories,
   };

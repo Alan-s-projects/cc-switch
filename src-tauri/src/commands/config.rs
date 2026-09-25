@@ -1,37 +1,7 @@
-use crate::{
-    codex_config,
-    config::{self, ConfigStatus},
-};
+use crate::config;
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
-
-#[tauri::command]
-pub async fn get_config_status(app: String) -> Result<ConfigStatus, String> {
-    crate::copilot_bridge::require_codex(&app).map_err(|e| e.to_string())?;
-    Ok(ConfigStatus {
-        exists: codex_config::get_codex_config_path().exists(),
-        path: codex_config::get_codex_config_dir()
-            .to_string_lossy()
-            .into_owned(),
-    })
-}
-#[tauri::command]
-pub async fn get_config_dir(app: String) -> Result<String, String> {
-    crate::copilot_bridge::require_codex(&app).map_err(|e| e.to_string())?;
-    Ok(codex_config::get_codex_config_dir()
-        .to_string_lossy()
-        .into_owned())
-}
-#[tauri::command]
-pub async fn open_config_folder(handle: AppHandle, app: String) -> Result<bool, String> {
-    let path = get_config_dir(app).await?;
-    handle
-        .opener()
-        .open_path(path, None::<String>)
-        .map_err(|e| e.to_string())?;
-    Ok(true)
-}
 
 #[tauri::command]
 pub async fn pick_directory(

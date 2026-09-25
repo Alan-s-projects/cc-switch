@@ -44,7 +44,6 @@ export const handlers = [
     );
     return success(true);
   }),
-  http.post(`${root}/get_config_dir`, () => success("/default/codex")),
   http.post(`${root}/pick_directory`, async ({ request }) => {
     const { defaultPath } = await body<{ defaultPath?: string }>(request);
     return success(

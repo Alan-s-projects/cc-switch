@@ -6,7 +6,7 @@ at **4.1.0**. Its only development branch is `atlas`.
 
 ## Install and connect
 
-Download `CC-Switch-atlas-4.1.1-Windows-x64.msi` from
+Download `CC-Switch-atlas-4.1.2-Windows-x64.msi` from
 [GitHub Releases](https://github.com/Alan-s-projects/cc-switch/releases).
 Exit the previous CC Switch app, install the MSI, and open Atlas.
 
@@ -24,6 +24,11 @@ including conflicting authentication and catalog settings, while keeping unrelat
 preferences and comments. Atlas reuses the active custom provider ID when possible.
 Its own generated catalog is `.cc-switch/copilot-model-catalog.json`; the preview
 includes its absolute path. A port change requires applying a new preview manually.
+
+If automatic detection cannot find your `config.toml`, enter its full path or use
+**Browse** on the Codex connection page. **Refresh** reads that file; **Auto-detect**
+returns to automatic selection. Atlas remembers the last valid manual selection
+for previews only. It does not change Codex's configuration directory or write the file.
 
 When upgrading from an older CC Switch build, that older app may restore its saved
 Codex configuration when it exits. Review the Atlas connection preview afterwards.

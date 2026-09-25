@@ -3,7 +3,6 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { useDirectorySettings } from "@/hooks/useDirectorySettings";
 const api = vi.hoisted(() => ({
   getAppConfigDirOverride: vi.fn(),
-  getConfigDir: vi.fn(),
   selectConfigDirectory: vi.fn(),
 }));
 vi.mock("@/lib/api", () => ({ settingsApi: api }));
@@ -14,63 +13,51 @@ vi.mock("@tauri-apps/api/path", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   api.getAppConfigDirOverride.mockResolvedValue(null);
-  api.getConfigDir.mockResolvedValue("/remote/codex");
-  api.selectConfigDirectory.mockResolvedValue("/picked/codex");
+  api.selectConfigDirectory.mockResolvedValue("/picked/atlas");
 });
 function mount() {
-  const onUpdateSettings = vi.fn();
-  const hook = renderHook(() =>
-    useDirectorySettings({
-      settings: {
-        showInTray: true,
-        codexConfigDir: undefined,
-        language: "en",
-      },
-      onUpdateSettings,
-    }),
-  );
-  return { ...hook, onUpdateSettings };
+  return renderHook(() => useDirectorySettings());
 }
-it("resolves only Atlas and the Codex read directory", async () => {
+it("resolves the Atlas data directory", async () => {
   api.getAppConfigDirOverride.mockResolvedValue("  /override/atlas  ");
   const { result } = mount();
   await waitFor(() => expect(result.current.isLoading).toBe(false));
   expect(result.current.resolvedDirs).toEqual({
     appConfig: "/override/atlas",
-    codex: "/remote/codex",
   });
-  expect(api.getConfigDir).toHaveBeenCalledTimes(1);
-  expect(api.getConfigDir).toHaveBeenCalledWith("codex");
+  expect(api.getAppConfigDirOverride).toHaveBeenCalledTimes(1);
 });
-it("changes the saved read-path preference without writing Codex configuration", async () => {
-  const { result, onUpdateSettings } = mount();
+it("browses and resets the Atlas data directory", async () => {
+  const { result } = mount();
   await waitFor(() => expect(result.current.isLoading).toBe(false));
-  await act(() => result.current.browseDirectory("codex"));
-  expect(api.selectConfigDirectory).toHaveBeenCalledWith("/remote/codex");
-  expect(onUpdateSettings).toHaveBeenCalledWith({
-    codexConfigDir: "/picked/codex",
-  });
-  expect(result.current.resolvedDirs.codex).toBe("/picked/codex");
-  await act(() => result.current.resetDirectory("codex"));
-  expect(onUpdateSettings).toHaveBeenLastCalledWith({
-    codexConfigDir: undefined,
-  });
-  expect(result.current.resolvedDirs.codex).toBe("/home/mock/.codex");
+  await act(() => result.current.browseAppConfigDir());
+  expect(api.selectConfigDirectory).toHaveBeenCalledWith(
+    "/home/mock/.cc-switch",
+  );
+  expect(result.current.appConfigDir).toBe("/picked/atlas");
+  expect(result.current.resolvedDirs.appConfig).toBe("/picked/atlas");
+  await act(() => result.current.resetAppConfigDir());
+  expect(result.current.appConfigDir).toBeUndefined();
+  expect(result.current.resolvedDirs.appConfig).toBe("/home/mock/.cc-switch");
 });
 it("leaves the preference alone when the picker is cancelled", async () => {
+  api.getAppConfigDirOverride.mockResolvedValue("/existing/atlas");
   api.selectConfigDirectory.mockResolvedValue(null);
-  const { result, onUpdateSettings } = mount();
+  const { result } = mount();
   await waitFor(() => expect(result.current.isLoading).toBe(false));
-  await act(() => result.current.browseDirectory("codex"));
-  expect(onUpdateSettings).not.toHaveBeenCalled();
+  await act(() => result.current.browseAppConfigDir());
+  expect(result.current.appConfigDir).toBe("/existing/atlas");
+  expect(result.current.resolvedDirs.appConfig).toBe("/existing/atlas");
 });
-it("resets Atlas data and Codex read directories independently", async () => {
+it("restores the initial Atlas data directory when settings are reset", async () => {
+  api.getAppConfigDirOverride.mockResolvedValue("/existing/atlas");
   const { result } = mount();
   await waitFor(() => expect(result.current.isLoading).toBe(false));
   act(() => result.current.updateAppConfigDir(" /new/atlas "));
   expect(result.current.resolvedDirs.appConfig).toBe("/new/atlas");
   await act(() => result.current.resetAppConfigDir());
   expect(result.current.resolvedDirs.appConfig).toBe("/home/mock/.cc-switch");
-  act(() => result.current.resetAllDirectories({ codex: "/new/codex" }));
-  expect(result.current.resolvedDirs.codex).toBe("/new/codex");
+  act(() => result.current.resetAllDirectories());
+  expect(result.current.appConfigDir).toBe("/existing/atlas");
+  expect(result.current.resolvedDirs.appConfig).toBe("/existing/atlas");
 });
