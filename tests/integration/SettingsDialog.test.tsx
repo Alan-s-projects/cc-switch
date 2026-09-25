@@ -69,7 +69,7 @@ vi.mock("@/components/settings/ThemeSettings", () => ({
 
 vi.mock("@/components/settings/WindowSettings", () => ({
   WindowSettings: ({ onChange }: any) => (
-    <button onClick={() => onChange({ minimizeToTrayOnClose: false })}>
+    <button onClick={() => onChange({ launchOnStartup: false })}>
       window-settings
     </button>
   ),

@@ -1,9 +1,13 @@
-import { Github, Pencil } from "lucide-react";
+import { useMutation } from "@tanstack/react-query";
+import { Activity, Github, Loader2, Pencil } from "lucide-react";
+import { toast } from "sonner";
 import type { Provider } from "@/types";
 import { useCopilotAuth } from "./forms/hooks/useCopilotAuth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import CopilotQuotaFooter from "@/components/CopilotQuotaFooter";
+import { streamCheckProvider } from "@/lib/api/connectivity-check";
+import { extractErrorMessage } from "@/utils/errorUtils";
 
 export function CopilotCard({
   provider,
@@ -13,6 +17,43 @@ export function CopilotCard({
   onEdit: () => void;
 }) {
   const auth = useCopilotAuth();
+  const healthCheck = useMutation({
+    mutationFn: () => streamCheckProvider("codex", provider.id),
+    onSuccess: (result) => {
+      const details = [
+        result.responseTimeMs != null ? `${result.responseTimeMs} ms` : "",
+        result.httpStatus != null ? `HTTP ${result.httpStatus}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const options = {
+        description:
+          result.status === "failed"
+            ? result.message
+            : [
+                details,
+                "Connectivity only; sign-in and model requests are not tested.",
+              ]
+                .filter(Boolean)
+                .join(". "),
+        duration: 8000,
+        closeButton: true,
+      };
+      if (result.status === "failed") {
+        toast.error("GitHub Copilot is unreachable", options);
+      } else if (result.status === "degraded") {
+        toast.warning("GitHub Copilot is reachable but slow", options);
+      } else {
+        toast.success("GitHub Copilot is reachable", options);
+      }
+    },
+    onError: (error) =>
+      toast.error("Health check failed", {
+        description: extractErrorMessage(error) || String(error),
+        duration: 8000,
+        closeButton: true,
+      }),
+  });
   const accountId =
     provider.meta?.authBinding?.accountId ??
     provider.meta?.githubAccountId ??
@@ -47,10 +88,28 @@ export function CopilotCard({
             </p>
           </div>
         </div>
-        <Button onClick={onEdit}>
-          <Pencil className="mr-2 h-4 w-4" />
-          Edit
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            title="Health check"
+            aria-label="Health check"
+            aria-busy={healthCheck.isPending}
+            disabled={healthCheck.isPending}
+            onClick={() => healthCheck.mutate()}
+          >
+            {healthCheck.isPending ? (
+              <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
+            ) : (
+              <Activity aria-hidden className="h-4 w-4" />
+            )}
+          </Button>
+          <Button onClick={onEdit}>
+            <Pencil className="mr-2 h-4 w-4" />
+            Edit
+          </Button>
+        </div>
       </div>
       {account && <CopilotQuotaFooter meta={provider.meta} />}
     </section>

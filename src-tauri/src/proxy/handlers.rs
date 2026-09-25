@@ -1918,8 +1918,7 @@ async fn log_usage(
 
     let logger = UsageLogger::new(&state.db);
 
-    let (multiplier, pricing_model_source) =
-        logger.resolve_pricing_config(provider_id, app_type).await;
+    let (multiplier, pricing_model_source) = logger.resolve_pricing_config(app_type).await;
     let pricing_model = if pricing_model_source == PRICING_SOURCE_REQUEST {
         outbound_model
     } else {

@@ -34,18 +34,8 @@ function props(overrides: Partial<Props> = {}): Props {
     selectedGitHubAccountId: "account-a",
     copilotApiFormat: "auto",
     onCopilotApiFormatChange: vi.fn(),
-    codexChatReasoning: {},
-    onCodexChatReasoningChange: vi.fn(),
-    promptCacheRouting: "auto",
-    onPromptCacheRoutingChange: vi.fn(),
     catalogModels: [],
     onCatalogModelsChange: vi.fn(),
-    customUserAgent: "",
-    onCustomUserAgentChange: vi.fn(),
-    localProxyHeadersOverride: "",
-    onLocalProxyHeadersOverrideChange: vi.fn(),
-    localProxyBodyOverride: "",
-    onLocalProxyBodyOverrideChange: vi.fn(),
     ...overrides,
   };
 }

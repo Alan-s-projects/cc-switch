@@ -23,7 +23,6 @@ function mount() {
     useDirectorySettings({
       settings: {
         showInTray: true,
-        minimizeToTrayOnClose: true,
         codexConfigDir: undefined,
         language: "en",
       },

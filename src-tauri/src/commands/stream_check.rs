@@ -11,6 +11,7 @@ use crate::services::stream_check::{
 };
 use crate::store::AppState;
 use std::collections::HashSet;
+use std::time::Duration;
 use tauri::State;
 
 /// 连通性检查（单个供应商）
@@ -32,7 +33,12 @@ pub async fn stream_check_provider(
 
     // Copilot 端点是动态的（随 OAuth token 解析），需预先取出 host 再探测；
     // 其余供应商传 None，由服务层从 settings_config 提取 base_url。无需鉴权。
-    let base_url_override = resolve_copilot_base_url_override(provider, &copilot_state).await?;
+    let base_url_override = resolve_copilot_base_url_override(
+        provider,
+        &copilot_state,
+        Duration::from_secs(config.timeout_secs),
+    )
+    .await?;
     let result =
         StreamCheckService::check_with_retry(&app_type, provider, &config, base_url_override)
             .await?;
@@ -87,8 +93,12 @@ pub async fn stream_check_all_providers(
             }
         }
 
-        let base_url_override =
-            resolve_copilot_base_url_override(&provider, &copilot_state).await?;
+        let base_url_override = resolve_copilot_base_url_override(
+            &provider,
+            &copilot_state,
+            Duration::from_secs(config.timeout_secs),
+        )
+        .await?;
         let result =
             StreamCheckService::check_with_retry(&app_type, &provider, &config, base_url_override)
                 .await
@@ -133,7 +143,8 @@ pub fn save_stream_check_config(
 /// `is_full_url` 的供应商已是完整地址，无需解析。
 async fn resolve_copilot_base_url_override(
     provider: &crate::provider::Provider,
-    copilot_state: &State<'_, CopilotAuthState>,
+    copilot_state: &CopilotAuthState,
+    timeout: Duration,
 ) -> Result<Option<String>, AppError> {
     let is_copilot = is_copilot_provider(provider);
     let is_full_url = provider
@@ -146,18 +157,23 @@ async fn resolve_copilot_base_url_override(
         return Ok(None);
     }
 
-    let auth_manager = copilot_state.0.read().await;
-    let account_id = provider
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.managed_account_id_for("github_copilot"));
+    // Discovery uses the shared inference client, so bound both lock contention
+    // and endpoint lookup without changing that client's long request timeout.
+    tokio::time::timeout(timeout, async {
+        let auth_manager = copilot_state.0.read().await;
+        let account_id = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.managed_account_id_for("github_copilot"));
 
-    let endpoint = match account_id.as_deref() {
-        Some(id) => auth_manager.get_api_endpoint(id).await,
-        None => auth_manager.get_default_api_endpoint().await,
-    };
-
-    Ok(Some(endpoint))
+        match account_id.as_deref() {
+            Some(id) => auth_manager.get_api_endpoint(id).await,
+            None => auth_manager.get_default_api_endpoint().await,
+        }
+    })
+    .await
+    .map(Some)
+    .map_err(|_| AppError::Message("Copilot endpoint discovery timed out".into()))
 }
 
 fn is_copilot_provider(provider: &crate::provider::Provider) -> bool {
@@ -176,9 +192,12 @@ fn is_copilot_provider(provider: &crate::provider::Provider) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_copilot_provider;
+    use super::{is_copilot_provider, resolve_copilot_base_url_override, CopilotAuthState};
     use crate::provider::{Provider, ProviderMeta};
+    use crate::proxy::providers::copilot_auth::CopilotAuthManager;
     use serde_json::json;
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::RwLock;
 
     #[test]
     fn copilot_provider_detection_accepts_provider_type_or_base_url() {
@@ -222,9 +241,47 @@ mod tests {
         assert!(is_copilot_provider(&url_provider));
     }
 
-    #[test]
-    fn copilot_full_url_metadata_is_available_for_override_guard() {
-        let provider = Provider {
+    #[tokio::test]
+    async fn copilot_endpoint_discovery_bounds_lock_wait_and_recovers_without_network() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = CopilotAuthState(Arc::new(RwLock::new(CopilotAuthManager::new(
+            directory.path().to_path_buf(),
+        ))));
+        let mut provider = Provider::with_id("p1".into(), "Copilot".into(), json!({}), None);
+        provider.meta = Some(ProviderMeta {
+            provider_type: Some("github_copilot".into()),
+            ..Default::default()
+        });
+
+        let lock = state.0.write().await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            resolve_copilot_base_url_override(&provider, &state, Duration::from_millis(20)),
+        )
+        .await
+        .expect("discovery must respect its budget while waiting for the auth-manager lock");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Copilot endpoint discovery timed out"
+        );
+
+        drop(lock);
+        // An empty isolated account manager returns the default URL without HTTP.
+        let endpoint =
+            resolve_copilot_base_url_override(&provider, &state, Duration::from_secs(1))
+                .await
+                .unwrap();
+        assert_eq!(endpoint.as_deref(), Some("https://api.githubcopilot.com"));
+    }
+
+    #[tokio::test]
+    async fn full_url_and_non_copilot_providers_skip_endpoint_discovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = CopilotAuthState(Arc::new(RwLock::new(CopilotAuthManager::new(
+            directory.path().to_path_buf(),
+        ))));
+        let _lock = state.0.write().await;
+        let mut provider = Provider {
             id: "p3".to_string(),
             name: "relay".to_string(),
             settings_config: json!({}),
@@ -243,10 +300,20 @@ mod tests {
             in_failover_queue: false,
         };
 
-        assert!(is_copilot_provider(&provider));
-        assert_eq!(
-            provider.meta.as_ref().and_then(|meta| meta.is_full_url),
-            Some(true)
-        );
+        tokio::time::timeout(Duration::from_secs(1), async {
+            let endpoint =
+                resolve_copilot_base_url_override(&provider, &state, Duration::from_millis(20))
+                    .await
+                    .unwrap();
+            assert!(endpoint.is_none());
+            provider.meta = None;
+            let endpoint =
+                resolve_copilot_base_url_override(&provider, &state, Duration::from_millis(20))
+                    .await
+                    .unwrap();
+            assert!(endpoint.is_none());
+        })
+        .await
+        .expect("excluded providers must not wait for the auth-manager lock");
     }
 }

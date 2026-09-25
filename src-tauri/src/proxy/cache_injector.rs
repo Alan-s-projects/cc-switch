@@ -1,16 +1,9 @@
-//! Cache 断点注入器
-//!
-//! 在请求转发前自动注入 cache_control 标记，启用 Bedrock Prompt Caching
+//! Automatic Anthropic prompt-cache breakpoints for Codex protocol conversion.
 
-use super::types::OptimizerConfig;
 use serde_json::{json, Value};
 
 /// 在请求体关键位置注入 cache_control 断点
-pub fn inject(body: &mut Value, config: &OptimizerConfig) {
-    if !config.enabled || !config.cache_injection {
-        return;
-    }
-
+pub fn inject(body: &mut Value) {
     let existing = count_existing(body);
 
     if existing > 4 {
@@ -172,18 +165,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn default_config() -> OptimizerConfig {
-        OptimizerConfig {
-            enabled: true,
-            thinking_optimizer: true,
-            cache_injection: true,
-        }
-    }
-
     #[test]
     fn test_empty_body_no_injection() {
         let mut body = json!({"model": "test", "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]});
-        inject(&mut body, &default_config());
+        inject(&mut body);
         assert!(body["messages"][0]["content"][0]
             .get("cache_control")
             .is_some());
@@ -203,7 +188,7 @@ mod tests {
             ]
         });
 
-        inject(&mut body, &default_config());
+        inject(&mut body);
 
         // tools last element
         assert!(body["tools"][1].get("cache_control").is_some());
@@ -230,7 +215,7 @@ mod tests {
             ]
         });
 
-        inject(&mut body, &default_config());
+        inject(&mut body);
         assert_eq!(count_existing(&body), 4);
         assert!(body["messages"][0]["content"][0]
             .get("cache_control")
@@ -258,7 +243,7 @@ mod tests {
             ]
         });
 
-        inject(&mut body, &default_config());
+        inject(&mut body);
 
         // Existing markers are caller-owned; only newly injected markers are fixed to 5m.
         assert_eq!(body["tools"][0]["cache_control"]["ttl"], "1h");
@@ -284,7 +269,7 @@ mod tests {
             ]
         });
 
-        inject(&mut body, &default_config());
+        inject(&mut body);
 
         // budget = 4 - 2 = 2, inject system + msgs
         assert!(body["system"][0].get("cache_control").is_some());
@@ -311,7 +296,7 @@ mod tests {
             ]}]
         });
 
-        inject(&mut body, &default_config());
+        inject(&mut body);
 
         assert_eq!(count_existing(&body), 5);
         assert!(body["messages"][0]["content"][1]
@@ -327,7 +312,7 @@ mod tests {
             "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
         });
 
-        inject(&mut body, &default_config());
+        inject(&mut body);
 
         assert!(body["system"].is_array());
         let sys = body["system"].as_array().unwrap();
@@ -345,48 +330,11 @@ mod tests {
             "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
         });
 
-        inject(&mut body, &default_config());
+        inject(&mut body);
 
         let cc = &body["tools"][0]["cache_control"];
         assert_eq!(cc["type"], "ephemeral");
         assert!(cc.get("ttl").is_none() || cc["ttl"].is_null());
-    }
-
-    #[test]
-    fn test_disabled_no_change() {
-        let config = OptimizerConfig {
-            cache_injection: false,
-            ..default_config()
-        };
-        let mut body = json!({
-            "model": "test",
-            "tools": [{"name": "tool1"}],
-            "system": [{"type": "text", "text": "sys"}],
-            "messages": [{"role": "assistant", "content": [{"type": "text", "text": "ok"}]}]
-        });
-        let original = body.clone();
-
-        inject(&mut body, &config);
-
-        assert_eq!(body, original);
-    }
-
-    #[test]
-    fn test_optimizer_disabled_no_change() {
-        let config = OptimizerConfig {
-            enabled: false,
-            cache_injection: true,
-            ..default_config()
-        };
-        let mut body = json!({
-            "model":"test",
-            "tools":[{"name":"tool1"}],
-            "messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]
-        });
-        let original = body.clone();
-
-        inject(&mut body, &config);
-        assert_eq!(body, original);
     }
 
     #[test]
@@ -402,7 +350,7 @@ mod tests {
             ]
         });
 
-        inject(&mut body, &default_config());
+        inject(&mut body);
 
         // Should inject on "text" block (last non-thinking), not on thinking/redacted_thinking
         assert!(body["messages"][0]["content"][1]
@@ -425,7 +373,7 @@ mod tests {
             ]
         });
 
-        inject(&mut body, &default_config());
+        inject(&mut body);
 
         assert!(body["messages"][0]["content"][0]
             .get("cache_control")

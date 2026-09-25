@@ -55,6 +55,43 @@ fn codex_effort_to_anthropic(effort: &str) -> Option<&'static str> {
     }
 }
 
+fn uses_adaptive_thinking(model: &str) -> bool {
+    let normalized = normalize_model_name(model);
+    [
+        "fable-5",
+        "mythos-5",
+        "mythos-preview",
+        "sonnet-5",
+        "opus-5",
+        "opus-4-8",
+        "opus-4-7",
+        "opus-4-6",
+        "sonnet-4-6",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+/// Models where omitting `thinking` still leaves adaptive thinking enabled.
+fn adaptive_thinking_is_default(model: &str) -> bool {
+    let normalized = normalize_model_name(model);
+    ["fable-5", "mythos-5", "mythos-preview", "sonnet-5"]
+        .iter()
+        .any(|needle| normalized.contains(needle))
+}
+
+/// Models that reject `thinking: {"type":"disabled"}`.
+fn thinking_cannot_be_disabled(model: &str) -> bool {
+    let normalized = normalize_model_name(model);
+    ["fable-5", "mythos-5"]
+        .iter()
+        .any(|needle| normalized.contains(needle))
+}
+
+fn normalize_model_name(model: &str) -> String {
+    model.trim().to_ascii_lowercase().replace(['.', '_'], "-")
+}
+
 fn reasoning_explicitly_disabled(effort: Option<&str>) -> bool {
     matches!(
         effort
@@ -298,10 +335,9 @@ pub fn responses_request_to_anthropic(
     let reasoning_effort = body
         .pointer("/reasoning/effort")
         .and_then(|value| value.as_str());
-    let adaptive_model = crate::proxy::thinking_optimizer::uses_adaptive_thinking(model);
-    let adaptive_by_default = crate::proxy::thinking_optimizer::adaptive_thinking_is_default(model);
-    let cannot_disable_thinking =
-        crate::proxy::thinking_optimizer::thinking_cannot_be_disabled(model);
+    let adaptive_model = uses_adaptive_thinking(model);
+    let adaptive_by_default = adaptive_thinking_is_default(model);
+    let cannot_disable_thinking = thinking_cannot_be_disabled(model);
 
     // max_output_tokens → max_tokens (required)
     let max_tokens = body
@@ -2135,6 +2171,22 @@ mod tests {
         let result = responses_request_to_anthropic(input, 4096).unwrap();
         assert_eq!(result["thinking"]["type"], "enabled");
         assert_eq!(result["thinking"]["budget_tokens"], 24576);
+    }
+
+    #[test]
+    fn current_generation_models_use_adaptive_thinking() {
+        for model in [
+            "claude-sonnet-5",
+            "anthropic/claude-fable-5",
+            "claude-mythos-5",
+            "claude-opus-5",
+            "claude-opus-4.8",
+        ] {
+            assert!(uses_adaptive_thinking(model), "model={model}");
+        }
+        assert!(adaptive_thinking_is_default("claude-sonnet-5"));
+        assert!(thinking_cannot_be_disabled("claude-fable-5"));
+        assert!(!thinking_cannot_be_disabled("claude-sonnet-5"));
     }
 
     #[test]

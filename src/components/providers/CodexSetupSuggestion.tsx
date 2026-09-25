@@ -5,6 +5,7 @@ import { Copy, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { copyText } from "@/lib/clipboard";
+import { ConfigDiff, type ConfigDiffLine } from "./ConfigDiff";
 
 interface SetupSuggestion {
   configPath: string;
@@ -12,19 +13,22 @@ interface SetupSuggestion {
   endpoint: string;
   copilotConfig: string;
   copilotDiff: string;
+  copilotLines: ConfigDiffLine[];
   openaiConfig: string;
   openaiDiff: string;
+  openaiLines: ConfigDiffLine[];
 }
 
 export function CodexSetupSuggestion() {
   const [target, setTarget] = useState<"copilot" | "openai">("copilot");
-  const [view, setView] = useState<"diff" | "config">("diff");
+  const [view, setView] = useState<"split" | "inline" | "config">("split");
   const { data, error, isFetching, refetch } = useQuery({
     queryKey: ["codex-setup-suggestion"],
     queryFn: () => invoke<SetupSuggestion>("get_codex_setup_suggestion"),
     staleTime: 0,
   });
   const diff = target === "copilot" ? data?.copilotDiff : data?.openaiDiff;
+  const lines = target === "copilot" ? data?.copilotLines : data?.openaiLines;
   const proposed =
     target === "copilot" ? data?.copilotConfig : data?.openaiConfig;
   const copy = async (text: string) => {
@@ -76,51 +80,43 @@ export function CodexSetupSuggestion() {
               : "Use Codex's built-in OpenAI provider and model catalog. After applying, sign in and choose a model in Codex if needed. Your authentication files remain untouched."}
           </p>
           <div className="overflow-hidden rounded-xl border">
-            <div className="flex gap-2 border-b bg-muted/40 p-2">
-              <Button
-                size="sm"
-                variant={view === "diff" ? "secondary" : "ghost"}
-                aria-pressed={view === "diff"}
-                onClick={() => setView("diff")}
-              >
-                Git-style diff
-              </Button>
-              <Button
-                size="sm"
-                variant={view === "config" ? "secondary" : "ghost"}
-                aria-pressed={view === "config"}
-                onClick={() => setView("config")}
-              >
-                Proposed TOML
-              </Button>
-            </div>
-            {view === "diff" ? (
-              diff ? (
-                <pre
-                  aria-label="Configuration diff"
-                  className="overflow-auto py-3 text-xs leading-6"
+            <div
+              role="group"
+              aria-label="Comparison view"
+              className="flex flex-wrap gap-2 border-b bg-muted/40 p-2"
+            >
+              {(
+                [
+                  ["split", "Side by side"],
+                  ["inline", "Inline"],
+                  ["config", "Proposed TOML"],
+                ] as const
+              ).map(([mode, label]) => (
+                <Button
+                  key={mode}
+                  size="sm"
+                  variant={view === mode ? "outline" : "ghost"}
+                  className={
+                    view === mode
+                      ? "bg-background text-foreground shadow-sm"
+                      : ""
+                  }
+                  aria-pressed={view === mode}
+                  onClick={() => setView(mode)}
                 >
-                  {diff.split("\n").map((line, index) => (
-                    <div
-                      key={index}
-                      className={`min-w-max px-4 ${line.startsWith("+++") || line.startsWith("---") ? "text-muted-foreground" : line.startsWith("+") ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : line.startsWith("-") ? "bg-red-500/10 text-red-700 dark:text-red-300" : line.startsWith("@@") ? "bg-blue-500/10 text-blue-600 dark:text-blue-300" : ""}`}
-                    >
-                      {line || " "}
-                    </div>
-                  ))}
-                </pre>
-              ) : (
-                <p className="p-4 text-sm text-muted-foreground">
-                  No changes needed in this file.
-                </p>
-              )
-            ) : (
+                  {label}
+                </Button>
+              ))}
+            </div>
+            {view === "config" ? (
               <pre
                 aria-label="Proposed TOML"
                 className="overflow-auto p-4 text-xs leading-6"
               >
                 {proposed}
               </pre>
+            ) : (
+              <ConfigDiff lines={lines ?? []} layout={view} />
             )}
           </div>
           <div className="flex flex-wrap gap-2">

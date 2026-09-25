@@ -10,10 +10,6 @@ import type {
   CodexCopilotApiFormat,
 } from "@/types";
 import { CodexFormFields } from "./CodexFormFields";
-import {
-  ProviderAdvancedConfig,
-  type PricingModelSourceOption,
-} from "./ProviderAdvancedConfig";
 import { useCopilotAuth } from "./hooks/useCopilotAuth";
 import { mapCodexCatalogModelForForm } from "@/utils/codexModelCatalog";
 
@@ -116,40 +112,6 @@ export function ProviderForm({
     const value = settings.modelCatalog as { models?: unknown[] } | undefined;
     return (value?.models ?? []).map(mapCodexCatalogModelForForm);
   });
-  const [reasoning, setReasoning] = useState(
-    initialMeta?.codexChatReasoning ?? {},
-  );
-  const [pricing, setPricing] = useState<{
-    enabled: boolean;
-    costMultiplier?: string;
-    pricingModelSource: PricingModelSourceOption;
-  }>({
-    enabled:
-      initialMeta?.costMultiplier !== undefined ||
-      initialMeta?.pricingModelSource !== undefined,
-    costMultiplier: initialMeta?.costMultiplier,
-    pricingModelSource:
-      initialMeta?.pricingModelSource === "request" ||
-      initialMeta?.pricingModelSource === "response"
-        ? initialMeta.pricingModelSource
-        : "inherit",
-  });
-  const [cacheRouting, setCacheRouting] = useState(
-    initialMeta?.promptCacheRouting ?? "auto",
-  );
-  const [userAgent, setUserAgent] = useState(
-    initialMeta?.customUserAgent ?? "",
-  );
-  const [headers, setHeaders] = useState(
-    initialMeta?.localProxyRequestOverrides?.headers
-      ? JSON.stringify(initialMeta.localProxyRequestOverrides.headers, null, 2)
-      : "",
-  );
-  const [body, setBody] = useState(
-    initialMeta?.localProxyRequestOverrides?.body
-      ? JSON.stringify(initialMeta.localProxyRequestOverrides.body, null, 2)
-      : "",
-  );
   useEffect(() => {
     onSubmittingChange?.(saving);
   }, [saving, onSubmittingChange]);
@@ -161,15 +123,6 @@ export function ProviderForm({
     event.preventDefault();
     if (!hasAnyAccount) {
       toast.error("Sign in to GitHub Copilot first.");
-      return;
-    }
-    if (
-      pricing.enabled &&
-      pricing.costMultiplier?.trim() &&
-      (!Number.isFinite(Number(pricing.costMultiplier)) ||
-        Number(pricing.costMultiplier) < 0)
-    ) {
-      toast.error(t("settings.globalProxy.defaultCostMultiplierInvalid"));
       return;
     }
     setSaving(true);
@@ -185,18 +138,6 @@ export function ProviderForm({
           source: "managed_account",
           authProvider: "github_copilot",
           accountId: accountId ?? undefined,
-        },
-        codexChatReasoning: reasoning,
-        promptCacheRouting: cacheRouting,
-        customUserAgent: userAgent || undefined,
-        costMultiplier: pricing.enabled ? pricing.costMultiplier : undefined,
-        pricingModelSource:
-          pricing.enabled && pricing.pricingModelSource !== "inherit"
-            ? pricing.pricingModelSource
-            : undefined,
-        localProxyRequestOverrides: {
-          headers: headers.trim() ? JSON.parse(headers) : undefined,
-          body: body.trim() ? JSON.parse(body) : undefined,
         },
       };
       await onSubmit({
@@ -226,22 +167,8 @@ export function ProviderForm({
         onManageAuthAccounts={onManageAuthAccounts}
         copilotApiFormat={format}
         onCopilotApiFormatChange={setFormat}
-        codexChatReasoning={reasoning}
-        onCodexChatReasoningChange={setReasoning}
-        promptCacheRouting={cacheRouting}
-        onPromptCacheRoutingChange={setCacheRouting}
         catalogModels={catalog}
         onCatalogModelsChange={setCatalog}
-        customUserAgent={userAgent}
-        onCustomUserAgentChange={setUserAgent}
-        localProxyHeadersOverride={headers}
-        onLocalProxyHeadersOverrideChange={setHeaders}
-        localProxyBodyOverride={body}
-        onLocalProxyBodyOverrideChange={setBody}
-      />
-      <ProviderAdvancedConfig
-        pricingConfig={pricing}
-        onPricingConfigChange={setPricing}
       />
       {showButtons && (
         <div className="flex justify-end gap-2">

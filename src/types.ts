@@ -63,52 +63,6 @@ export interface ClaudeDesktopModelRoute {
   supports1m?: boolean;
 }
 
-export type CodexChatThinkingParam =
-  | "none"
-  | "thinking"
-  | "enable_thinking"
-  | "reasoning_split";
-
-export type CodexChatEffortParam =
-  | "none"
-  | "reasoning_effort"
-  // OpenRouter 原生归一化对象 reasoning:{effort}（区别于顶层 OpenAI 别名 reasoning_effort）
-  | "reasoning.effort";
-
-export type CodexChatEffortValueMode =
-  | "passthrough"
-  | "low_high"
-  | "deepseek"
-  // OpenRouter effort 枚举 xhigh|high|medium|low|minimal（无 max，max 钳到 xhigh）
-  | "openrouter"
-  // OpenCode Zen 网关：合法档位逐模型，见 modelCatalog 各条目 reasoningLevels
-  // （镜像 models.dev）；代理转换层按请求模型查表钳制，无表不发 effort 字段
-  | "zen";
-
-export type CodexChatReasoningOutputFormat =
-  | "auto"
-  | "reasoning_content"
-  | "reasoning"
-  | "reasoning_details"
-  | "think_tags";
-
-export interface CodexChatReasoning {
-  supportsThinking?: boolean;
-  supportsEffort?: boolean;
-  thinkingParam?: CodexChatThinkingParam;
-  effortParam?: CodexChatEffortParam;
-  effortValueMode?: CodexChatEffortValueMode;
-  // 声明性字段：标注上游 reasoning 回传位置。当前提取靠穷举字段，未读取此值（think_tags 尚未接线）。
-  outputFormat?: CodexChatReasoningOutputFormat;
-}
-
-export type PromptCacheRoutingMode = "auto" | "enabled" | "disabled";
-
-export interface LocalProxyRequestOverrides {
-  headers?: Record<string, string>;
-  body?: Record<string, unknown>;
-}
-
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
   // 自定义端点：以 URL 为键，值为端点信息
@@ -126,10 +80,6 @@ export interface ProviderMeta {
   isPartner?: boolean;
   // 合作伙伴促销 key（用于后端识别 PackyCode 等）
   partnerPromotionKey?: string;
-  // 供应商成本倍率
-  costMultiplier?: string;
-  // 供应商计费模式来源
-  pricingModelSource?: string;
   // API 格式（Claude / Codex 供应商使用）
   // - "anthropic": 原生 Anthropic Messages API 格式，直接透传
   // - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
@@ -150,13 +100,8 @@ export interface ProviderMeta {
   isFullUrl?: boolean;
   // Prompt cache key for OpenAI Responses-compatible endpoints (improves cache hit rate)
   promptCacheKey?: string;
-  // Session-based prompt-cache routing for Codex Responses -> Chat conversions.
-  // auto enables only for known-compatible upstreams; enabled/disabled are user overrides.
-  promptCacheRouting?: PromptCacheRoutingMode;
   // Codex OAuth FAST mode: injects service_tier="priority" on ChatGPT Codex requests
   codexFastMode?: boolean;
-  // Codex Responses -> Chat Completions reasoning capability metadata
-  codexChatReasoning?: CodexChatReasoning;
   // Codex → Anthropic path: emulate the Claude Code client (disabled by default; only an explicit true enables it)
   impersonateClaudeCode?: boolean;
   // Codex → Anthropic path: override the Anthropic max_tokens (output ceiling).
@@ -165,10 +110,6 @@ export interface ProviderMeta {
   // long/thinking-heavy responses. When set (>0) it takes precedence over the
   // request value and the default.
   maxOutputTokens?: number;
-  // Custom User-Agent for local proxy routing. Only applied by the local proxy.
-  customUserAgent?: string;
-  // Local proxy request overrides. Only applied by the local proxy after route transforms.
-  localProxyRequestOverrides?: LocalProxyRequestOverrides;
   // Whether this provider is currently projected into an additive app's live config.
   liveConfigManaged?: boolean;
   // 供应商类型（用于识别 Copilot 等特殊供应商）
@@ -250,8 +191,6 @@ export interface Settings {
   // ===== 设备级 UI 设置 =====
   // 是否在系统托盘（macOS 菜单栏）显示图标
   showInTray: boolean;
-  // 点击关闭按钮时是否最小化到托盘而不是关闭应用
-  minimizeToTrayOnClose: boolean;
   // 是否开机自启
   launchOnStartup?: boolean;
   // 是否启用主页面本地代理功能（默认关闭）

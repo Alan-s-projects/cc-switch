@@ -1,19 +1,17 @@
-CC Switch Atlas 4.1.0 is a Windows x64 bridge from Codex to GitHub Copilot.
+Atlas 4.1.1 simplifies Copilot setup and makes the read-only Codex configuration comparison easier to review.
 
-- One default Copilot entry with **Needs setup**, sign-in, model controls and **Edit**.
-- Read-only, Git-style TOML previews for migrating another proxy to Atlas or returning to OpenAI sign-in. Preferences and comments are preserved.
-- Live capability import fixes Astra parallel tools and Luna image support, and respects Copilot's actual input limits and reasoning choices. Model discovery uses the Atlas-owned catalog without depending on Codex TOML.
-- Fixes premature compaction for Astra and Luna by telling Codex that Copilot already counts replayed reasoning. Usage values and the user's compaction settings stay intact.
-- Retains streaming message-ID compatibility, usage charts, cache statistics, Copilot quota, outbound networking and local app-data backups.
-- Imported conversation totals no longer inflate proxy usage; historical database rows are preserved.
-- Removes other clients/providers, configuration takeover, duplicate/delete/usage-script actions, failover, cloud sync, CLI tools, and MCP/skill/instruction/session management. English-only; Windows x64 MSI only.
+- Removes custom User-Agent/presets, manual header/body overrides, and the section's manual Chat cache/thinking switches.
+- Removes the Bedrock Request Optimizer, its thinking/cache controls, backend settings, and request-processing code.
+- Removes per-provider pricing controls and overrides. New usage uses the global Codex pricing settings; historical usage records are preserved.
+- Deletes the supporting frontend and backend code and obsolete tests. Previously saved override fields are ignored.
+- Shows current TOML on the left and proposed TOML on the right by default, with aligned changes and line numbers. Switch to an inline comparison or the complete proposed TOML.
+- Uses the same comparison for Copilot setup and restoring OpenAI sign-in. Copy and refresh remain available; configuration files stay read-only.
+- Restores the compact green on/off switch in the header for starting and stopping the local proxy.
+- Restores the heartbeat health-check button beside Edit on the Copilot card, with reachability, latency, and HTTP status results. Copilot endpoint discovery respects the configured check timeout.
+- Displays **CC Switch Atlas** in the application header.
+- Always minimizes the main window to the system tray when closed, keeping the proxy running. Removes the close-behavior setting; use the tray menu's Quit action to exit.
+- Retains protocol selection, model catalog and per-model reasoning controls, automatic Copilot compatibility, and usage statistics.
 
-Download **CC-Switch-atlas-4.1.0-Windows-x64.msi** and its adjacent SHA256 file.
-Exit the previous CC Switch app before installing. This unsigned per-user installer
-also replaces the provisional 4.1.0 build. Atlas does not modify Codex TOML, auth,
-instructions, skills or sessions. Review **Codex connection**, apply its preview
-manually and reload Codex to use the Atlas-owned model catalog.
+Download **CC-Switch-atlas-4.1.1-Windows-x64.msi** and its SHA256 file. Close CC Switch before installing. This is an unsigned Windows x64 installer and upgrades Atlas 4.1.0. No Codex TOML changes are required for this update.
 
-Validation: TypeScript checks, all 201 frontend tests and 1,640 Rust tests passed.
-Four optional platform/performance checks remain skipped. Live Copilot probes verified
-Astra parallel tool calls, Luna image input, and reasoning-token accounting for both models.
+Validation: TypeScript checks, all 196 frontend tests, all 1,622 Rust tests, and the production renderer build passed. Four optional platform/performance checks remain skipped. Coverage includes complete file comparisons, read-only copy/refresh, proxy controls, legacy settings, exit handling, global pricing, health checks and timeouts, and automatic Copilot protocol compatibility. The Windows pipeline also builds the MSI before release.

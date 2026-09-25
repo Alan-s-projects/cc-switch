@@ -68,7 +68,6 @@ export function useSettingsForm(): UseSettingsFormResult {
     const normalized: SettingsFormState = {
       ...data,
       showInTray: data.showInTray ?? true,
-      minimizeToTrayOnClose: data.minimizeToTrayOnClose ?? true,
       preserveCodexOfficialAuthOnSwitch:
         data.preserveCodexOfficialAuthOnSwitch ?? false,
       unifyCodexSessionHistory: data.unifyCodexSessionHistory ?? false,
@@ -94,7 +93,6 @@ export function useSettingsForm(): UseSettingsFormResult {
           prev ??
           ({
             showInTray: true,
-            minimizeToTrayOnClose: true,
             preserveCodexOfficialAuthOnSwitch: false,
             unifyCodexSessionHistory: false,
             language: readPersistedLanguage(),
@@ -128,7 +126,6 @@ export function useSettingsForm(): UseSettingsFormResult {
       const normalized: SettingsFormState = {
         ...serverData,
         showInTray: serverData.showInTray ?? true,
-        minimizeToTrayOnClose: serverData.minimizeToTrayOnClose ?? true,
         preserveCodexOfficialAuthOnSwitch:
           serverData.preserveCodexOfficialAuthOnSwitch ?? false,
         unifyCodexSessionHistory: serverData.unifyCodexSessionHistory ?? false,

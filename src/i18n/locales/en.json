@@ -102,15 +102,6 @@
         "mediaHeuristic": "Text-Only Model Preflight",
         "mediaHeuristicDescription": "Before sending, strips images for models in the built-in confirmed text-only registry. Turning this off only disables the proxy's registry-based preflight; declared text-only handling and upstream-error fallback remain, and Codex model-catalog capability declarations are unchanged"
       },
-      "optimizer": {
-        "title": "Bedrock Request Optimizer",
-        "description": "Automatically optimize Thinking and Cache configuration before sending requests (only applies to Bedrock providers)",
-        "enabled": "Enable Optimizer",
-        "thinkingOptimizer": "Thinking Optimization",
-        "thinkingOptimizerDescription": "Automatically enable Adaptive Thinking for Opus/Sonnet, and inject Extended Thinking for legacy models",
-        "cacheInjection": "Cache Injection",
-        "cacheInjectionDescription": "Automatically inject standard 5-minute cache breakpoints at key positions to reduce duplicate token billing"
-      },
       "logConfig": {
         "title": "Application Diagnostic Logs",
         "description": "Control the output level for application diagnostic logs",
@@ -385,8 +376,6 @@
     "silentStartup": "Silent Startup",
     "silentStartupDescription": "Start in background mode without showing main window",
     "autoLaunchFailed": "Failed to set auto-launch",
-    "minimizeToTray": "Minimize to tray on close",
-    "minimizeToTrayDescription": "When checked, clicking the close button will hide to system tray, otherwise the app will exit directly.",
     "useAppWindowControls": "Enable app-level window controls",
     "useAppWindowControlsDescription": "Use built-in minimize, maximize/restore, and close buttons in the app header.",
     "enableClaudePluginIntegration": "Apply to Claude Code extension",
@@ -576,7 +565,7 @@
       "testSuccess": "Connected! Latency {{latency}}ms",
       "testFailed": "Connection failed: {{error}}",
       "pricingDefaultsTitle": "Pricing Defaults",
-      "pricingDefaultsDescription": "Set the default multiplier and pricing model source per app.",
+      "pricingDefaultsDescription": "Set the global multiplier and pricing model source for Codex usage.",
       "pricingAppLabel": "App",
       "defaultCostMultiplierLabel": "Default Multiplier",
       "defaultCostMultiplierHint": "Multiplier for cost calculation, decimals supported.",
@@ -603,18 +592,6 @@
       "providerKey": "Provider key",
       "providerKeyDuplicate": "This provider key already exists"
     }
-  },
-  "providerForm": {
-    "customUserAgent": "Custom User-Agent",
-    "customUserAgentHint": "Applies to forwarded requests. Atlas preserves the client identity required by Copilot.",
-    "customUserAgentInvalid": "User-Agent must not contain control characters (e.g. line breaks); otherwise it will be ignored.",
-    "customUserAgentPresets": "Presets",
-    "localProxyRequestOverrides": "Local proxy request overrides",
-    "localProxyRequestOverridesHint": "Applied to the upstream request after protocol conversion. Copilot authentication stays managed by Atlas.",
-    "localProxyHeaderOverrides": "Header overrides",
-    "localProxyHeaderOverridesInvalidDetail": "Header overrides format error: {{error}}",
-    "localProxyBodyOverrides": "Body overrides",
-    "localProxyBodyOverridesInvalidDetail": "Body overrides format error: {{error}}"
   },
   "copilot": {
     "authStatus": "Authentication Status",
@@ -652,19 +629,6 @@
   },
   "managedAuth": {
     "accountRemoved": "Account removed"
-  },
-  "providerAdvanced": {
-    "pricingConfig": "Pricing Config",
-    "useCustomPricing": "Use separate config",
-    "pricingConfigDesc": "Configure separate pricing parameters for this provider. Uses global defaults when disabled.",
-    "costMultiplier": "Cost Multiplier",
-    "costMultiplierPlaceholder": "Leave empty to use global default (1)",
-    "costMultiplierHint": "Actual cost = Base cost × Multiplier, supports decimals like 1.5",
-    "pricingModelSourceLabel": "Pricing Mode",
-    "pricingModelSourceInherit": "Inherit global default",
-    "pricingModelSourceRequest": "Request model",
-    "pricingModelSourceResponse": "Response model",
-    "pricingModelSourceHint": "Choose whether to match pricing by request model or response model"
   },
   "codexConfig": {
     "reasoningLevelsNotSet": "Not set",

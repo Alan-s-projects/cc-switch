@@ -34,7 +34,7 @@ impl CostCalculator {
     /// # 参数
     /// - `usage`: Token 使用量
     /// - `pricing`: 模型定价
-    /// - `cost_multiplier`: 成本倍数 (provider 自定义)
+    /// - `cost_multiplier`: Global pricing multiplier
     ///
     /// # 计算逻辑
     /// - input_cost: input_tokens × 输入价格

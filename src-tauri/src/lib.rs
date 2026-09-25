@@ -303,35 +303,27 @@ pub fn run() {
     }
 
     let builder = builder
-        // 拦截窗口关闭：根据设置决定是否最小化到托盘
+        // Keep the proxy running in the tray when its window is closed.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
                 // 数据库版本过新的恢复模式下没有托盘可唤回，关闭即退出，避免应用隐身后台
                 let in_db_recovery = crate::init_status::get_init_error()
                     .map(|p| p.kind.as_deref() == Some("db_version_too_new"))
                     .unwrap_or(false);
                 if in_db_recovery {
-                    api.prevent_close();
                     window.app_handle().exit(0);
                     return;
                 }
 
-                let settings = crate::settings::get_settings();
-
-                if settings.minimize_to_tray_on_close {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    #[cfg(target_os = "windows")]
-                    {
-                        let _ = window.set_skip_taskbar(true);
-                    }
-                    #[cfg(target_os = "macos")]
-                    {
-                        tray::apply_tray_policy(window.app_handle(), false);
-                    }
-                } else {
-                    api.prevent_close();
-                    window.app_handle().exit(0);
+                let _ = window.hide();
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = window.set_skip_taskbar(true);
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    tray::apply_tray_policy(window.app_handle(), false);
                 }
             }
         })
@@ -716,8 +708,6 @@ pub fn run() {
             commands::save_settings,
             commands::get_rectifier_config,
             commands::set_rectifier_config,
-            commands::get_optimizer_config,
-            commands::set_optimizer_config,
             commands::get_copilot_optimizer_config,
             commands::set_copilot_optimizer_config,
             commands::get_log_config,

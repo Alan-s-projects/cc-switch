@@ -215,6 +215,15 @@ pub async fn refresh_capabilities(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConfigDiffLine {
+    pub kind: &'static str,
+    pub old_line_number: Option<usize>,
+    pub new_line_number: Option<usize>,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CodexSetupSuggestion {
     pub config_path: String,
     pub suggestion: String,
@@ -223,8 +232,10 @@ pub struct CodexSetupSuggestion {
     pub current_provider: String,
     pub copilot_config: String,
     pub copilot_diff: String,
+    pub copilot_lines: Vec<ConfigDiffLine>,
     pub openai_config: String,
     pub openai_diff: String,
+    pub openai_lines: Vec<ConfigDiffLine>,
 }
 
 fn set_connection_value(
@@ -278,15 +289,30 @@ fn provider_table<'a>(
         .ok_or_else(|| AppError::Message("The selected model provider must be a TOML table".into()))
 }
 
-fn config_diff(current: &str, proposed: &str) -> String {
+fn config_diff(current: &str, proposed: &str) -> (String, Vec<ConfigDiffLine>) {
     // Line-ending differences must not obscure the actual connection changes.
     let current = current.replace("\r\n", "\n");
     let proposed = proposed.replace("\r\n", "\n");
-    similar::TextDiff::from_lines(&current, &proposed)
+    let diff = similar::TextDiff::from_lines(&current, &proposed);
+    let unified = diff
         .unified_diff()
         .context_radius(3)
         .header("a/config.toml", "b/config.toml")
-        .to_string()
+        .to_string();
+    let lines = diff
+        .iter_all_changes()
+        .map(|change| ConfigDiffLine {
+            kind: match change.tag() {
+                similar::ChangeTag::Equal => "context",
+                similar::ChangeTag::Delete => "removed",
+                similar::ChangeTag::Insert => "added",
+            },
+            old_line_number: change.old_index().map(|index| index + 1),
+            new_line_number: change.new_index().map(|index| index + 1),
+            text: change.value().to_string(),
+        })
+        .collect();
+    (unified, lines)
 }
 
 fn setup_suggestion(
@@ -451,14 +477,18 @@ fn setup_suggestion(
     }
     let copilot_config = copilot.to_string();
     let openai_config = openai.to_string();
+    let (copilot_diff, copilot_lines) = config_diff(current_text, &copilot_config);
+    let (openai_diff, openai_lines) = config_diff(current_text, &openai_config);
     Ok(CodexSetupSuggestion {
         config_path: path.to_string_lossy().into_owned(),
         suggestion: snippet.to_string(),
         endpoint: endpoint.into(),
         configured,
         current_provider,
-        copilot_diff: config_diff(current_text, &copilot_config),
-        openai_diff: config_diff(current_text, &openai_config),
+        copilot_diff,
+        copilot_lines,
+        openai_diff,
+        openai_lines,
         copilot_config,
         openai_config,
     })
@@ -502,6 +532,78 @@ pub async fn get_codex_setup_suggestion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_diff_snapshots(lines: &[ConfigDiffLine], current: &str, proposed: &str) {
+        for line in lines {
+            assert!(matches!(
+                (line.kind, line.old_line_number, line.new_line_number),
+                ("context", Some(_), Some(_))
+                    | ("removed", Some(_), None)
+                    | ("added", None, Some(_))
+            ));
+        }
+        for (source, old_side) in [(current, true), (proposed, false)] {
+            let normalized = source.replace("\r\n", "\n");
+            let expected = normalized
+                .split_inclusive('\n')
+                .enumerate()
+                .map(|(index, text)| (index + 1, text))
+                .collect::<Vec<_>>();
+            let actual = lines
+                .iter()
+                .filter_map(|line| {
+                    let number = if old_side {
+                        line.old_line_number
+                    } else {
+                        line.new_line_number
+                    };
+                    number.map(|number| (number, line.text.as_str()))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn config_diff_lines_serialize_numbered_changes_and_preserve_missing_newlines() {
+        let (unified, lines) = config_diff("same\r\nold", "same\nnew\n");
+        assert_eq!(
+            serde_json::to_value(lines).unwrap(),
+            serde_json::json!([
+                { "kind": "context", "oldLineNumber": 1, "newLineNumber": 1, "text": "same\n" },
+                { "kind": "removed", "oldLineNumber": 2, "newLineNumber": null, "text": "old" },
+                { "kind": "added", "oldLineNumber": null, "newLineNumber": 2, "text": "new\n" }
+            ])
+        );
+        assert!(unified.contains("\\ No newline at end of file"));
+    }
+
+    #[test]
+    fn config_diff_lines_reconstruct_both_complete_files() {
+        for (current, proposed) in [
+            ("", ""),
+            ("", "added\n"),
+            ("removed\n", ""),
+            ("\n", "\n"),
+            ("same\r\nsame\r\n", "same\nsame\n"),
+            ("same", "same\n"),
+            ("same\n", "same"),
+            (
+                "start\r\nold\r\nsame\r\ndeleted\r\nsame\r\nend",
+                "start\nnew\nsame\nsame\ninserted\nend",
+            ),
+        ] {
+            let (_, lines) = config_diff(current, proposed);
+            assert_diff_snapshots(&lines, current, proposed);
+        }
+
+        // Keep context outside the unified diff's three-line display radius.
+        let current = format!("before\n{}old\n", "same\n".repeat(10));
+        let proposed = format!("before\n{}new\n", "same\n".repeat(10));
+        let (_, lines) = config_diff(&current, &proposed);
+        assert_diff_snapshots(&lines, &current, &proposed);
+        assert_eq!(lines.iter().filter(|line| line.kind == "context").count(), 11);
+    }
 
     #[test]
     fn seeds_one_copilot_entry_and_preserves_existing_data() {
@@ -631,7 +733,11 @@ command = "unchanged"
                 "{key}"
             );
         }
-        for config in [&preview.copilot_config, &preview.openai_config] {
+        for (config, lines) in [
+            (&preview.copilot_config, &preview.copilot_lines),
+            (&preview.openai_config, &preview.openai_lines),
+        ] {
+            assert_diff_snapshots(lines, text, config);
             let doc = config.parse::<toml_edit::DocumentMut>().unwrap();
             assert_eq!(doc["model_reasoning_effort"].as_str(), Some("high"));
             assert_eq!(
@@ -664,6 +770,12 @@ command = "unchanged"
         )
         .unwrap();
         assert!(second.copilot_diff.is_empty(), "{}", second.copilot_diff);
+        assert_diff_snapshots(
+            &second.copilot_lines,
+            &preview.copilot_config,
+            &second.copilot_config,
+        );
+        assert!(second.copilot_lines.iter().all(|line| line.kind == "context"));
         assert_eq!(std::fs::read_to_string(path).unwrap(), text);
     }
 
@@ -716,6 +828,8 @@ command = "keep-me"
         let path = temp.path().join("config.toml");
         for text in ["", "model_provider = \"openai\"\n"] {
             let result = setup_suggestion(text, &path, "http://127.0.0.1:15721/v1", None).unwrap();
+            assert_diff_snapshots(&result.copilot_lines, text, &result.copilot_config);
+            assert_diff_snapshots(&result.openai_lines, text, &result.openai_config);
             assert!(!result.configured);
             assert!(result.suggestion.contains("model_provider = \"cc-switch\""));
             assert!(!path.exists());

@@ -346,15 +346,9 @@ impl<'a> UsageLogger<'a> {
         }
     }
 
-    /// 获取有效的倍率与计费模式来源（供应商优先，未配置则回退全局默认）
-    pub async fn resolve_pricing_config(
-        &self,
-        provider_id: &str,
-        app_type: &str,
-    ) -> (Decimal, String) {
-        // Claude Desktop 网关没有独立的全局计费配置（proxy_config 的 CHECK 仅
-        // 允许 claude/codex/gemini，前端也只暴露三项），全局默认继承 claude；
-        // 供应商级 meta 覆盖仍按 claude-desktop 查找（providers 表按该 app_type 存）。
+    /// Read the global multiplier and pricing-model source for this app.
+    pub async fn resolve_pricing_config(&self, app_type: &str) -> (Decimal, String) {
+        // Legacy Claude Desktop entries share Claude's persisted pricing row.
         let default_app_type = if app_type == "claude-desktop" {
             "claude"
         } else {
@@ -397,48 +391,7 @@ impl<'a> UsageLogger<'a> {
             PRICING_SOURCE_RESPONSE.to_string()
         };
 
-        let provider = self
-            .db
-            .get_provider_by_id(provider_id, app_type)
-            .ok()
-            .flatten();
-
-        let (provider_multiplier, provider_pricing_source) = provider
-            .as_ref()
-            .and_then(|p| p.meta.as_ref())
-            .map(|meta| {
-                (
-                    meta.cost_multiplier.as_deref(),
-                    meta.pricing_model_source.as_deref(),
-                )
-            })
-            .unwrap_or((None, None));
-
-        let cost_multiplier = match provider_multiplier {
-            Some(value) => match Decimal::from_str(value) {
-                Ok(parsed) => parsed,
-                Err(e) => {
-                    log::warn!(
-                        "[USG-003] 供应商倍率解析失败 (provider_id={provider_id}): {value} - {e}"
-                    );
-                    default_multiplier
-                }
-            },
-            None => default_multiplier,
-        };
-
-        let pricing_model_source = match provider_pricing_source {
-            Some(value) if value == PRICING_SOURCE_RESPONSE || value == PRICING_SOURCE_REQUEST => {
-                value.to_string()
-            }
-            Some(value) => {
-                log::warn!("[USG-003] 供应商计费模式无效 (provider_id={provider_id}): {value}");
-                default_pricing_source.clone()
-            }
-            None => default_pricing_source.clone(),
-        };
-
-        (cost_multiplier, pricing_model_source)
+        (default_multiplier, default_pricing_source)
     }
 
     /// 计算并记录请求

@@ -153,8 +153,6 @@ pub struct AppSettings {
     // ===== 设备级 UI 设置 =====
     #[serde(default = "default_show_in_tray")]
     pub show_in_tray: bool,
-    #[serde(default = "default_minimize_to_tray_on_close")]
-    pub minimize_to_tray_on_close: bool,
     /// 是否开机自启
     #[serde(default)]
     pub launch_on_startup: bool,
@@ -268,10 +266,6 @@ fn default_show_in_tray() -> bool {
     true
 }
 
-fn default_minimize_to_tray_on_close() -> bool {
-    true
-}
-
 fn default_show_profile_switcher() -> bool {
     true
 }
@@ -285,7 +279,6 @@ impl Default for AppSettings {
         Self {
             legacy_options: Default::default(),
             show_in_tray: true,
-            minimize_to_tray_on_close: true,
             launch_on_startup: false,
             enable_local_proxy: false,
             proxy_confirmed: None,
@@ -682,6 +675,22 @@ pub fn effective_backup_retain_count() -> usize {
 mod tests {
     use super::*;
     use crate::app_config::AppType;
+
+    #[test]
+    fn retired_close_preference_is_only_preserved_as_legacy_data() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "minimizeToTrayOnClose": false,
+            "launchOnStartup": true
+        }))
+        .unwrap();
+
+        assert!(settings.launch_on_startup);
+        assert_eq!(settings.legacy_options["minimizeToTrayOnClose"], false);
+        assert!(serde_json::to_value(AppSettings::default())
+            .unwrap()
+            .get("minimizeToTrayOnClose")
+            .is_none());
+    }
 
     #[test]
     fn visible_apps_old_settings_default_claude_desktop_visible() {

@@ -6,14 +6,14 @@ at **4.1.0**. Its only development branch is `atlas`.
 
 ## Install and connect
 
-Download `CC-Switch-atlas-4.1.0-Windows-x64.msi` from
+Download `CC-Switch-atlas-4.1.1-Windows-x64.msi` from
 [GitHub Releases](https://github.com/Alan-s-projects/cc-switch/releases).
 Exit the previous CC Switch app, install the MSI, and open Atlas.
 
 1. The one **GitHub Copilot** entry starts with **Needs setup**. Choose **Edit**,
    sign in, refresh your models, and save.
 2. Start the proxy and open **Codex connection**.
-3. Review **Connect through Copilot** in **Git-style diff** or **Proposed TOML**.
+3. Review **Connect through Copilot** in **Side by side**, **Inline**, or **Proposed TOML**.
    Copy and apply the proposed changes yourself, then reload Codex.
 4. To reconnect using your OpenAI account, review **Return to OpenAI sign-in**,
    apply that preview, and sign in through Codex.
@@ -37,13 +37,15 @@ The MSI is unsigned, installs per user, and supports replacing the provisional
 - Model capabilities, reasoning choices and input budgets from Copilot. Existing
   smaller context limits are retained; limits above the reported input budget are capped.
 - Proxy start/stop, outbound networking and request compatibility controls.
+- A manual health check beside **Edit** on the Copilot card shows endpoint
+  reachability and latency without sending a model request.
 - Usage trends, request history, cache statistics, latency and estimated costs;
   Copilot subscription quota is shown separately.
 - Local application-data backups.
 
 Atlas is English-only and builds only a Windows x64 MSI. Other clients, native
 provider authentication, provider add/duplicate/delete actions, usage scripts,
-failover, cloud sync, CLI management, and MCP/skill/instruction/session management
+manual request overrides, failover, cloud sync, CLI management, and MCP/skill/instruction/session management
 are removed. Legacy database data stays available in backups. Dashboard statistics
 count proxy traffic, excluding imported conversation totals and their historical
 rollups. Conversation files are never scanned. Estimated token costs are not a
