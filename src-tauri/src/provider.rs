@@ -1,4 +1,3 @@
-use http::header::{HeaderValue, InvalidHeaderValue};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -434,21 +433,6 @@ pub struct CodexChatReasoningConfig {
     pub effort_levels: Option<Vec<String>>,
 }
 
-/// Local proxy request overrides applied after route/protocol transforms.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LocalProxyRequestOverrides {
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub headers: HashMap<String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub body: Option<serde_json::Value>,
-}
-
-impl LocalProxyRequestOverrides {
-    pub fn is_empty(&self) -> bool {
-        self.headers.is_empty() && self.body.is_none()
-    }
-}
-
 /// 供应商元数据
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderMeta {
@@ -528,16 +512,9 @@ pub struct ProviderMeta {
     /// identity when available; generated session IDs are not sent upstream.
     #[serde(rename = "promptCacheKey", skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
-    /// Session-based prompt-cache routing for Codex Responses -> Chat conversions.
-    /// "auto" enables known-compatible upstreams; "enabled" / "disabled" are overrides.
-    #[serde(rename = "promptCacheRouting", skip_serializing_if = "Option::is_none")]
-    pub prompt_cache_routing: Option<String>,
     /// Codex OAuth FAST mode: inject `service_tier = "priority"` for ChatGPT Codex requests.
     #[serde(rename = "codexFastMode", skip_serializing_if = "Option::is_none")]
     pub codex_fast_mode: Option<bool>,
-    /// Codex Responses -> Chat Completions reasoning capability metadata.
-    #[serde(rename = "codexChatReasoning", skip_serializing_if = "Option::is_none")]
-    pub codex_chat_reasoning: Option<CodexChatReasoningConfig>,
     /// Codex → Anthropic path: whether to emulate the Claude Code client
     /// (User-Agent / anthropic-beta / x-app + injecting the Claude Code system
     /// prompt first line). Disabled by default; only an explicit `true` enables it.
@@ -558,15 +535,6 @@ pub struct ProviderMeta {
     /// models/gateways (and that error is non-retryable).
     #[serde(rename = "maxOutputTokens", skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
-    /// Custom User-Agent for local proxy routing.
-    #[serde(rename = "customUserAgent", skip_serializing_if = "Option::is_none")]
-    pub custom_user_agent: Option<String>,
-    /// Local proxy request overrides applied to the transformed upstream request.
-    #[serde(
-        rename = "localProxyRequestOverrides",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub local_proxy_request_overrides: Option<LocalProxyRequestOverrides>,
     /// 累加模式应用中，该 provider 是否已写入 live config。
     /// `None` 表示旧数据/未知状态，`Some(false)` 表示明确仅存在于数据库中。
     #[serde(rename = "liveConfigManaged", skip_serializing_if = "Option::is_none")]
@@ -581,40 +549,11 @@ pub struct ProviderMeta {
     pub github_account_id: Option<String>,
 }
 
-/// 解析 Provider 级自定义 User-Agent 字符串（单一真理来源）。
-///
-/// 转发（forwarder）、流式检测（stream_check）、获取模型列表（model_fetch）三条路径
-/// 共用同一口径，避免出现"某条路径用了 UA、另一条没用 / 报错"的不一致。
-///
-/// 合法性由 `http::HeaderValue::from_str` 按**字节**判定（`b >= 32 && b != 127 || b == '\t'`），
-/// 与前端 `src/lib/userAgent.ts::isValidUserAgentHeader` 严格一致：
-/// - `Ok(None)`：未设置或纯空白（trim 后为空）。
-/// - `Ok(Some(hv))`：合法。制表符、可见 ASCII（0x20–0x7E）、以及任意非 ASCII 字符
-///   （UTF-8 字节均 ≥ 0x80）都合法。
-/// - `Err(_)`：仅含控制字符时——除 `\t` 外的 0x00–0x1F（含换行）与 0x7F（DEL）。
-///
-/// 非法值的处理：三条运行时路径**均静默忽略**（`.ok().flatten()`，绝不让某条路径报错而
-/// 另一条放行）；前端在输入框处给出非阻断提示。当前**不在保存时阻断**——deeplink 导入等
-/// 非表单路径应宽容，运行时静默忽略即为安全网。
-pub fn parse_custom_user_agent(
-    raw: Option<&str>,
-) -> Result<Option<HeaderValue>, InvalidHeaderValue> {
-    match raw.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(ua) => HeaderValue::from_str(ua).map(Some),
-        None => Ok(None),
-    }
-}
-
 impl ProviderMeta {
     /// Codex OAuth FAST mode 是否启用。默认关闭，因为 `service_tier="priority"`
     /// 会按更高速率消耗 ChatGPT 订阅配额，用户需显式开启以换取更低延迟。
     pub fn codex_fast_mode_enabled(&self) -> bool {
         self.codex_fast_mode.unwrap_or(false)
-    }
-
-    /// 经校验的 Provider 级自定义 User-Agent。见 [`parse_custom_user_agent`]。
-    pub fn custom_user_agent_header(&self) -> Result<Option<HeaderValue>, InvalidHeaderValue> {
-        parse_custom_user_agent(self.custom_user_agent.as_deref())
     }
 
     /// 解析指定托管认证供应商绑定的账号 ID。
@@ -1034,11 +973,9 @@ pub struct OpenCodeModelLimit {
 mod tests {
     use super::{
         ClaudeModelConfig, CodexCopilotApiFormat, CodexModelConfig, GeminiModelConfig,
-        LocalProxyRequestOverrides, OpenCodeProviderConfig, Provider, ProviderManager,
-        ProviderMeta, UniversalProvider,
+        OpenCodeProviderConfig, Provider, ProviderManager, ProviderMeta, UniversalProvider,
     };
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn proxy_injected_oauth_excludes_codex_oauth() {
@@ -1160,30 +1097,35 @@ mod tests {
     }
 
     #[test]
-    fn provider_meta_roundtrips_local_proxy_request_overrides() {
-        let meta = ProviderMeta {
-            local_proxy_request_overrides: Some(LocalProxyRequestOverrides {
-                headers: HashMap::from([("X-Test".to_string(), "yes".to_string())]),
-                body: Some(json!({ "temperature": 0.2 })),
-            }),
-            ..ProviderMeta::default()
-        };
+    fn provider_meta_ignores_retired_request_overrides() {
+        let meta: ProviderMeta = serde_json::from_value(json!({
+            "providerType": "github_copilot",
+            "githubAccountId": "account-1",
+            "costMultiplier": "1.5",
+            "customUserAgent": "legacy-agent",
+            "promptCacheRouting": "disabled",
+            "codexChatReasoning": {
+                "supportsThinking": false,
+                "supportsEffort": false
+            },
+            "localProxyRequestOverrides": {
+                "headers": { "X-Test": "legacy" },
+                "body": { "model": "legacy-model", "temperature": 0.2 }
+            }
+        }))
+        .expect("existing provider metadata remains readable");
 
-        let value = serde_json::to_value(&meta).expect("serialize ProviderMeta");
         assert_eq!(
-            value["localProxyRequestOverrides"]["headers"]["X-Test"],
-            "yes"
+            meta.managed_account_id_for("github_copilot").as_deref(),
+            Some("account-1")
         );
-        assert_eq!(
-            value["localProxyRequestOverrides"]["body"]["temperature"],
-            0.2
-        );
-
-        let decoded: ProviderMeta =
-            serde_json::from_value(value).expect("deserialize ProviderMeta");
-        let overrides = decoded.local_proxy_request_overrides.unwrap();
-        assert_eq!(overrides.headers.get("X-Test"), Some(&"yes".to_string()));
-        assert_eq!(overrides.body.unwrap()["temperature"], 0.2);
+        let value = serde_json::to_value(meta).expect("serialize ProviderMeta");
+        assert_eq!(value["providerType"], "github_copilot");
+        assert_eq!(value["costMultiplier"], "1.5");
+        assert!(value.get("customUserAgent").is_none());
+        assert!(value.get("promptCacheRouting").is_none());
+        assert!(value.get("codexChatReasoning").is_none());
+        assert!(value.get("localProxyRequestOverrides").is_none());
     }
 
     #[test]

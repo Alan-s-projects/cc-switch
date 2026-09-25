@@ -16,7 +16,6 @@
 //! 算"可达"，但它对真实流量是坏的。熔断器只由 `proxy/forwarder.rs` 转发真实流量
 //! 的成败驱动（被动）。两者职责分离——可达性回答"能不能到"，真实流量回答"能不能用"。
 
-use reqwest::header::HeaderValue;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -145,9 +144,7 @@ impl StreamCheckService {
 
         let client = crate::proxy::http_client::get();
         let timeout = std::time::Duration::from_secs(config.timeout_secs);
-        let ua = Self::custom_user_agent(provider);
-
-        let result = Self::probe_reachability(&client, &base_url, timeout, ua).await;
+        let result = Self::probe_reachability(&client, &base_url, timeout).await;
         let response_time = start.elapsed().as_millis() as u64;
         Ok(Self::build_result(
             result,
@@ -206,22 +203,17 @@ impl StreamCheckService {
         client: &Client,
         base_url: &str,
         timeout: std::time::Duration,
-        custom_ua: Option<HeaderValue>,
     ) -> Result<u16, AppError> {
         let url = base_url.trim();
         if url.is_empty() {
             return Err(AppError::Message("base_url 为空".to_string()));
         }
 
-        let mut req = client
+        let req = client
             .get(url)
             .timeout(timeout)
             .header("accept", "*/*")
             .header("accept-encoding", "identity");
-        // 复用供应商自定义 UA（部分网关按 UA 白名单放行），与转发路径口径一致。
-        if let Some(ua) = custom_ua {
-            req = req.header("user-agent", ua);
-        }
 
         match req.send().await {
             Ok(resp) => Ok(resp.status().as_u16()),
@@ -283,15 +275,6 @@ impl StreamCheckService {
         } else {
             AppError::Message(e.to_string())
         }
-    }
-
-    /// Provider 级自定义 User-Agent（`meta.customUserAgent`），与转发路径共用单一口径：
-    /// trim、空串视为未设置、非法值静默忽略（返回 `None`）。
-    fn custom_user_agent(provider: &Provider) -> Option<HeaderValue> {
-        provider
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.custom_user_agent_header().ok().flatten())
     }
 
     // ===== 各应用 base_url 提取（settings_config 结构互不相同）=====

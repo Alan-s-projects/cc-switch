@@ -604,18 +604,6 @@
       "providerKeyDuplicate": "This provider key already exists"
     }
   },
-  "providerForm": {
-    "customUserAgent": "Custom User-Agent",
-    "customUserAgentHint": "Applies to forwarded requests. Atlas preserves the client identity required by Copilot.",
-    "customUserAgentInvalid": "User-Agent must not contain control characters (e.g. line breaks); otherwise it will be ignored.",
-    "customUserAgentPresets": "Presets",
-    "localProxyRequestOverrides": "Local proxy request overrides",
-    "localProxyRequestOverridesHint": "Applied to the upstream request after protocol conversion. Copilot authentication stays managed by Atlas.",
-    "localProxyHeaderOverrides": "Header overrides",
-    "localProxyHeaderOverridesInvalidDetail": "Header overrides format error: {{error}}",
-    "localProxyBodyOverrides": "Body overrides",
-    "localProxyBodyOverridesInvalidDetail": "Body overrides format error: {{error}}"
-  },
   "copilot": {
     "authStatus": "Authentication Status",
     "notAuthenticated": "Not authenticated",

@@ -95,7 +95,7 @@ describe("Codex Copilot provider form", () => {
     }
   });
 
-  it("shows the existing model catalog without a TOML or default-model editor", () => {
+  it("shows the model catalog without TOML, provider metadata, or advanced request editors", () => {
     renderForm();
     expect(screen.getAllByDisplayValue("gpt-6-astra")).toHaveLength(1);
     expect(
@@ -111,6 +111,22 @@ describe("Codex Copilot provider form", () => {
     }
     expect(formatControl()).toHaveTextContent(formatLabels.auto);
     expect(screen.getByText("Model catalog")).toBeVisible();
+    expect(
+      screen.queryByText("Advanced request settings"),
+    ).not.toBeInTheDocument();
+    for (const label of [
+      "Custom User-Agent",
+      "Header overrides",
+      "Body overrides",
+      "Prompt cache routing",
+      "Supports thinking",
+      "Supports reasoning effort",
+    ]) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+    expect(
+      screen.getAllByRole("combobox", { name: "Reasoning levels" }),
+    ).toHaveLength(2);
   });
 
   it.each<CodexCopilotApiFormat>(["auto", "openai_chat", "openai_responses"])(
@@ -131,6 +147,17 @@ describe("Codex Copilot provider form", () => {
       expect(JSON.parse(saved.settingsConfig).config).toContain(
         'wire_api = "responses"',
       );
+      expect(JSON.parse(saved.settingsConfig).modelCatalog.models).toEqual(
+        models,
+      );
+      for (const key of [
+        "customUserAgent",
+        "localProxyRequestOverrides",
+        "promptCacheRouting",
+        "codexChatReasoning",
+      ]) {
+        expect(saved.meta).not.toHaveProperty(key);
+      }
     },
   );
 

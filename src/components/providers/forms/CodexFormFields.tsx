@@ -12,7 +12,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -34,8 +33,6 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { CopilotAuthSection } from "./CopilotAuthSection";
-import { CustomUserAgentField } from "./CustomUserAgentField";
-import { LocalProxyRequestOverridesField } from "./LocalProxyRequestOverridesField";
 import {
   copilotGetModels,
   copilotGetModelsForAccount,
@@ -43,12 +40,7 @@ import {
 } from "@/lib/api/copilot";
 import { cn } from "@/lib/utils";
 import { extractErrorMessage } from "@/utils/errorUtils";
-import type {
-  CodexCatalogModel,
-  CodexCopilotApiFormat,
-  CodexChatReasoning,
-  PromptCacheRoutingMode,
-} from "@/types";
+import type { CodexCatalogModel, CodexCopilotApiFormat } from "@/types";
 import type { ManagedAuthProvider } from "@/lib/api";
 
 export function isCopilotModelSupportedByCodex(
@@ -122,16 +114,6 @@ interface CodexFormFieldsProps {
   onCopilotApiFormatChange: (value: CodexCopilotApiFormat) => void;
   catalogModels: CodexCatalogModel[];
   onCatalogModelsChange: (models: CodexCatalogModel[]) => void;
-  codexChatReasoning: CodexChatReasoning;
-  onCodexChatReasoningChange: (value: CodexChatReasoning) => void;
-  promptCacheRouting: PromptCacheRoutingMode;
-  onPromptCacheRoutingChange: (value: PromptCacheRoutingMode) => void;
-  customUserAgent: string;
-  onCustomUserAgentChange: (value: string) => void;
-  localProxyHeadersOverride: string;
-  onLocalProxyHeadersOverrideChange: (value: string) => void;
-  localProxyBodyOverride: string;
-  onLocalProxyBodyOverrideChange: (value: string) => void;
 }
 
 const CODEX_REASONING_LEVELS = [
@@ -300,16 +282,6 @@ export function CodexFormFields({
   onCopilotApiFormatChange,
   catalogModels,
   onCatalogModelsChange,
-  codexChatReasoning,
-  onCodexChatReasoningChange,
-  promptCacheRouting,
-  onPromptCacheRoutingChange,
-  customUserAgent,
-  onCustomUserAgentChange,
-  localProxyHeadersOverride,
-  onLocalProxyHeadersOverrideChange,
-  localProxyBodyOverride,
-  onLocalProxyBodyOverrideChange,
 }: CodexFormFieldsProps) {
   const [fetching, setFetching] = useState(false);
   const fetchSequence = useRef(0);
@@ -362,10 +334,6 @@ export function CodexFormFields({
         position === index ? { ...model, ...patch } : model,
       ),
     );
-  const supportsThinking =
-    codexChatReasoning.supportsThinking === true ||
-    codexChatReasoning.supportsEffort === true;
-
   return (
     <div className="space-y-6">
       <CopilotAuthSection
@@ -520,74 +488,6 @@ export function CodexFormFields({
           </div>
         ))}
       </section>
-      <details className="space-y-4 rounded-lg border p-4">
-        <summary className="cursor-pointer text-sm font-medium">
-          Advanced request settings
-        </summary>
-        {copilotApiFormat !== "openai_responses" && (
-          <div className="space-y-4">
-            <p className="text-xs text-muted-foreground">
-              These overrides apply only when a model uses Chat Completions.
-            </p>
-            <Label htmlFor="cache-routing">Prompt cache routing</Label>
-            <Select
-              value={promptCacheRouting}
-              onValueChange={(value) =>
-                onPromptCacheRoutingChange(value as PromptCacheRoutingMode)
-              }
-            >
-              <SelectTrigger id="cache-routing">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">Automatic</SelectItem>
-                <SelectItem value="enabled">Enabled</SelectItem>
-                <SelectItem value="disabled">Disabled</SelectItem>
-              </SelectContent>
-            </Select>
-            <div className="flex items-center justify-between">
-              <Label htmlFor="thinking-override">Supports thinking</Label>
-              <Switch
-                id="thinking-override"
-                checked={supportsThinking}
-                onCheckedChange={(checked) =>
-                  onCodexChatReasoningChange({
-                    ...codexChatReasoning,
-                    supportsThinking: checked,
-                    supportsEffort:
-                      checked && codexChatReasoning.supportsEffort,
-                  })
-                }
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label htmlFor="effort-override">Supports reasoning effort</Label>
-              <Switch
-                id="effort-override"
-                checked={codexChatReasoning.supportsEffort === true}
-                onCheckedChange={(checked) =>
-                  onCodexChatReasoningChange({
-                    ...codexChatReasoning,
-                    supportsEffort: checked,
-                    supportsThinking: checked || supportsThinking,
-                  })
-                }
-              />
-            </div>
-          </div>
-        )}
-        <CustomUserAgentField
-          id="codex-custom-user-agent"
-          value={customUserAgent}
-          onChange={onCustomUserAgentChange}
-        />
-        <LocalProxyRequestOverridesField
-          headersJson={localProxyHeadersOverride}
-          bodyJson={localProxyBodyOverride}
-          onHeadersJsonChange={onLocalProxyHeadersOverrideChange}
-          onBodyJsonChange={onLocalProxyBodyOverrideChange}
-        />
-      </details>
     </div>
   );
 }

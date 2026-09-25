@@ -6,7 +6,7 @@ at **4.1.0**. Its only development branch is `atlas`.
 
 ## Install and connect
 
-Download `CC-Switch-atlas-4.1.0-Windows-x64.msi` from
+Download `CC-Switch-atlas-4.1.1-Windows-x64.msi` from
 [GitHub Releases](https://github.com/Alan-s-projects/cc-switch/releases).
 Exit the previous CC Switch app, install the MSI, and open Atlas.
 
@@ -43,7 +43,7 @@ The MSI is unsigned, installs per user, and supports replacing the provisional
 
 Atlas is English-only and builds only a Windows x64 MSI. Other clients, native
 provider authentication, provider add/duplicate/delete actions, usage scripts,
-failover, cloud sync, CLI management, and MCP/skill/instruction/session management
+manual request overrides, failover, cloud sync, CLI management, and MCP/skill/instruction/session management
 are removed. Legacy database data stays available in backups. Dashboard statistics
 count proxy traffic, excluding imported conversation totals and their historical
 rollups. Conversation files are never scanned. Estimated token costs are not a

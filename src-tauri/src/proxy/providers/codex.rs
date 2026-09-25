@@ -92,17 +92,6 @@ pub fn should_convert_codex_responses_to_chat(provider: &Provider, endpoint: &st
 /// its Chat Completions upstream. Unknown OpenAI-compatible gateways default to
 /// false because many reject unsupported request fields with HTTP 400.
 pub fn should_send_codex_chat_prompt_cache_key(provider: &Provider) -> bool {
-    match provider
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.prompt_cache_routing.as_deref())
-        .unwrap_or("auto")
-    {
-        "enabled" => return true,
-        "disabled" => return false,
-        _ => {}
-    }
-
     let base_url = provider
         .settings_config
         .get("base_url")
@@ -448,15 +437,7 @@ pub fn resolve_codex_chat_reasoning_config(
     provider: &Provider,
     body: &JsonValue,
 ) -> Option<CodexChatReasoningConfig> {
-    let mut config = if let Some(config) = provider
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.codex_chat_reasoning.clone())
-    {
-        normalize_codex_chat_reasoning_config(config)
-    } else {
-        infer_codex_chat_reasoning_config(provider, body)?
-    };
+    let mut config = infer_codex_chat_reasoning_config(provider, body)?;
 
     // zen 的合法 effort 档位是逐模型的（models.dev：glm-5.2 仅 high|max、
     // kimi-k3 仅 max、qwen/glm-5.1 等为 toggle 型无 effort），opencode 客户端
@@ -499,15 +480,6 @@ fn zen_catalog_effort_levels(provider: &Provider, body: &JsonValue) -> Option<Ve
         .filter_map(|level| level.as_str().map(str::to_string))
         .collect();
     (!levels.is_empty()).then_some(levels)
-}
-
-fn normalize_codex_chat_reasoning_config(
-    mut config: CodexChatReasoningConfig,
-) -> CodexChatReasoningConfig {
-    if config.supports_effort.unwrap_or(false) && config.supports_thinking.is_none() {
-        config.supports_thinking = Some(true);
-    }
-    config
 }
 
 fn infer_codex_chat_reasoning_config(
@@ -1158,27 +1130,6 @@ wire_api = "responses"
     }
 
     #[test]
-    fn prompt_cache_routing_user_override_wins_over_auto_detection() {
-        let mut kimi = create_provider(json!({
-            "base_url": "https://api.kimi.com/coding/v1"
-        }));
-        kimi.meta = Some(crate::provider::ProviderMeta {
-            prompt_cache_routing: Some("disabled".to_string()),
-            ..Default::default()
-        });
-        assert!(!should_send_codex_chat_prompt_cache_key(&kimi));
-
-        let mut unknown = create_provider(json!({
-            "base_url": "https://strict.example.com/v1"
-        }));
-        unknown.meta = Some(crate::provider::ProviderMeta {
-            prompt_cache_routing: Some("enabled".to_string()),
-            ..Default::default()
-        });
-        assert!(should_send_codex_chat_prompt_cache_key(&unknown));
-    }
-
-    #[test]
     fn prompt_cache_key_prefers_explicit_key_then_real_session() {
         let provider = create_provider(json!({
             "base_url": "https://api.kimi.com/coding/v1"
@@ -1654,41 +1605,6 @@ wire_api = "chat"
     }
 
     #[test]
-    fn test_resolve_codex_chat_reasoning_explicit_meta_overrides_inference() {
-        let mut provider = create_provider(json!({
-            "config": r#"
-model_provider = "deepseek"
-model = "deepseek-v4-pro"
-
-[model_providers.deepseek]
-name = "DeepSeek"
-base_url = "https://api.deepseek.com"
-wire_api = "chat"
-"#
-        }));
-        provider.meta = Some(crate::provider::ProviderMeta {
-            codex_chat_reasoning: Some(CodexChatReasoningConfig {
-                supports_thinking: Some(false),
-                supports_effort: Some(false),
-                thinking_param: Some("none".to_string()),
-                effort_param: Some("none".to_string()),
-                effort_value_mode: None,
-                output_format: Some("auto".to_string()),
-                effort_levels: None,
-            }),
-            ..Default::default()
-        });
-
-        let config =
-            resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "deepseek-v4-pro" }))
-                .unwrap();
-
-        assert_eq!(config.supports_thinking, Some(false));
-        assert_eq!(config.supports_effort, Some(false));
-        assert_eq!(config.thinking_param.as_deref(), Some("none"));
-    }
-
-    #[test]
     fn test_resolve_codex_chat_reasoning_openrouter_platform_overrides_model() {
         let provider = create_provider(json!({
             "config": r#"
@@ -1847,56 +1763,6 @@ wire_api = "chat"
         let config =
             resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "kimi-k3" })).unwrap();
         assert!(config.effort_levels.is_none());
-    }
-
-    #[test]
-    fn test_resolve_codex_chat_reasoning_zen_levels_attach_on_explicit_meta_too() {
-        let mut provider = create_provider(json!({
-            "config": r#"
-model_provider = "opencode"
-model = "deepseek-v4-flash"
-
-[model_providers.opencode]
-name = "OpenCode Go"
-base_url = "https://opencode.ai/zen/go/v1"
-wire_api = "chat"
-"#,
-            "modelCatalog": {
-                "models": [
-                    { "model": "deepseek-v4-flash", "reasoning_levels": ["low", "high", "max"] }
-                ]
-            }
-        }));
-        // 显式 meta（表单手选 zen 模式）同样要在 resolve 末端按请求模型附表；
-        // 且手写/旧数据可能是 snake_case 的 reasoning_levels（加载侧双格式兼容）。
-        provider.meta = Some(crate::provider::ProviderMeta {
-            codex_chat_reasoning: Some(CodexChatReasoningConfig {
-                supports_thinking: Some(true),
-                supports_effort: Some(true),
-                thinking_param: Some("none".to_string()),
-                effort_param: Some("reasoning_effort".to_string()),
-                effort_value_mode: Some("zen".to_string()),
-                output_format: Some("reasoning_content".to_string()),
-                effort_levels: None,
-            }),
-            ..Default::default()
-        });
-
-        let config = resolve_codex_chat_reasoning_config(
-            &provider,
-            &json!({ "model": "deepseek-v4-flash" }),
-        )
-        .unwrap();
-
-        assert_eq!(config.effort_value_mode.as_deref(), Some("zen"));
-        assert_eq!(
-            config.effort_levels,
-            Some(vec![
-                "low".to_string(),
-                "high".to_string(),
-                "max".to_string()
-            ])
-        );
     }
 
     #[test]

@@ -116,9 +116,6 @@ export function ProviderForm({
     const value = settings.modelCatalog as { models?: unknown[] } | undefined;
     return (value?.models ?? []).map(mapCodexCatalogModelForForm);
   });
-  const [reasoning, setReasoning] = useState(
-    initialMeta?.codexChatReasoning ?? {},
-  );
   const [pricing, setPricing] = useState<{
     enabled: boolean;
     costMultiplier?: string;
@@ -134,22 +131,6 @@ export function ProviderForm({
         ? initialMeta.pricingModelSource
         : "inherit",
   });
-  const [cacheRouting, setCacheRouting] = useState(
-    initialMeta?.promptCacheRouting ?? "auto",
-  );
-  const [userAgent, setUserAgent] = useState(
-    initialMeta?.customUserAgent ?? "",
-  );
-  const [headers, setHeaders] = useState(
-    initialMeta?.localProxyRequestOverrides?.headers
-      ? JSON.stringify(initialMeta.localProxyRequestOverrides.headers, null, 2)
-      : "",
-  );
-  const [body, setBody] = useState(
-    initialMeta?.localProxyRequestOverrides?.body
-      ? JSON.stringify(initialMeta.localProxyRequestOverrides.body, null, 2)
-      : "",
-  );
   useEffect(() => {
     onSubmittingChange?.(saving);
   }, [saving, onSubmittingChange]);
@@ -186,18 +167,11 @@ export function ProviderForm({
           authProvider: "github_copilot",
           accountId: accountId ?? undefined,
         },
-        codexChatReasoning: reasoning,
-        promptCacheRouting: cacheRouting,
-        customUserAgent: userAgent || undefined,
         costMultiplier: pricing.enabled ? pricing.costMultiplier : undefined,
         pricingModelSource:
           pricing.enabled && pricing.pricingModelSource !== "inherit"
             ? pricing.pricingModelSource
             : undefined,
-        localProxyRequestOverrides: {
-          headers: headers.trim() ? JSON.parse(headers) : undefined,
-          body: body.trim() ? JSON.parse(body) : undefined,
-        },
       };
       await onSubmit({
         name: initialData?.name ?? "GitHub Copilot",
@@ -226,18 +200,8 @@ export function ProviderForm({
         onManageAuthAccounts={onManageAuthAccounts}
         copilotApiFormat={format}
         onCopilotApiFormatChange={setFormat}
-        codexChatReasoning={reasoning}
-        onCodexChatReasoningChange={setReasoning}
-        promptCacheRouting={cacheRouting}
-        onPromptCacheRoutingChange={setCacheRouting}
         catalogModels={catalog}
         onCatalogModelsChange={setCatalog}
-        customUserAgent={userAgent}
-        onCustomUserAgentChange={setUserAgent}
-        localProxyHeadersOverride={headers}
-        onLocalProxyHeadersOverrideChange={setHeaders}
-        localProxyBodyOverride={body}
-        onLocalProxyBodyOverrideChange={setBody}
       />
       <ProviderAdvancedConfig
         pricingConfig={pricing}
