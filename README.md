@@ -30,6 +30,12 @@ If automatic detection cannot find your `config.toml`, enter its full path or us
 returns to automatic selection. Atlas remembers the last valid manual selection
 for previews only. It does not change Codex's configuration directory or write the file.
 
+Optional **Recommended settings** checkboxes remove fixed context-window,
+auto-compaction, and reasoning overrides from the proposed TOML. Choose the
+defaults you want, review the diff, then use **Copy proposed TOML**.
+Context and compaction can follow model defaults as described in the
+[official Codex configuration sample](https://learn.chatgpt.com/docs/config-file/config-sample).
+
 When upgrading from an older CC Switch build, that older app may restore its saved
 Codex configuration when it exits. Review the Atlas connection preview afterwards.
 The MSI is unsigned, installs per user, and supports replacing the provisional

@@ -105,6 +105,39 @@ const preview = {
   openaiDiff: unifiedDiff(openaiLines, 9),
   openaiLines,
 };
+const recommendationControls = [
+  ["modelContext", "Use model context defaults"],
+  ["autoCompaction", "Use automatic compaction defaults"],
+  ["reasoning", "Use Codex default reasoning"],
+] as const;
+const automaticCompaction = {
+  modelContext: false,
+  autoCompaction: true,
+  reasoning: false,
+};
+const withoutFixedCompaction = (lines: ConfigDiffLine[]): ConfigDiffLine[] =>
+  lines.map((line) =>
+    line.oldLineNumber === 2
+      ? removed(2)
+      : {
+          ...line,
+          newLineNumber:
+            line.newLineNumber === null
+              ? null
+              : line.newLineNumber - (line.newLineNumber > 2 ? 1 : 0),
+        },
+  );
+const recommendedCopilotLines = withoutFixedCompaction(copilotLines);
+const recommendedOpenaiLines = withoutFixedCompaction(openaiLines);
+const recommendedPreview = {
+  ...preview,
+  copilotConfig: proposedText(recommendedCopilotLines),
+  copilotDiff: unifiedDiff(recommendedCopilotLines, 9),
+  copilotLines: recommendedCopilotLines,
+  openaiConfig: proposedText(recommendedOpenaiLines),
+  openaiDiff: unifiedDiff(recommendedOpenaiLines, 8),
+  openaiLines: recommendedOpenaiLines,
+};
 const profilePreview = {
   ...preview,
   configPath: profilePath,
@@ -168,6 +201,14 @@ describe("read-only Codex connection suggestions", () => {
     expect(
       await screen.findByRole("button", { name: "Side by side" }),
     ).toHaveAttribute("aria-pressed", "true");
+    const recommendations = screen.getByRole("group", {
+      name: "Recommended settings",
+    });
+    for (const [, name] of recommendationControls) {
+      expect(
+        within(recommendations).getByRole("checkbox", { name }),
+      ).not.toBeChecked();
+    }
     const headings = within(comparison()).getAllByRole("columnheader");
     expect(headings[0]).toHaveTextContent("Current TOML");
     expect(headings[1]).toHaveTextContent("Proposed TOML");
@@ -591,6 +632,143 @@ describe("read-only Codex connection suggestions", () => {
     fireEvent.click(copyProposal());
     await waitFor(() =>
       expect(mocks.copy).toHaveBeenCalledWith(preview.copilotConfig),
+    );
+  });
+
+  it("uses selected recommendations for both targets and copies the matching proposal and diff", async () => {
+    mocks.invoke.mockImplementation((_command, { recommendations }) =>
+      Promise.resolve(
+        recommendations?.autoCompaction ? recommendedPreview : preview,
+      ),
+    );
+    renderPanel();
+    await screen.findByRole("region", { name: "Configuration diff" });
+    const options = {
+      modelContext: false,
+      autoCompaction: false,
+      reasoning: false,
+    };
+    for (const [key, name] of recommendationControls) {
+      fireEvent.click(screen.getByRole("checkbox", { name }));
+      options[key] = true;
+      await waitFor(() =>
+        expect(mocks.invoke).toHaveBeenLastCalledWith(
+          "get_codex_setup_suggestion",
+          { configPath: null, recommendations: { ...options } },
+        ),
+      );
+    }
+    await waitFor(() => expect(copyProposal()).toBeEnabled());
+    const compactCells = rowFor(currentLines[1]).getAllByRole("cell");
+    expect(compactCells[0]).toHaveTextContent(currentLines[1]);
+    expect(compactCells[1]).toHaveTextContent(/^$/);
+
+    for (const [target, config, diff] of [
+      [
+        "Connect through Copilot",
+        recommendedPreview.copilotConfig,
+        recommendedPreview.copilotDiff,
+      ],
+      [
+        "Return to OpenAI sign-in",
+        recommendedPreview.openaiConfig,
+        recommendedPreview.openaiDiff,
+      ],
+    ]) {
+      fireEvent.click(screen.getByRole("button", { name: target }));
+      fireEvent.click(screen.getByRole("button", { name: "Inline" }));
+      expect(comparison()).toHaveTextContent(currentLines[1]);
+      for (const [, name] of recommendationControls) {
+        expect(screen.getByRole("checkbox", { name })).toBeChecked();
+      }
+      fireEvent.click(screen.getByRole("button", { name: "Proposed TOML" }));
+      expect(screen.getByLabelText("Proposed TOML")).not.toHaveTextContent(
+        currentLines[1],
+      );
+      fireEvent.click(copyProposal());
+      await waitFor(() => expect(mocks.copy).toHaveBeenLastCalledWith(config));
+      fireEvent.click(screen.getByRole("button", { name: "Copy diff" }));
+      await waitFor(() => expect(mocks.copy).toHaveBeenLastCalledWith(diff));
+    }
+
+    for (const [, name] of recommendationControls) {
+      fireEvent.click(screen.getByRole("checkbox", { name }));
+    }
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenLastCalledWith(
+        "get_codex_setup_suggestion",
+        { configPath: null },
+      ),
+    );
+    await waitFor(() => expect(copyProposal()).toBeEnabled());
+    expect(screen.getByLabelText("Proposed TOML")).toHaveTextContent(
+      currentLines[1],
+    );
+    fireEvent.click(copyProposal());
+    await waitFor(() =>
+      expect(mocks.copy).toHaveBeenLastCalledWith(preview.openaiConfig),
+    );
+  });
+
+  it("cannot copy a stale recommendation while pending or after a late response", async () => {
+    let resolve!: (value: typeof recommendedPreview) => void;
+    mocks.invoke.mockImplementation((_command, { recommendations }) =>
+      recommendations?.autoCompaction
+        ? new Promise<typeof recommendedPreview>((done) => {
+            resolve = done;
+          })
+        : Promise.resolve(preview),
+    );
+    renderPanel();
+    await screen.findByRole("region", { name: "Configuration diff" });
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Use automatic compaction defaults",
+    });
+    fireEvent.click(checkbox);
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenLastCalledWith(
+        "get_codex_setup_suggestion",
+        { configPath: null, recommendations: automaticCompaction },
+      ),
+    );
+    expectNoPreview();
+    expect(mocks.copy).not.toHaveBeenCalled();
+
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(copyProposal()).toBeEnabled());
+    await act(async () => resolve(recommendedPreview));
+    expect(checkbox).not.toBeChecked();
+    const compactLine = within(comparison()).getAllByText(currentLines[1])[0];
+    const cells = within(compactLine.closest("tr")!).getAllByRole("cell");
+    expect(cells[0]).toHaveTextContent(currentLines[1]);
+    expect(cells[1]).toHaveTextContent(currentLines[1]);
+    fireEvent.click(copyProposal());
+    await waitFor(() =>
+      expect(mocks.copy).toHaveBeenLastCalledWith(preview.copilotConfig),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy diff" }));
+    await waitFor(() =>
+      expect(mocks.copy).toHaveBeenLastCalledWith(preview.copilotDiff),
+    );
+  });
+
+  it("keeps recommendation choices local to the open preview", async () => {
+    const first = renderPanel();
+    await screen.findByRole("region", { name: "Configuration diff" });
+    for (const [, name] of recommendationControls) {
+      fireEvent.click(screen.getByRole("checkbox", { name }));
+    }
+    await waitFor(() => expect(copyProposal()).toBeEnabled());
+    first.unmount();
+
+    renderPanel();
+    await screen.findByRole("region", { name: "Configuration diff" });
+    for (const [, name] of recommendationControls) {
+      expect(screen.getByRole("checkbox", { name })).not.toBeChecked();
+    }
+    expect(mocks.invoke).toHaveBeenLastCalledWith(
+      "get_codex_setup_suggestion",
+      { configPath: null },
     );
   });
 });

@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Copy, FolderSearch, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { copyText } from "@/lib/clipboard";
@@ -12,6 +13,23 @@ import { ConfigDiff, type ConfigDiffLine } from "./ConfigDiff";
 
 const PREVIEW_PATH_KEY = "cc-switch-codex-preview-path";
 const normalizePath = (path: string) => path.trim().replace(/^"(.*)"$/, "$1");
+const RECOMMENDATIONS = [
+  {
+    key: "modelContext",
+    label: "Use model context defaults",
+    setting: "model_context_window",
+  },
+  {
+    key: "autoCompaction",
+    label: "Use automatic compaction defaults",
+    setting: "model_auto_compact_token_limit",
+  },
+  {
+    key: "reasoning",
+    label: "Use Codex default reasoning",
+    setting: "model_reasoning_effort",
+  },
+] as const;
 
 function readSavedPath(): string | null {
   try {
@@ -43,11 +61,19 @@ export function CodexSetupSuggestion() {
     readSavedPath,
   );
   const [draftPath, setDraftPath] = useState<string | null>(null);
+  const [recommendations, setRecommendations] = useState({
+    modelContext: false,
+    autoCompaction: false,
+    reasoning: false,
+  });
   const { data, error, isFetching, refetch } = useQuery({
-    queryKey: ["codex-setup-suggestion", selectedPath],
+    queryKey: ["codex-setup-suggestion", selectedPath, recommendations],
     queryFn: () =>
       invoke<SetupSuggestion>("get_codex_setup_suggestion", {
         configPath: selectedPath,
+        ...(Object.values(recommendations).some(Boolean)
+          ? { recommendations }
+          : {}),
       }),
     staleTime: 0,
     retry: false,
@@ -195,6 +221,39 @@ export function CodexSetupSuggestion() {
           {String(error)}
         </p>
       )}
+      <fieldset className="space-y-3 rounded-xl border border-border p-4">
+        <legend className="px-1 text-sm font-medium">
+          Recommended settings
+        </legend>
+        <div className="flex flex-wrap gap-x-6 gap-y-3">
+          {RECOMMENDATIONS.map(({ key, label, setting }) => (
+            <div key={key} className="flex items-center gap-2">
+              <Checkbox
+                id={`recommend-${key}`}
+                checked={recommendations[key]}
+                onCheckedChange={(checked) =>
+                  setRecommendations((previous) => ({
+                    ...previous,
+                    [key]: checked,
+                  }))
+                }
+                aria-describedby="recommendations-hint"
+                title={`Remove ${setting} from the proposed TOML`}
+              />
+              <Label
+                htmlFor={`recommend-${key}`}
+                title={`Remove ${setting} from the proposed TOML`}
+              >
+                {label}
+              </Label>
+            </div>
+          ))}
+        </div>
+        <p id="recommendations-hint" className="text-xs text-muted-foreground">
+          Optional. Checked choices remove the matching global overrides from
+          the proposal so Codex can use its defaults.
+        </p>
+      </fieldset>
       {data && !error && !isPathEdited && (
         <>
           {!data.configExists && (
@@ -210,7 +269,7 @@ export function CodexSetupSuggestion() {
           </div>
           <p className="text-sm text-muted-foreground">
             {target === "copilot"
-              ? `Update the active proxy connection to ${data.endpoint}. Conflicting proxy authentication and catalog settings are replaced; other preferences are preserved.`
+              ? `Update the active proxy connection to ${data.endpoint}. Review the connection changes and selected recommendations below.`
               : "Use Codex's built-in OpenAI provider and model catalog. After applying, sign in and choose a model in Codex if needed. Your authentication files remain untouched."}
           </p>
           <div className="overflow-hidden rounded-xl border">
