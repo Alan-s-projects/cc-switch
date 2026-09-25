@@ -413,6 +413,7 @@ mod tests {
             model_picker_enabled: true,
             context_window: None,
             supported_endpoints: Vec::new(),
+            ..Default::default()
         }
     }
 

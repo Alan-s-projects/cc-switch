@@ -24,6 +24,7 @@ tauri-build = { version = "2.4.0", features = [] }
 
 [dependencies]
 serde_json = { version = "1.0", features = ["preserve_order"] }
+similar = "2.7"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
@@ -33,7 +34,6 @@ tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
-tauri-plugin-deep-link = "2"
 tauri-plugin-window-state = "2"
 dirs = "5.0"
 toml = "0.8"
@@ -62,7 +62,6 @@ rustls = "0.23"
 webpki-roots = "0.26"
 rustls-native-certs = "0.8"
 regex = "1.10"
-rquickjs = { version = "0.8", features = ["array-buffer", "classes"] }
 thiserror = "2.0"
 anyhow = "1.0"
 zip = "2.2"

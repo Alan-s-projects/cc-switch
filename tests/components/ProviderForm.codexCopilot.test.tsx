@@ -5,7 +5,6 @@ import {
   ProviderForm,
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
-import { codexProviderPresets } from "@/config/codexProviderPresets";
 import type { CodexCopilotApiFormat, ProviderMeta } from "@/types";
 import { createTestQueryClient } from "../utils/testQueryClient";
 
@@ -18,58 +17,25 @@ vi.mock("@/components/providers/forms/hooks/useCopilotAuth", () => ({
 vi.mock("@/components/providers/forms/ProviderAdvancedConfig", () => ({
   ProviderAdvancedConfig: () => null,
 }));
-vi.mock("@/components/providers/forms/hooks", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/components/providers/forms/hooks")>();
-  const commonConfig = () => ({
-    useCommonConfig: false,
-    commonConfigSnippet: "",
-    commonConfigError: null,
-    isLoading: false,
-    isExtracting: false,
-    handleCommonConfigToggle: vi.fn(),
-    handleCommonConfigSnippetChange: vi.fn(),
-    handleExtract: vi.fn(),
-    clearCommonConfigError: vi.fn(),
-  });
-  return {
-    ...actual,
-    useCopilotAuth: () => ({
-      isAuthenticated: true,
-      isStatusSuccess: true,
-      isStatusError: false,
-      defaultAccountId: "copilot-account",
-      accounts: [
-        {
-          id: "copilot-account",
-          login: "copilot-user",
-          is_default: true,
-        },
-      ],
-    }),
-    useCodexOauth: () => ({ isAuthenticated: false, accounts: [] }),
-    useXaiOauth: () => ({ isAuthenticated: false, accounts: [] }),
-    useCommonConfigSnippet: commonConfig,
-    useCodexCommonConfig: commonConfig,
-    useGeminiCommonConfig: commonConfig,
-  };
-});
-vi.mock("@/lib/query", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/query")>();
-  return {
-    ...actual,
-    useSettingsQuery: () => ({
-      data: { commonConfigConfirmed: true },
-    }),
-  };
-});
+const config =
+  'model_provider = "copilot"\n[model_providers.copilot]\nbase_url = "https://api.githubcopilot.com"\nwire_api = "responses"\n';
+const models = [
+  {
+    model: "gpt-6-astra",
+    contextWindow: 1048576,
+    supportsParallelToolCalls: true,
+    inputModalities: ["text", "image"],
+  },
+  {
+    model: "gpt-6-luna",
+    contextWindow: 872000,
+    supportsParallelToolCalls: true,
+    inputModalities: ["text", "image"],
+  },
+];
 
 function renderForm(meta?: ProviderMeta) {
   const onSubmit = vi.fn<(values: ProviderFormValues) => void>();
-  const preset = codexProviderPresets.find(
-    (item) => item.providerType === "github_copilot",
-  );
-  if (!preset) throw new Error("Missing Codex Copilot preset");
   render(
     <QueryClientProvider client={createTestQueryClient()}>
       <ProviderForm
@@ -77,16 +43,12 @@ function renderForm(meta?: ProviderMeta) {
         submitLabel="save"
         onSubmit={onSubmit}
         onCancel={vi.fn()}
-        initialData={
-          meta
-            ? {
-                name: "GitHub Copilot",
-                category: "third_party",
-                settingsConfig: { auth: {}, config: preset.config },
-                meta,
-              }
-            : undefined
-        }
+        initialData={{
+          name: "GitHub Copilot",
+          category: "third_party",
+          settingsConfig: { auth: {}, config, modelCatalog: { models } },
+          meta: meta ?? { providerType: "github_copilot" },
+        }}
       />
     </QueryClientProvider>,
   );
@@ -94,13 +56,13 @@ function renderForm(meta?: ProviderMeta) {
 }
 
 function formatControl() {
-  return screen.getByRole("combobox", { name: "上游格式" });
+  return screen.getByRole("combobox", { name: "Upstream format" });
 }
 
 const formatLabels = {
-  auto: "codexConfig.upstreamFormatAuto",
-  openai_chat: "Chat Completions（需开启路由）",
-  openai_responses: "codexConfig.upstreamFormatCopilotResponses",
+  auto: "Automatic (recommended)",
+  openai_chat: "Chat Completions",
+  openai_responses: "Responses",
 };
 
 async function selectFormat(format: CodexCopilotApiFormat) {
@@ -142,17 +104,13 @@ describe("Codex Copilot provider form", () => {
     expect(
       screen.queryByText("codexConfig.writeCommonConfig"),
     ).not.toBeInTheDocument();
-    for (const model of [
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-    ]) {
-      expect(screen.getByDisplayValue(model)).toBeVisible();
+    expect(screen.getByDisplayValue("gpt-6-luna")).toBeVisible();
+    expect(screen.getByDisplayValue("1048576")).toBeVisible();
+    for (const label of ["Provider name", "Notes", "Website", "Icon"]) {
+      expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
     }
-    expect(screen.getAllByDisplayValue("1048576")).toHaveLength(5);
     expect(formatControl()).toHaveTextContent(formatLabels.auto);
-    expect(screen.getByText("模型映射")).toBeVisible();
+    expect(screen.getByText("Model catalog")).toBeVisible();
   });
 
   it.each<CodexCopilotApiFormat>(["auto", "openai_chat", "openai_responses"])(
@@ -160,7 +118,7 @@ describe("Codex Copilot provider form", () => {
     async (format) => {
       const onSubmit = renderForm();
       await selectFormat(format);
-      expect(screen.getByText("模型映射")).toBeVisible();
+      expect(screen.getByText("Model catalog")).toBeVisible();
       fireEvent.click(screen.getByRole("button", { name: "save" }));
       await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
       const saved = onSubmit.mock.calls[0][0];
@@ -179,7 +137,7 @@ describe("Codex Copilot provider form", () => {
   it("keeps legacy cards automatic and shows mapping even with an empty catalog", () => {
     renderForm({ providerType: "github_copilot", apiFormat: "openai_chat" });
     expect(formatControl()).toHaveTextContent(formatLabels.auto);
-    expect(screen.getByText("模型映射")).toBeVisible();
+    expect(screen.getByText("Model catalog")).toBeVisible();
   });
 
   it("does not offer preset switching while editing an existing Copilot card", () => {
@@ -223,6 +181,6 @@ describe("Codex Copilot provider form", () => {
       screen.queryByRole("button", { name: /DeepSeek/ }),
     ).not.toBeInTheDocument();
     expect(formatControl()).toHaveTextContent(formatLabels.openai_chat);
-    expect(screen.getByText("模型映射")).toBeVisible();
+    expect(screen.getByText("Model catalog")).toBeVisible();
   });
 });

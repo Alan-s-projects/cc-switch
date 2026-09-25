@@ -1,16 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use cc_switch_lib::{update_settings, AppSettings, AppState, Database, MultiAppConfig};
+use cc_switch_lib::{update_settings, AppSettings, AppState, Database};
 
 /// 为测试设置隔离的 HOME 目录，避免污染真实用户数据。
 pub fn ensure_test_home() -> &'static Path {
     static HOME: OnceLock<PathBuf> = OnceLock::new();
     HOME.get_or_init(|| {
-        let base = std::env::temp_dir().join("cc-switch-test-home");
-        if base.exists() {
-            let _ = std::fs::remove_dir_all(&base);
-        }
+        let base =
+            std::env::temp_dir().join(format!("cc-switch-atlas-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&base).expect("create test home");
         // Windows 上 `dirs::home_dir()` 不受 HOME/USERPROFILE 影响（走 Known Folder API），
         // 用 CC_SWITCH_TEST_HOME 显式覆盖，以确保测试不会污染真实用户目录。
@@ -23,6 +21,9 @@ pub fn ensure_test_home() -> &'static Path {
         // 涉及 Claude Desktop 供应商切换的测试会写进开发者真实的桌面版配置。
         #[cfg(windows)]
         std::env::set_var("LOCALAPPDATA", base.join("AppData").join("Local"));
+        let app_dir = base.join(".cc-switch");
+        std::fs::create_dir_all(&app_dir).expect("create isolated app data");
+        std::fs::write(app_dir.join("cc-switch.db"), []).expect("disable legacy home fallback");
         base
     })
     .as_path()
@@ -43,6 +44,10 @@ pub fn reset_test_fs() {
     ] {
         let path = home.join(sub);
         if path.exists() {
+            assert!(path
+                .canonicalize()
+                .unwrap()
+                .starts_with(home.canonicalize().unwrap()));
             if let Err(err) = std::fs::remove_dir_all(&path) {
                 eprintln!("failed to clean {}: {}", path.display(), err);
             }
@@ -53,17 +58,12 @@ pub fn reset_test_fs() {
         let _ = std::fs::remove_file(&claude_json);
     }
 
+    let app_data = home.join(".cc-switch");
+    std::fs::create_dir_all(&app_data).expect("create isolated app data");
+    std::fs::write(app_data.join("cc-switch.db"), []).expect("disable legacy home fallback");
+
     // 重置内存中的设置缓存，确保测试环境不受上一次调用影响
     let _ = update_settings(AppSettings::default());
-}
-
-#[allow(dead_code)]
-pub fn enable_codex_official_auth_preservation() {
-    update_settings(AppSettings {
-        preserve_codex_official_auth_on_switch: true,
-        ..Default::default()
-    })
-    .expect("enable Codex official auth preservation");
 }
 
 /// 全局互斥锁，避免多测试并发写入相同的 HOME 目录。
@@ -76,15 +76,5 @@ pub fn test_mutex() -> &'static Mutex<()> {
 #[allow(dead_code)]
 pub fn create_test_state() -> Result<AppState, Box<dyn std::error::Error>> {
     let db = Arc::new(Database::init()?);
-    Ok(AppState::new(db))
-}
-
-/// 创建测试用的 AppState，并从 MultiAppConfig 迁移数据
-#[allow(dead_code)]
-pub fn create_test_state_with_config(
-    config: &MultiAppConfig,
-) -> Result<AppState, Box<dyn std::error::Error>> {
-    let db = Arc::new(Database::init()?);
-    db.migrate_from_json(config)?;
     Ok(AppState::new(db))
 }

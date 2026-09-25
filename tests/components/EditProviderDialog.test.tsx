@@ -78,7 +78,7 @@ describe("Copilot provider editing", () => {
     fireEvent.click(screen.getByRole("button", { name: "save" }));
     await waitFor(() =>
       expect(submit).toHaveBeenCalledWith({
-        provider: { ...provider, name: "Renamed", notes: undefined },
+        provider,
       }),
     );
     expect(mocks.readLive).not.toHaveBeenCalled();

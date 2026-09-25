@@ -25,7 +25,6 @@ pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError>
             failures.push(format!("runtime log level: {error}"));
         }
     }
-    app_state.usage_cache.invalidate_all();
 
     if failures.is_empty() {
         Ok(())

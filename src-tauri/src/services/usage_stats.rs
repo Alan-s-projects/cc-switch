@@ -13,7 +13,6 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::LazyLock;
 
 /// 使用量汇总
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,8 +221,6 @@ fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
     )
 }
 
-pub(crate) const SESSION_PROXY_DEDUP_WINDOW_SECONDS: i64 = 10 * 60;
-
 /// SQL 片段：把指定别名的 `data_source` 包成 COALESCE，NULL 视作 'proxy'。
 ///
 /// 防御 schema v9 之前可能写入的 NULL data_source 行（见
@@ -231,12 +228,6 @@ pub(crate) const SESSION_PROXY_DEDUP_WINDOW_SECONDS: i64 = 10 * 60;
 /// 都应通过此 helper 生成片段，避免遗漏。
 fn data_source_expr(log_alias: &str) -> String {
     format!("COALESCE({log_alias}.data_source, 'proxy')")
-}
-
-fn dedup_app_type_match_sql(left: &str, right: &str) -> String {
-    format!(
-        "{left} IN ({right}, CASE WHEN {right} = 'claude' THEN 'claude-desktop' ELSE {right} END)"
-    )
 }
 
 /// SQL 标量表达式：把 Claude Desktop 网关的 `claude-desktop` app_type 在“展示口径”
@@ -305,206 +296,15 @@ fn push_provider_model_filters(
 }
 
 pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
-    let data_source = data_source_expr(log_alias);
-    let proxy_data_source = data_source_expr("proxy_dedup");
-    let app_type_match =
-        dedup_app_type_match_sql("proxy_dedup.app_type", &format!("{log_alias}.app_type"));
-    format!(
-        "NOT (
-            {data_source} IN ('session_log', 'codex_session', 'gemini_session', 'opencode_session')
-            AND EXISTS (
-                SELECT 1
-                FROM proxy_request_logs proxy_dedup
-                WHERE {proxy_data_source} = 'proxy'
-                  AND {app_type_match}
-                  AND proxy_dedup.status_code >= 200
-                  AND proxy_dedup.status_code < 300
-                  AND proxy_dedup.input_tokens = {log_alias}.input_tokens
-                  AND proxy_dedup.output_tokens = {log_alias}.output_tokens
-                  AND proxy_dedup.cache_read_tokens = {log_alias}.cache_read_tokens
-                  AND (
-                      proxy_dedup.cache_creation_tokens = {log_alias}.cache_creation_tokens
-                      OR (
-                          {log_alias}.cache_creation_tokens = 0
-                          AND {data_source} IN ('codex_session', 'gemini_session', 'opencode_session')
-                      )
-                  )
-                  AND proxy_dedup.created_at BETWEEN
-                      {log_alias}.created_at - {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
-                      AND {log_alias}.created_at + {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
-                  AND (
-                      LOWER(proxy_dedup.model) = LOWER({log_alias}.model)
-                      OR LOWER(proxy_dedup.model) = 'unknown'
-                      OR LOWER({log_alias}.model) = 'unknown'
-                  )
-            )
-        )"
-    )
+    // Imported conversation totals are not requests handled by Atlas. Keep the
+    // historical rows on disk, but never mix them into proxy counts or cache rates.
+    format!("{} = 'proxy'", data_source_expr(log_alias))
 }
 
-/// 跨源去重指纹键。
-///
-/// `cache_creation_tokens`：Codex/Gemini session 日志不暴露该字段，调用方传 0
-/// 表示"未知"，匹配器会放行 proxy 侧任意 cache_creation_tokens 值。
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DedupKey<'a> {
-    pub app_type: &'a str,
-    pub model: &'a str,
-    pub input_tokens: u32,
-    pub output_tokens: u32,
-    pub cache_read_tokens: u32,
-    pub cache_creation_tokens: u32,
-    pub created_at: i64,
-}
-
-/// session 日志写入前的统一去重判定。
-///
-/// 命中以下任一条件即跳过插入：① `request_id` 已存在；② 时间窗口内存在
-/// 与 `key` 匹配的 proxy 日志（指纹去重）。
-pub(crate) fn should_skip_session_insert(
-    conn: &Connection,
-    request_id: &str,
-    key: &DedupKey,
-) -> Result<bool, AppError> {
-    if proxy_request_id_exists(conn, request_id)? {
-        return Ok(true);
-    }
-    has_matching_proxy_usage_log(conn, key)
-}
-
-fn proxy_request_id_exists(conn: &Connection, request_id: &str) -> Result<bool, AppError> {
-    conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM proxy_request_logs WHERE request_id = ?1)")
-        .and_then(|mut stmt| stmt.query_row(params![request_id], |row| row.get::<_, bool>(0)))
-        .map_err(|e| AppError::Database(format!("查询 request_id 失败: {e}")))
-}
-
-// 会话重导每个 token 事件都要跑一次这条查询；SQL 文本静态化让
-// prepare_cached 稳定命中，也省掉每行的 format! 分配。
-static MATCHING_PROXY_USAGE_LOG_SQL: LazyLock<String> = LazyLock::new(|| {
-    let l_data_source = data_source_expr("l");
-    let app_type_match = dedup_app_type_match_sql("l.app_type", "?1");
-    format!(
-        "SELECT EXISTS (
-            SELECT 1
-            FROM proxy_request_logs l
-            WHERE {l_data_source} = 'proxy'
-              AND {app_type_match}
-              AND l.status_code >= 200
-              AND l.status_code < 300
-              AND l.input_tokens = ?3
-              AND l.output_tokens = ?4
-              AND l.cache_read_tokens = ?5
-              AND (l.cache_creation_tokens = ?6 OR ?9 = 1)
-              AND l.created_at BETWEEN ?7 - ?8 AND ?7 + ?8
-              AND (
-                  LOWER(l.model) = LOWER(?2)
-                  OR LOWER(l.model) = 'unknown'
-                  OR LOWER(?2) = 'unknown'
-              )
-        )"
-    )
-});
-
-pub(crate) fn has_matching_proxy_usage_log(
-    conn: &Connection,
-    key: &DedupKey,
-) -> Result<bool, AppError> {
-    let allow_missing_cache_creation =
-        matches!(key.app_type, "codex" | "gemini" | "opencode") && key.cache_creation_tokens == 0;
-
-    conn.prepare_cached(&MATCHING_PROXY_USAGE_LOG_SQL)
-        .and_then(|mut stmt| {
-            stmt.query_row(
-                params![
-                    key.app_type,
-                    key.model,
-                    key.input_tokens as i64,
-                    key.output_tokens as i64,
-                    key.cache_read_tokens as i64,
-                    key.cache_creation_tokens as i64,
-                    key.created_at,
-                    SESSION_PROXY_DEDUP_WINDOW_SECONDS,
-                    allow_missing_cache_creation as i64,
-                ],
-                |row| row.get::<_, bool>(0),
-            )
-        })
-        .map_err(|e| AppError::Database(format!("查询重复代理用量日志失败: {e}")))
-}
-
-/// grokbuild 会话导入的接管活动守卫：给定时刻 ±窗口内存在任何 grokbuild
-/// 代理直录行，即认为当时处于代理接管态，会话事件应整体跳过——同一请求
-/// 已由代理逐请求记账，会话侧再入账必双算。
-///
-/// 不复用 [`has_matching_proxy_usage_log`] 的指纹匹配：Grok 会话事件是
-/// 逐轮聚合值，与代理逐请求行的 token 值结构性不相等，指纹永不命中。
-/// 这里按"接管态检测"而非"行匹配"设计，故不过滤 status_code——失败的
-/// 代理请求同样证明流量正走代理。
-///
-/// 已知局限（有意取舍，方向保守只漏不双）：窗口不含 session 维度，任一
-/// grokbuild 代理行会给 ±窗口内的全部会话事件投下阴影——接管/官方两态在
-/// 十分钟内交替或并行使用时，官方侧轮次会被跳过（漏记而非双算）。
-pub(crate) fn has_recent_grokbuild_proxy_activity(
-    conn: &Connection,
-    created_at: i64,
-) -> Result<bool, AppError> {
-    let l_data_source = data_source_expr("l");
-    let sql = format!(
-        "SELECT EXISTS (
-            SELECT 1
-            FROM proxy_request_logs l
-            WHERE {l_data_source} = 'proxy'
-              AND l.app_type = 'grokbuild'
-              AND l.created_at BETWEEN ?1 - ?2 AND ?1 + ?2
-        )"
-    );
-    conn.query_row(
-        &sql,
-        params![created_at, SESSION_PROXY_DEDUP_WINDOW_SECONDS],
-        |row| row.get::<_, bool>(0),
-    )
-    .map_err(|e| AppError::Database(format!("查询 Grok 接管活动失败: {e}")))
-}
-
-static SUSPECTED_CODEX_DUPLICATE_SQL: LazyLock<String> = LazyLock::new(|| {
-    let data_source = data_source_expr("l");
-    format!(
-        "SELECT EXISTS (
-            SELECT 1
-            FROM proxy_request_logs l
-            WHERE l.app_type = 'codex'
-              AND {data_source} = 'codex_session'
-              AND l.request_id <> ?1
-              AND LOWER(l.model) = LOWER(?2)
-              AND l.input_tokens = ?3
-              AND l.output_tokens = ?4
-              AND l.cache_read_tokens = ?5
-              AND l.created_at BETWEEN ?6 - ?7 AND ?6 + ?7
-        )"
-    )
-});
-
-pub(crate) fn has_suspected_codex_session_duplicate(
-    conn: &Connection,
-    request_id: &str,
-    key: &DedupKey,
-) -> Result<bool, AppError> {
-    conn.prepare_cached(&SUSPECTED_CODEX_DUPLICATE_SQL)
-        .and_then(|mut stmt| {
-            stmt.query_row(
-                params![
-                    request_id,
-                    key.model,
-                    key.input_tokens as i64,
-                    key.output_tokens as i64,
-                    key.cache_read_tokens as i64,
-                    key.created_at,
-                    SESSION_PROXY_DEDUP_WINDOW_SECONDS,
-                ],
-                |row| row.get::<_, bool>(0),
-            )
-        })
-        .map_err(|error| AppError::Database(format!("查询疑似重复 Codex 会话用量失败: {error}")))
+fn effective_usage_rollup_filter(alias: &str) -> String {
+    // Legacy rollups predate a data_source column. Session importers used these
+    // reserved provider IDs; real proxy rows retain their actual provider ID.
+    format!("{alias}.provider_id NOT IN ('_session', '_codex_session', '_gemini_session', '_opencode_session', '_grok_session', '_mcode_session', '_pi_session')")
 }
 
 #[derive(Debug, Clone, Default)]
@@ -646,7 +446,7 @@ impl Database {
         };
 
         // Only include rolled-up rows for full local days that are fully covered by the range.
-        let mut rollup_conditions: Vec<String> = Vec::new();
+        let mut rollup_conditions = vec![effective_usage_rollup_filter("r")];
         let mut rollup_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         let rollup_bounds = compute_rollup_date_bounds(start_date, end_date)?;
 
@@ -795,7 +595,7 @@ impl Database {
         };
 
         let rollup_bounds = compute_rollup_date_bounds(start_date, end_date)?;
-        let mut rollup_conditions: Vec<String> = Vec::new();
+        let mut rollup_conditions = vec![effective_usage_rollup_filter("r")];
         let mut rollup_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         push_rollup_date_filters(
             &mut rollup_conditions,
@@ -1143,7 +943,7 @@ impl Database {
         }
 
         let rollup_bounds = compute_rollup_date_bounds(Some(start_ts), Some(end_ts))?;
-        let mut rollup_conditions = Vec::new();
+        let mut rollup_conditions = vec![effective_usage_rollup_filter("r")];
         let mut rollup_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         push_rollup_date_filters(
             &mut rollup_conditions,
@@ -1301,7 +1101,7 @@ impl Database {
             format!("WHERE {}", detail_conditions.join(" AND "))
         };
 
-        let mut rollup_conditions = Vec::new();
+        let mut rollup_conditions = vec![effective_usage_rollup_filter("r")];
         let mut rollup_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         let rollup_bounds = compute_rollup_date_bounds(start_date, end_date)?;
         push_rollup_date_filters(
@@ -1450,7 +1250,7 @@ impl Database {
             String::new()
         };
 
-        let mut rollup_conditions = Vec::new();
+        let mut rollup_conditions = vec![effective_usage_rollup_filter("r")];
         let mut rollup_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         let rollup_bounds = compute_rollup_date_bounds(start_date, end_date)?;
         push_rollup_date_filters(
@@ -2368,6 +2168,61 @@ fn should_try_pricing_prefix_match(model_id: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn atlas_usage_excludes_imported_details_and_rollups_without_erasing_them(
+    ) -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let now = chrono::Utc::now().timestamp();
+        let yesterday = (chrono::Local::now().date_naive() - chrono::Days::new(1)).to_string();
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO proxy_request_logs
+                 (request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                  cache_read_tokens, cache_creation_tokens, input_token_semantics, status_code, latency_ms, created_at, data_source)
+                 VALUES ('atlas-live', 'copilot', 'codex', 'gpt-6-astra', 1000, 20, 800, 100, 1, 200, 100, ?1, 'proxy'),
+                        ('old-import', '_codex_session', 'codex', 'old-model', 100000, 5000, 90000, 0, 0, 200, 100, ?1, 'codex_session')",
+                [now],
+            )?;
+            conn.execute(
+                "INSERT INTO usage_daily_rollups (date, app_type, provider_id, model, request_count, success_count, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_cost_usd, avg_latency_ms)
+                 VALUES (?1, 'codex', '_codex_session', 'old-model', 999, 999, 5000000, 5000, 4000000, 0, '100', 100)",
+                [&yesterday],
+            )?;
+        }
+        let summary = db.get_usage_summary(None, None, Some("codex"), None, None)?;
+        assert_eq!(summary.total_requests, 1);
+        assert_eq!(summary.total_input_tokens, 100);
+        assert_eq!(summary.real_total_tokens, 1020);
+        assert!((summary.cache_hit_rate - 0.8).abs() < 0.0001);
+        let models = db.get_model_stats(None, None, Some("codex"), None, None)?;
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].model, "gpt-6-astra");
+        let providers = db.get_provider_stats(None, None, Some("codex"), None, None)?;
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].request_count, 1);
+        let logs = db.get_request_logs(
+            &LogFilters {
+                app_type: Some("codex".into()),
+                ..Default::default()
+            },
+            0,
+            20,
+        )?;
+        assert_eq!(logs.total, 1);
+        let conn = lock_conn!(db.conn);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'codex_session'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?,
+            1
+        );
+        assert_eq!(conn.query_row("SELECT request_count FROM usage_daily_rollups WHERE provider_id = '_codex_session'", [], |row| row.get::<_, i64>(0))?, 999);
+        Ok(())
+    }
+
     fn local_ts(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> i64 {
         match Local.with_ymd_and_hms(year, month, day, hour, minute, second) {
             chrono::LocalResult::Single(dt) => dt.timestamp(),
@@ -2453,101 +2308,6 @@ mod tests {
         let sql = format!("SELECT COUNT(*) FROM proxy_request_logs l WHERE {filter}");
         let count: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
         assert_eq!(count, 1);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_matching_proxy_log_treats_legacy_null_data_source_as_proxy() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        create_legacy_nullable_logs_table(&conn)?;
-        conn.execute(
-            "INSERT INTO proxy_request_logs (
-                request_id, app_type, model, input_tokens, output_tokens,
-                cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
-            ) VALUES ('legacy-proxy', 'codex', 'gpt-5.5', 10, 2, 1, 0, 200, 1000, NULL)",
-            [],
-        )?;
-
-        let key = DedupKey {
-            app_type: "codex",
-            model: "gpt-5.5",
-            input_tokens: 10,
-            output_tokens: 2,
-            cache_read_tokens: 1,
-            cache_creation_tokens: 0,
-            created_at: 1000,
-        };
-        assert!(has_matching_proxy_usage_log(&conn, &key)?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_matching_proxy_log_matches_claude_desktop_for_claude_session() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        create_legacy_nullable_logs_table(&conn)?;
-        conn.execute(
-            "INSERT INTO proxy_request_logs (
-                request_id, app_type, model, input_tokens, output_tokens,
-                cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
-            ) VALUES ('desktop-proxy', 'claude-desktop', 'claude-sonnet-4-5', 100, 20, 10, 5, 200, 1000, 'proxy')",
-            [],
-        )?;
-
-        let key = DedupKey {
-            app_type: "claude",
-            model: "claude-sonnet-4-5",
-            input_tokens: 100,
-            output_tokens: 20,
-            cache_read_tokens: 10,
-            cache_creation_tokens: 5,
-            created_at: 1060,
-        };
-        assert!(has_matching_proxy_usage_log(&conn, &key)?);
-
-        let mut outside_window = key;
-        outside_window.created_at = 1_601;
-        assert!(!has_matching_proxy_usage_log(&conn, &outside_window)?);
-
-        let mut different_model = key;
-        different_model.model = "claude-opus-4-5";
-        assert!(!has_matching_proxy_usage_log(&conn, &different_model)?);
-
-        let mut different_input = key;
-        different_input.input_tokens += 1;
-        assert!(!has_matching_proxy_usage_log(&conn, &different_input)?);
-
-        let mut different_cache_creation = key;
-        different_cache_creation.cache_creation_tokens += 1;
-        assert!(!has_matching_proxy_usage_log(
-            &conn,
-            &different_cache_creation
-        )?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_effective_filter_dedups_claude_session_against_desktop_proxy() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        create_legacy_nullable_logs_table(&conn)?;
-        conn.execute_batch(
-            "INSERT INTO proxy_request_logs (
-                request_id, app_type, model, input_tokens, output_tokens,
-                cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
-            ) VALUES
-                ('desktop-proxy', 'claude-desktop', 'claude-sonnet-4-5', 100, 20, 10, 5, 200, 1000, 'proxy'),
-                ('claude-session', 'claude', 'claude-sonnet-4-5', 100, 20, 10, 5, 200, 1060, 'session_log');",
-        )?;
-
-        let filter = effective_usage_log_filter("l");
-        let sql = format!("SELECT request_id FROM proxy_request_logs l WHERE {filter}");
-        let request_ids = conn
-            .prepare(&sql)?
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(request_ids, vec!["desktop-proxy"]);
 
         Ok(())
     }
@@ -3398,9 +3158,9 @@ mod tests {
         let by_real = db.get_usage_summary(None, None, None, None, Some("real-model"))?;
         assert_eq!(by_real.total_requests, 1);
 
-        // ④ 会话占位行可按可读名选中。
+        // Imported sessions remain stored, but cannot inflate Atlas traffic.
         let session = db.get_usage_summary(None, None, None, Some("Claude (Session)"), None)?;
-        assert_eq!(session.total_requests, 1);
+        assert_eq!(session.total_requests, 0);
 
         // ⑤ Provider 统计 + 模型过滤：只剩 DeepSeek 一行。
         let provider_stats = db.get_provider_stats(None, None, None, None, Some("deepseek-v3"))?;
@@ -3520,367 +3280,6 @@ mod tests {
     }
 
     #[test]
-    fn test_effective_usage_dedup_prefers_proxy_for_session_sources() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "codex-proxy",
-                "codex",
-                "openai",
-                "GPT-5.4",
-                "proxy",
-                10_000,
-                100,
-                20,
-                10,
-                7,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "codex-session-dup",
-                "codex",
-                "_codex_session",
-                "gpt-5.4",
-                "codex_session",
-                10_060,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "claude-proxy",
-                "claude",
-                "openai-compatible",
-                "claude-sonnet-4-5",
-                "proxy",
-                25_000,
-                300,
-                60,
-                20,
-                5,
-                200,
-                "0.30",
-            )?;
-            insert_usage_log(
-                &conn,
-                "claude-session-dup",
-                "claude",
-                "_session",
-                "claude-sonnet-4-5",
-                "session_log",
-                25_060,
-                300,
-                60,
-                20,
-                5,
-                200,
-                "0.30",
-            )?;
-            insert_usage_log(
-                &conn,
-                "gemini-proxy",
-                "gemini",
-                "google",
-                "gemini-2.5-pro",
-                "proxy",
-                20_000,
-                200,
-                40,
-                30,
-                0,
-                200,
-                "0.20",
-            )?;
-            insert_usage_log(
-                &conn,
-                "gemini-session-dup",
-                "gemini",
-                "_gemini_session",
-                "gemini-2.5-pro",
-                "gemini_session",
-                20_060,
-                200,
-                40,
-                30,
-                0,
-                200,
-                "0.20",
-            )?;
-            insert_usage_log(
-                &conn,
-                "codex-session-only",
-                "codex",
-                "_codex_session",
-                "gpt-5.4",
-                "codex_session",
-                30_000,
-                50,
-                5,
-                0,
-                0,
-                200,
-                "0.02",
-            )?;
-        }
-
-        let summary = db.get_usage_summary(None, None, None, None, None)?;
-        assert_eq!(summary.total_requests, 4);
-        // codex-proxy contributes 100-10=90; gemini-proxy contributes 200-30=170
-        // (both cache-inclusive providers). claude-proxy=300, codex-session-only=50.
-        // 90 + 170 + 300 + 50 = 610.
-        assert_eq!(summary.total_input_tokens, 610);
-        assert_eq!(summary.total_output_tokens, 125);
-        assert_eq!(summary.total_cache_read_tokens, 60);
-        assert_eq!(summary.total_cache_creation_tokens, 12);
-        // real_total = fresh_input(610) + output(125) + cache_create(12) + cache_read(60) = 807
-        assert_eq!(summary.real_total_tokens, 807);
-        // hit_rate = 60 / (610 + 12 + 60) = 60 / 682
-        let expected_hit_rate = 60.0_f64 / 682.0_f64;
-        assert!((summary.cache_hit_rate - expected_hit_rate).abs() < 1e-9);
-
-        let trends = db.get_daily_trends(Some(0), Some(40_000), None, None, None)?;
-        assert_eq!(trends.iter().map(|stat| stat.request_count).sum::<u64>(), 4);
-
-        let provider_stats = db.get_provider_stats(None, None, None, None, None)?;
-        assert_eq!(
-            provider_stats
-                .iter()
-                .map(|stat| stat.request_count)
-                .sum::<u64>(),
-            4
-        );
-        assert!(provider_stats
-            .iter()
-            .any(|stat| stat.provider_id == "_codex_session" && stat.request_count == 1));
-        assert!(!provider_stats
-            .iter()
-            .any(|stat| stat.provider_id == "_gemini_session"));
-        assert!(!provider_stats
-            .iter()
-            .any(|stat| stat.provider_id == "_session"));
-
-        let model_stats = db.get_model_stats(None, None, None, None, None)?;
-        assert_eq!(
-            model_stats
-                .iter()
-                .map(|stat| stat.request_count)
-                .sum::<u64>(),
-            4
-        );
-
-        let logs = db.get_request_logs(&LogFilters::default(), 0, 10)?;
-        let request_ids: Vec<&str> = logs
-            .data
-            .iter()
-            .map(|log| log.request_id.as_str())
-            .collect();
-        assert_eq!(logs.total, 4);
-        assert!(request_ids.contains(&"codex-proxy"));
-        assert!(request_ids.contains(&"claude-proxy"));
-        assert!(request_ids.contains(&"gemini-proxy"));
-        assert!(request_ids.contains(&"codex-session-only"));
-        assert!(!request_ids.contains(&"codex-session-dup"));
-        assert!(!request_ids.contains(&"claude-session-dup"));
-        assert!(!request_ids.contains(&"gemini-session-dup"));
-
-        let breakdown = crate::services::session_usage::get_data_source_breakdown(&db)?;
-        let proxy_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "proxy")
-            .map(|item| item.request_count);
-        let codex_session_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "codex_session")
-            .map(|item| item.request_count);
-        let gemini_session_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "gemini_session")
-            .map(|item| item.request_count);
-        let session_log_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "session_log")
-            .map(|item| item.request_count);
-        assert_eq!(proxy_count, Some(3));
-        assert_eq!(codex_session_count, Some(1));
-        assert_eq!(gemini_session_count, None);
-        assert_eq!(session_log_count, None);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_effective_usage_dedup_keeps_non_matching_session_rows() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "proxy-base",
-                "codex",
-                "openai",
-                "gpt-5.4",
-                "proxy",
-                10_000,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "session-outside-window",
-                "codex",
-                "_codex_session",
-                "gpt-5.4",
-                "codex_session",
-                10_601,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "session-token-mismatch",
-                "codex",
-                "_codex_session",
-                "gpt-5.4",
-                "codex_session",
-                10_060,
-                101,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "session-app-mismatch",
-                "gemini",
-                "_gemini_session",
-                "gpt-5.4",
-                "gemini_session",
-                10_060,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "session-model-mismatch",
-                "codex",
-                "_codex_session",
-                "different-model",
-                "codex_session",
-                10_060,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "proxy-error",
-                "codex",
-                "openai",
-                "gpt-5.4",
-                "proxy",
-                20_000,
-                300,
-                60,
-                0,
-                0,
-                500,
-                "0.00",
-            )?;
-            insert_usage_log(
-                &conn,
-                "session-matches-error-proxy",
-                "codex",
-                "_codex_session",
-                "gpt-5.4",
-                "codex_session",
-                20_060,
-                300,
-                60,
-                0,
-                0,
-                200,
-                "0.30",
-            )?;
-            insert_usage_log(
-                &conn,
-                "claude-proxy-cache-creation",
-                "claude",
-                "anthropic",
-                "claude-sonnet-4-5",
-                "proxy",
-                30_000,
-                100,
-                20,
-                10,
-                5,
-                200,
-                "0.10",
-            )?;
-            insert_usage_log(
-                &conn,
-                "claude-session-cache-creation-mismatch",
-                "claude",
-                "_session",
-                "claude-sonnet-4-5",
-                "session_log",
-                30_060,
-                100,
-                20,
-                10,
-                0,
-                200,
-                "0.10",
-            )?;
-        }
-
-        let summary = db.get_usage_summary(None, None, None, None, None)?;
-        assert_eq!(summary.total_requests, 9);
-
-        let logs = db.get_request_logs(&LogFilters::default(), 0, 10)?;
-        let request_ids: Vec<&str> = logs
-            .data
-            .iter()
-            .map(|log| log.request_id.as_str())
-            .collect();
-        assert_eq!(logs.total, 9);
-        assert!(request_ids.contains(&"session-outside-window"));
-        assert!(request_ids.contains(&"session-token-mismatch"));
-        assert!(request_ids.contains(&"session-app-mismatch"));
-        assert!(request_ids.contains(&"session-model-mismatch"));
-        assert!(request_ids.contains(&"session-matches-error-proxy"));
-        assert!(request_ids.contains(&"claude-session-cache-creation-mismatch"));
-
-        Ok(())
-    }
-
-    #[test]
     fn test_get_model_stats() -> Result<(), AppError> {
         let db = Database::memory()?;
 
@@ -3945,37 +3344,6 @@ mod tests {
         assert_eq!(stats[0].provider_id, "p1");
         assert_eq!(stats[0].request_count, 1);
         assert_eq!(stats[0].total_tokens, 275);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_provider_stats_labels_opencode_session_provider() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "opencode-session",
-                "opencode",
-                "_opencode_session",
-                "opencode-model",
-                "opencode_session",
-                1000,
-                100,
-                50,
-                0,
-                0,
-                200,
-                "0.01",
-            )?;
-        }
-
-        let stats = db.get_provider_stats(None, None, Some("opencode"), None, None)?;
-        assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].provider_id, "_opencode_session");
-        assert_eq!(stats[0].provider_name, "OpenCode (Session)");
 
         Ok(())
     }

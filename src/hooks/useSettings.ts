@@ -104,14 +104,7 @@ export function useSettings(): UseSettingsResult {
     resetForm(data ?? null);
     syncLanguage(initialLanguage);
     resetAllDirectories({
-      claude: sanitizeDir(data?.claudeConfigDir),
       codex: sanitizeDir(data?.codexConfigDir),
-      gemini: sanitizeDir(data?.geminiConfigDir),
-      grokbuild: sanitizeDir(data?.grokConfigDir),
-      opencode: sanitizeDir(data?.opencodeConfigDir),
-      openclaw: sanitizeDir(data?.openclawConfigDir),
-      hermes: sanitizeDir(data?.hermesConfigDir),
-      pi: sanitizeDir(data?.piConfigDir),
     });
     setRequiresRestart(false);
   }, [
@@ -142,11 +135,7 @@ export function useSettings(): UseSettingsResult {
           mergedSettings.openclawConfigDir,
         );
         const sanitizedPiDir = sanitizeDir(mergedSettings.piConfigDir);
-        const {
-          webdavSync: _ignoredWebdavSync,
-          s3Sync: _ignoredS3Sync,
-          ...restSettings
-        } = mergedSettings;
+        const restSettings = mergedSettings;
 
         const payload: Settings = {
           ...restSettings,
@@ -237,11 +226,7 @@ export function useSettings(): UseSettingsResult {
         );
         const sanitizedPiDir = sanitizeDir(mergedSettings.piConfigDir);
         const previousAppDir = initialAppConfigDir;
-        const {
-          webdavSync: _ignoredWebdavSync,
-          s3Sync: _ignoredS3Sync,
-          ...restSettings
-        } = mergedSettings;
+        const restSettings = mergedSettings;
 
         const payload: Settings = {
           ...restSettings,

@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { FormLabel } from "@/components/ui/form";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   parseBodyOverrideJson,
@@ -26,11 +26,11 @@ export function LocalProxyRequestOverridesField({
   return (
     <div className="space-y-3">
       <div className="space-y-1">
-        <FormLabel>
+        <Label>
           {t("providerForm.localProxyRequestOverrides", {
             defaultValue: "本地代理请求覆盖",
           })}
-        </FormLabel>
+        </Label>
         <p className="text-xs text-muted-foreground">
           {t("providerForm.localProxyRequestOverridesHint", {
             defaultValue:
@@ -41,11 +41,11 @@ export function LocalProxyRequestOverridesField({
 
       <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-2">
-          <FormLabel className="text-xs text-muted-foreground">
+          <Label className="text-xs text-muted-foreground">
             {t("providerForm.localProxyHeaderOverrides", {
               defaultValue: "Header 覆盖",
             })}
-          </FormLabel>
+          </Label>
           <Textarea
             value={headersJson}
             onChange={(event) => onHeadersJsonChange(event.target.value)}
@@ -64,11 +64,11 @@ export function LocalProxyRequestOverridesField({
         </div>
 
         <div className="space-y-2">
-          <FormLabel className="text-xs text-muted-foreground">
+          <Label className="text-xs text-muted-foreground">
             {t("providerForm.localProxyBodyOverrides", {
               defaultValue: "Body 覆盖",
             })}
-          </FormLabel>
+          </Label>
           <Textarea
             value={bodyJson}
             onChange={(event) => onBodyJsonChange(event.target.value)}

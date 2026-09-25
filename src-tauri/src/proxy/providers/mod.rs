@@ -17,7 +17,6 @@ mod claude;
 mod codex;
 pub(crate) mod codex_chat_common;
 pub mod codex_chat_history;
-pub mod codex_oauth_auth;
 pub(crate) mod codex_responses_sse;
 pub mod copilot_auth;
 pub mod copilot_model_map;
@@ -40,7 +39,6 @@ pub mod transform_codex_responses_namespace;
 pub mod transform_codex_responses_xai_sanitize;
 pub mod transform_gemini;
 pub mod transform_responses;
-pub mod xai_oauth_auth;
 
 use crate::app_config::AppType;
 use crate::provider::Provider;
@@ -61,9 +59,8 @@ pub use codex::CodexAdapter;
 pub use codex::{
     apply_codex_chat_upstream_model, apply_codex_upstream_model, codex_provider_upstream_model,
     inject_codex_chat_prompt_cache_key, is_codex_official_provider, is_codex_responses_endpoint,
-    provider_needs_responses_namespace_flatten, resolve_codex_catalog_tool_profile,
-    resolve_codex_chat_reasoning_config, should_convert_codex_responses_to_anthropic,
-    should_convert_codex_responses_to_chat,
+    provider_needs_responses_namespace_flatten, resolve_codex_chat_reasoning_config,
+    should_convert_codex_responses_to_anthropic, should_convert_codex_responses_to_chat,
 };
 pub use gemini::GeminiAdapter;
 

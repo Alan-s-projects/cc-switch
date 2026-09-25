@@ -170,11 +170,10 @@ impl Database {
         conn.execute(&aggregation_sql, [cutoff])
             .map_err(|e| AppError::Database(format!("Rollup aggregation failed: {e}")))?;
 
-        // INSERT uses the effective-log filter to exclude duplicate session rows.
-        // DELETE intentionally prunes all old details so those duplicates are discarded.
+        // Archive only proxy rows. Historical session imports stay untouched.
         let deleted = conn
             .execute(
-                "DELETE FROM proxy_request_logs WHERE created_at < ?1",
+                &format!("DELETE FROM proxy_request_logs AS l WHERE created_at < ?1 AND {effective_filter}"),
                 [cutoff],
             )
             .map_err(|e| AppError::Database(format!("Pruning old logs failed: {e}")))?;
@@ -308,7 +307,7 @@ mod tests {
         }
 
         let deleted = db.rollup_and_prune(30)?;
-        assert_eq!(deleted, 2);
+        assert_eq!(deleted, 1);
 
         let conn = crate::database::lock_conn!(db.conn);
         let mut stmt = conn.prepare(
@@ -339,7 +338,7 @@ mod tests {
             conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
                 row.get(0)
             })?;
-        assert_eq!(remaining, 0);
+        assert_eq!(remaining, 1, "historical session imports stay intact");
 
         Ok(())
     }

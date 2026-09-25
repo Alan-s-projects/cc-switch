@@ -11,8 +11,10 @@ use crate::commands::sync_support::{
 use crate::database::backup::BackupEntry;
 use crate::database::Database;
 use crate::error::AppError;
-use crate::services::skill::skill_state_write_guard;
-use crate::services::sync_protocol::sync_mutex;
+pub(crate) fn app_data_mutex() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
 use crate::store::AppState;
 
 async fn run_with_database_restore_lock<T, Start, Fut>(start_operation: Start) -> T
@@ -20,7 +22,7 @@ where
     Start: FnOnce() -> Fut,
     Fut: std::future::Future<Output = T>,
 {
-    let _sync_guard = sync_mutex().lock().await;
+    let _sync_guard = app_data_mutex().lock().await;
     start_operation().await
 }
 
@@ -61,7 +63,6 @@ pub async fn import_config_from_file(
             let backup_id = {
                 // SQL restore replaces the `skills` table. Exclude local Skill
                 // mutations while the database image is being swapped.
-                let _skill_state_guard = skill_state_write_guard();
                 db.import_sql(&path_buf)?
             };
             let warning =
@@ -125,20 +126,6 @@ pub async fn open_file_dialog<R: tauri::Runtime>(
     Ok(result.map(|p| p.to_string()))
 }
 
-/// 打开 ZIP 文件选择对话框
-#[tauri::command]
-pub async fn open_zip_file_dialog<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-) -> Result<Option<String>, String> {
-    let dialog = app.dialog();
-    let result = dialog
-        .file()
-        .add_filter("ZIP / Skill", &["zip", "skill"])
-        .blocking_pick_file();
-
-    Ok(result.map(|p| p.to_string()))
-}
-
 // ─── Database backup management ─────────────────────────────
 
 /// Manually create a database backup
@@ -175,10 +162,7 @@ pub async fn restore_db_backup(
     let db = app_state_for_sync.db.clone();
     run_with_database_restore_lock(move || {
         tauri::async_runtime::spawn_blocking(move || {
-            let restored = {
-                let _skill_state_guard = skill_state_write_guard();
-                db.restore_from_backup(&filename)?
-            };
+            let restored = { db.restore_from_backup(&filename)? };
             let warning =
                 post_sync_warning_from_result(Ok(run_post_import_sync(&app_state_for_sync)));
             if let Some(message) = warning {
@@ -211,15 +195,15 @@ pub fn delete_db_backup(filename: String) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use super::app_data_mutex;
     use super::run_with_database_restore_lock;
-    use crate::services::sync_protocol::sync_mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
     #[tokio::test]
     async fn manual_restore_starts_blocking_work_after_global_lock_acquisition() {
-        let guard = sync_mutex().lock().await;
+        let guard = app_data_mutex().lock().await;
         let entered = Arc::new(AtomicBool::new(false));
         let entered_in_task = Arc::clone(&entered);
         let restore = run_with_database_restore_lock(move || {

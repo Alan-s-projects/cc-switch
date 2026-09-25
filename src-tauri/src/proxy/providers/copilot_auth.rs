@@ -255,7 +255,7 @@ pub struct QuotaDetail {
 }
 
 /// Copilot 可用模型
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CopilotModel {
     /// 模型 ID（用于 API 调用）
     pub id: String,
@@ -271,6 +271,12 @@ pub struct CopilotModel {
     /// Upstream protocols supported by this exact model ID.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_endpoints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_parallel_tool_calls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_vision: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_efforts: Option<Vec<String>>,
 }
 
 /// Copilot Models API 响应
@@ -293,10 +299,44 @@ struct CopilotModelsResponseItem {
 }
 
 fn extract_copilot_context_window(capabilities: Option<&Value>) -> Option<u64> {
-    capabilities?
-        .pointer("/limits/max_context_window_tokens")?
-        .as_u64()
+    let capabilities = capabilities?;
+    // Some Copilot models accept less input than their total context window.
+    // Codex must compact before reaching either server-side limit.
+    ["max_context_window_tokens", "max_prompt_tokens"]
+        .into_iter()
+        .filter_map(|key| capabilities.get("limits")?.get(key)?.as_u64())
         .filter(|tokens| *tokens > 0)
+        .min()
+}
+
+impl From<CopilotModelsResponseItem> for CopilotModel {
+    fn from(model: CopilotModelsResponseItem) -> Self {
+        let supports = model.capabilities.as_ref().and_then(|c| c.get("supports"));
+        Self {
+            context_window: extract_copilot_context_window(model.capabilities.as_ref()),
+            supports_parallel_tool_calls: supports
+                .and_then(|s| s.get("parallel_tool_calls"))
+                .and_then(Value::as_bool),
+            supports_vision: supports
+                .and_then(|s| s.get("vision"))
+                .and_then(Value::as_bool),
+            reasoning_efforts: supports
+                .and_then(|s| s.get("reasoning_effort"))
+                .and_then(Value::as_array)
+                .map(|levels| {
+                    levels
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                }),
+            id: model.id,
+            name: model.name,
+            vendor: model.vendor,
+            model_picker_enabled: model.model_picker_enabled,
+            supported_endpoints: model.supported_endpoints,
+        }
+    }
 }
 
 /// Copilot 认证错误
@@ -955,14 +995,7 @@ impl CopilotAuthManager {
         let models: Vec<CopilotModel> = models_response
             .data
             .into_iter()
-            .map(|m| CopilotModel {
-                id: m.id,
-                name: m.name,
-                vendor: m.vendor,
-                model_picker_enabled: m.model_picker_enabled,
-                context_window: extract_copilot_context_window(m.capabilities.as_ref()),
-                supported_endpoints: m.supported_endpoints,
-            })
+            .map(CopilotModel::from)
             .collect();
 
         log::info!("[CopilotAuth] 获取到 {} 个可用模型", models.len());
@@ -1665,6 +1698,33 @@ mod tests {
     }
 
     #[test]
+    fn live_models_keep_capabilities_and_limit_input_by_the_smaller_server_budget() {
+        let item: CopilotModelsResponseItem = serde_json::from_value(serde_json::json!({
+            "id": "gpt-6-luna", "name": "GPT-6 Luna", "vendor": "OpenAI",
+            "model_picker_enabled": true, "supported_endpoints": ["/responses"],
+            "capabilities": {
+                "limits": { "max_context_window_tokens": 1000000, "max_prompt_tokens": 872000 },
+                "supports": { "parallel_tool_calls": true, "vision": true, "reasoning_effort": ["none", "low", "medium", "max"] }
+            }
+        })).unwrap();
+        let model = CopilotModel::from(item);
+        assert_eq!(model.context_window, Some(872000));
+        assert_eq!(model.supports_parallel_tool_calls, Some(true));
+        assert_eq!(model.supports_vision, Some(true));
+        assert_eq!(
+            model.reasoning_efforts.unwrap(),
+            ["none", "low", "medium", "max"]
+        );
+        assert_eq!(extract_copilot_context_window(None), None);
+        assert_eq!(
+            extract_copilot_context_window(Some(&serde_json::json!({
+                "limits": { "max_context_window_tokens": 400000, "max_prompt_tokens": 0 }
+            }))),
+            Some(400000)
+        );
+    }
+
+    #[test]
     fn shared_request_headers_include_copilot_identity() {
         let headers = build_copilot_request_headers("test-token").unwrap();
         let headers = headers.into_iter().collect::<http::HeaderMap>();
@@ -1907,6 +1967,7 @@ mod tests {
                         model_picker_enabled: true,
                         context_window: None,
                         supported_endpoints: Vec::new(),
+                        ..Default::default()
                     },
                     CopilotModel {
                         id: "claude-sonnet-4".to_string(),
@@ -1915,6 +1976,7 @@ mod tests {
                         model_picker_enabled: true,
                         context_window: None,
                         supported_endpoints: Vec::new(),
+                        ..Default::default()
                     },
                     CopilotModel {
                         id: "gpt-hidden".to_string(),
@@ -1926,6 +1988,7 @@ mod tests {
                             "/v1/chat/completions".to_string(),
                             "/responses".to_string(),
                         ],
+                        ..Default::default()
                     },
                 ],
             );
@@ -2007,6 +2070,7 @@ mod tests {
                 .iter()
                 .map(|endpoint| endpoint.to_string())
                 .collect(),
+            ..Default::default()
         };
         manager.copilot_models.write().await.extend([
             ("messages-only".to_string(), vec![model(&["/v1/messages"])]),

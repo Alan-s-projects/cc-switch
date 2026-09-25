@@ -2,9 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   ProxyStatus,
   ProxyServerInfo,
-  ProxyTakeoverStatus,
   GlobalProxyConfig,
-  AppProxyConfig,
 } from "@/types/proxy";
 
 export const proxyApi = {
@@ -21,9 +19,6 @@ export const proxyApi = {
   },
 
   // 停止代理服务器并恢复配置
-  async stopProxyWithRestore(): Promise<void> {
-    return invoke("stop_proxy_with_restore");
-  },
 
   // 获取代理服务器状态
   async getProxyStatus(): Promise<ProxyStatus> {
@@ -33,17 +28,8 @@ export const proxyApi = {
   // ========== 接管状态 API ==========
 
   // 获取各应用接管状态
-  async getProxyTakeoverStatus(): Promise<ProxyTakeoverStatus> {
-    return invoke("get_proxy_takeover_status");
-  },
 
   // 为指定应用开启/关闭接管
-  async setProxyTakeoverForApp(
-    appType: string,
-    enabled: boolean,
-  ): Promise<void> {
-    return invoke("set_proxy_takeover_for_app", { appType, enabled });
-  },
 
   // ========== v3+ 全局/应用级配置 API ==========
 
@@ -58,14 +44,8 @@ export const proxyApi = {
   },
 
   // 获取指定应用的代理配置
-  async getProxyConfigForApp(appType: string): Promise<AppProxyConfig> {
-    return invoke("get_proxy_config_for_app", { appType });
-  },
 
   // 更新指定应用的代理配置
-  async updateProxyConfigForApp(config: AppProxyConfig): Promise<void> {
-    return invoke("update_proxy_config_for_app", { config });
-  },
 
   // ========== 计费默认配置 API ==========
 

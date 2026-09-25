@@ -1,27 +1,21 @@
 import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Form } from "@/components/ui/form";
 import { Button } from "@/components/ui/button";
-import type { ProviderFormData } from "@/lib/schemas/provider";
 import type { AppId, ManagedAuthProvider } from "@/lib/api";
 import type {
   Provider,
   ProviderMeta,
-  ProviderCategory,
   CodexCatalogModel,
   CodexCopilotApiFormat,
 } from "@/types";
 import { CodexFormFields } from "./CodexFormFields";
-import { BasicFormFields } from "./BasicFormFields";
 import {
   ProviderAdvancedConfig,
   type PricingModelSourceOption,
 } from "./ProviderAdvancedConfig";
 import { useCopilotAuth } from "./hooks/useCopilotAuth";
-import { mapCodexCatalogModelForForm } from "./hooks/useCodexConfigState";
-import { codexProviderPresets } from "@/config/codexProviderPresets";
+import { mapCodexCatalogModelForForm } from "@/utils/codexModelCatalog";
 
 export const normalizeCodexCatalogModelsForSave = (
   models: CodexCatalogModel[],
@@ -77,7 +71,6 @@ export const normalizeCodexCatalogModelsForSave = (
 
 export interface ProviderFormProps {
   appId: AppId;
-  providerId?: string;
   submitLabel: string;
   onSubmit: (values: ProviderFormValues) => Promise<void> | void;
   onCancel: () => void;
@@ -86,19 +79,15 @@ export interface ProviderFormProps {
   onSubmitReadyChange?: (value: boolean) => void;
   initialData?: Partial<Provider>;
   showButtons?: boolean;
-  isProxyTakeover?: boolean;
 }
 
-export type ProviderFormValues = ProviderFormData & {
-  presetId?: string;
-  presetCategory?: ProviderCategory;
+export interface ProviderFormValues {
+  name: string;
+  settingsConfig: string;
   meta?: ProviderMeta;
-};
-
-const noop = () => {};
+}
 
 export function ProviderForm({
-  providerId,
   initialData,
   onSubmit,
   onCancel,
@@ -109,26 +98,12 @@ export function ProviderForm({
   showButtons = true,
 }: ProviderFormProps) {
   const { t } = useTranslation();
-  const preset = codexProviderPresets.find(
-    (p) => p.providerType === "github_copilot",
-  )!;
   const settings = initialData?.settingsConfig ?? {
     auth: {},
-    config: preset.config,
-    modelCatalog: { models: preset.modelCatalog ?? [] },
+    config: "",
+    modelCatalog: { models: [] },
   };
   const initialMeta = initialData?.meta;
-  const form = useForm<ProviderFormData>({
-    defaultValues: {
-      name: initialData?.name ?? "GitHub Copilot",
-      websiteUrl:
-        initialData?.websiteUrl ?? "https://github.com/features/copilot",
-      notes: initialData?.notes ?? "",
-      settingsConfig: JSON.stringify(settings),
-      icon: initialData?.icon ?? "github",
-      iconColor: initialData?.iconColor ?? "#000000",
-    },
-  });
   const [saving, setSaving] = useState(false);
   const [accountId, setAccountId] = useState<string | null>(
     initialMeta?.authBinding?.accountId ?? initialMeta?.githubAccountId ?? null,
@@ -182,9 +157,10 @@ export function ProviderForm({
     onSubmitReadyChange?.(true);
   }, [onSubmitReadyChange]);
 
-  const submit = form.handleSubmit(async (values) => {
-    if (!values.name.trim()) {
-      toast.error(t("provider.nameRequired"));
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!hasAnyAccount) {
+      toast.error("Sign in to GitHub Copilot first.");
       return;
     }
     if (
@@ -224,8 +200,7 @@ export function ProviderForm({
         },
       };
       await onSubmit({
-        ...values,
-        presetCategory: "third_party",
+        name: initialData?.name ?? "GitHub Copilot",
         meta,
         settingsConfig: JSON.stringify({
           ...settings,
@@ -237,81 +212,52 @@ export function ProviderForm({
     } finally {
       setSaving(false);
     }
-  });
+  };
 
   return (
-    <Form {...form}>
-      <form id="provider-form" onSubmit={submit} className="space-y-6">
-        <BasicFormFields form={form} />
-        <p className="text-sm text-muted-foreground">
-          {t("bridge.providerSettings")}
-        </p>
-        <CodexFormFields
-          appId="codex"
-          providerId={providerId}
-          isCopilotPreset
-          isCopilotAuthenticated={hasAnyAccount}
-          selectedGitHubAccountId={accountId}
-          onGitHubAccountSelect={setAccountId}
-          onManageAuthAccounts={onManageAuthAccounts}
-          codexApiKey=""
-          onApiKeyChange={noop}
-          category="third_party"
-          shouldShowApiKeyLink={false}
-          websiteUrl="https://github.com/features/copilot"
-          shouldShowSpeedTest={false}
-          codexBaseUrl="https://api.githubcopilot.com"
-          onBaseUrlChange={noop}
-          isFullUrl={false}
-          onFullUrlChange={noop}
-          isEndpointModalOpen={false}
-          onEndpointModalToggle={noop}
-          autoSelect={false}
-          onAutoSelectChange={noop}
-          speedTestEndpoints={[]}
-          apiFormat={format === "auto" ? "openai_chat" : format}
-          onApiFormatChange={noop}
-          copilotApiFormat={format}
-          onCopilotApiFormatChange={setFormat}
-          anthropicAuthField="ANTHROPIC_AUTH_TOKEN"
-          onAnthropicAuthFieldChange={noop}
-          impersonateClaudeCode={false}
-          onImpersonateClaudeCodeChange={noop}
-          maxOutputTokens=""
-          onMaxOutputTokensChange={noop}
-          codexChatReasoning={reasoning}
-          onCodexChatReasoningChange={setReasoning}
-          promptCacheRouting={cacheRouting}
-          onPromptCacheRoutingChange={setCacheRouting}
-          catalogModels={catalog}
-          onCatalogModelsChange={setCatalog}
-          customUserAgent={userAgent}
-          onCustomUserAgentChange={setUserAgent}
-          localProxyHeadersOverride={headers}
-          onLocalProxyHeadersOverrideChange={setHeaders}
-          localProxyBodyOverride={body}
-          onLocalProxyBodyOverrideChange={setBody}
-        />
-        <ProviderAdvancedConfig
-          pricingConfig={pricing}
-          onPricingConfigChange={setPricing}
-        />
-        {showButtons && (
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={saving}
-              onClick={onCancel}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button type="submit" disabled={saving}>
-              {saving ? t("common.saving") : submitLabel}
-            </Button>
-          </div>
-        )}
-      </form>
-    </Form>
+    <form id="provider-form" onSubmit={submit} className="space-y-6">
+      <p className="text-sm text-muted-foreground">
+        {t("bridge.providerSettings")}
+      </p>
+      <CodexFormFields
+        isCopilotAuthenticated={hasAnyAccount}
+        selectedGitHubAccountId={accountId}
+        onGitHubAccountSelect={setAccountId}
+        onManageAuthAccounts={onManageAuthAccounts}
+        copilotApiFormat={format}
+        onCopilotApiFormatChange={setFormat}
+        codexChatReasoning={reasoning}
+        onCodexChatReasoningChange={setReasoning}
+        promptCacheRouting={cacheRouting}
+        onPromptCacheRoutingChange={setCacheRouting}
+        catalogModels={catalog}
+        onCatalogModelsChange={setCatalog}
+        customUserAgent={userAgent}
+        onCustomUserAgentChange={setUserAgent}
+        localProxyHeadersOverride={headers}
+        onLocalProxyHeadersOverrideChange={setHeaders}
+        localProxyBodyOverride={body}
+        onLocalProxyBodyOverrideChange={setBody}
+      />
+      <ProviderAdvancedConfig
+        pricingConfig={pricing}
+        onPricingConfigChange={setPricing}
+      />
+      {showButtons && (
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={saving}
+            onClick={onCancel}
+          >
+            {t("common.cancel")}
+          </Button>
+          <Button type="submit" disabled={saving}>
+            {saving ? t("common.saving") : submitLabel}
+          </Button>
+        </div>
+      )}
+    </form>
   );
 }

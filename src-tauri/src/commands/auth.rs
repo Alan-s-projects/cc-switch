@@ -1,11 +1,9 @@
 use tauri::State;
 
-use crate::app_config::AppType;
 use crate::commands::copilot::CopilotAuthState;
 use crate::proxy::providers::copilot_auth::{
     CopilotAuthError, GitHubAccount, GitHubDeviceCodeResponse,
 };
-use crate::store::AppState;
 
 const AUTH_PROVIDER_GITHUB_COPILOT: &str = "github_copilot";
 
@@ -211,24 +209,6 @@ pub async fn auth_remove_account(
     }
 }
 
-pub(crate) async fn remove_codex_oauth_account_with_switch_lock(
-    app_state: &AppState,
-    account_id: &str,
-) -> Result<(), String> {
-    // Serialize Auth Center credential deletion with managed provider
-    // add/update/switch/hot-switch. Otherwise a switch that already preflighted
-    // a bundle could recreate auth.json after removal.
-    let _switch_guard = app_state
-        .proxy_service
-        .lock_switch_for_app(AppType::Codex.as_str())
-        .await;
-    app_state
-        .codex_oauth_manager
-        .remove_account(account_id)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 #[tauri::command(rename_all = "camelCase")]
 pub async fn auth_set_default_account(
     auth_provider: String,
@@ -261,18 +241,4 @@ pub async fn auth_logout(
         }
         _ => unreachable!(),
     }
-}
-
-pub(crate) async fn logout_codex_oauth_with_switch_lock(
-    app_state: &AppState,
-) -> Result<(), String> {
-    let _switch_guard = app_state
-        .proxy_service
-        .lock_switch_for_app(AppType::Codex.as_str())
-        .await;
-    app_state
-        .codex_oauth_manager
-        .clear_auth()
-        .await
-        .map_err(|error| error.to_string())
 }

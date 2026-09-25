@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { ChevronDown } from "lucide-react";
-import { FormLabel } from "@/components/ui/form";
+import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,11 +36,11 @@ export function CustomUserAgentField({
 
   return (
     <div className="space-y-2">
-      <FormLabel htmlFor={id}>
+      <Label htmlFor={id}>
         {t("providerForm.customUserAgent", {
           defaultValue: "自定义 User-Agent",
         })}
-      </FormLabel>
+      </Label>
       <div className="flex items-center gap-2">
         <Input
           id={id}

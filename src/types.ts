@@ -49,68 +49,6 @@ export interface EndpointCandidate {
   isCustom?: boolean;
 }
 
-import type { TemplateType } from "./config/constants";
-
-// 用量查询脚本配置
-export interface UsageScript {
-  enabled: boolean; // 是否启用用量查询
-  language: "javascript"; // 脚本语言
-  code: string; // 脚本代码（JSON 格式配置）
-  timeout?: number; // 超时时间（秒，默认 10）
-  templateType?: TemplateType; // 模板类型（用于后端判断验证规则）
-  apiKey?: string; // 用量查询专用的 API Key（通用模板使用）
-  baseUrl?: string; // 用量查询专用的 Base URL（通用和 NewAPI 模板使用）
-  accessToken?: string; // 访问令牌（NewAPI 模板使用）
-  userId?: string; // 用户ID（NewAPI 模板使用）
-  accessKeyId?: string; // 火山方舟 AccessKey ID（用量查询签名用，与推理 Key 分离）
-  secretAccessKey?: string; // 火山方舟 SecretAccessKey
-  teamOrganizationId?: string; // 智谱团队套餐组织 ID（请求头 bigmodel-organization）
-  teamProjectId?: string; // 智谱团队套餐项目 ID（请求头 bigmodel-project）
-  codingPlanProvider?: string; // Coding Plan 供应商标识（如 "kimi", "zhipu", "minimax"）
-  autoQueryInterval?: number; // 自动查询间隔（单位：分钟，0 表示禁用）
-  autoIntervalMinutes?: number; // 自动查询间隔（分钟）- 别名字段
-  request?: {
-    // 请求配置
-    url?: string; // 请求 URL
-    method?: string; // HTTP 方法
-    headers?: Record<string, string>; // 请求头
-    body?: any; // 请求体
-  };
-}
-
-const DEFAULT_USAGE_SCRIPT: UsageScript = {
-  enabled: false,
-  language: "javascript",
-  code: "",
-  timeout: 10,
-  autoQueryInterval: 5,
-};
-
-export function createUsageScript(
-  overrides?: Partial<UsageScript>,
-): UsageScript {
-  return { ...DEFAULT_USAGE_SCRIPT, ...overrides };
-}
-
-// 单个套餐用量数据
-export interface UsageData {
-  planName?: string; // 套餐名称（可选）
-  extra?: string; // 扩展字段，可自由补充需要展示的文本（可选）
-  isValid?: boolean; // 套餐是否有效（可选）
-  invalidMessage?: string; // 失效原因说明（可选，当 isValid 为 false 时显示）
-  total?: number; // 总额度（可选）
-  used?: number; // 已用额度（可选）
-  remaining?: number; // 剩余额度（可选）
-  unit?: string; // 单位（可选）
-}
-
-// 用量查询结果（支持多套餐）
-export interface UsageResult {
-  success: boolean;
-  data?: UsageData[]; // 改为数组，支持返回多个套餐
-  error?: string;
-}
-
 export type AuthBindingSource = "provider_config" | "managed_account";
 
 export interface AuthBinding {
@@ -182,7 +120,6 @@ export interface ProviderMeta {
   // Claude Desktop 本地路由模式：Claude-safe route -> upstream model
   claudeDesktopModelRoutes?: Record<string, ClaudeDesktopModelRoute>;
   // 用量查询脚本配置
-  usage_script?: UsageScript;
   // 请求地址管理：测速后自动选择最佳端点
   endpointAutoSelect?: boolean;
   // 是否为官方合作伙伴
@@ -305,57 +242,7 @@ export interface VisibleApps {
   mcode: boolean;
 }
 
-// WebDAV 同步状态
-export interface WebDavSyncStatus {
-  lastSyncAt?: number | null;
-  lastError?: string | null;
-  lastErrorSource?: string | null;
-  lastRemoteEtag?: string | null;
-  lastLocalManifestHash?: string | null;
-  lastRemoteManifestHash?: string | null;
-}
-
-// WebDAV 同步配置
-export interface WebDavSyncSettings {
-  enabled?: boolean;
-  autoSync?: boolean;
-  baseUrl?: string;
-  username?: string;
-  password?: string;
-  remoteRoot?: string;
-  profile?: string;
-  status?: WebDavSyncStatus;
-}
-
-// S3 同步配置
-export interface S3SyncSettings {
-  enabled?: boolean;
-  autoSync?: boolean;
-  region?: string;
-  bucket?: string;
-  accessKeyId?: string;
-  secretAccessKey?: string;
-  endpoint?: string;
-  remoteRoot?: string;
-  profile?: string;
-  status?: WebDavSyncStatus;
-}
-
 export type RemoteSnapshotLayout = "current" | "legacy";
-
-// 远端快照信息（下载前预览）
-export interface RemoteSnapshotInfo {
-  deviceName: string;
-  createdAt: string;
-  snapshotId: string;
-  version: number;
-  protocolVersion: number;
-  dbCompatVersion?: number | null;
-  compatible: boolean;
-  artifacts: string[];
-  layout: RemoteSnapshotLayout;
-  remotePath: string;
-}
 
 // 应用设置类型（用于设置对话框与 Tauri API）
 // 存储在本地 ~/.cc-switch/settings.json，不随数据库同步
@@ -365,16 +252,8 @@ export interface Settings {
   showInTray: boolean;
   // 点击关闭按钮时是否最小化到托盘而不是关闭应用
   minimizeToTrayOnClose: boolean;
-  // 是否启用应用级窗口控制按钮（最小化/最大化/关闭）
-  useAppWindowControls?: boolean;
-  // 启用 Claude 插件联动（写入 ~/.claude/config.json 的 primaryApiKey）
-  enableClaudePluginIntegration?: boolean;
-  // 跳过 Claude Code 初次安装确认（写入 ~/.claude.json 的 hasCompletedOnboarding）
-  skipClaudeOnboarding?: boolean;
   // 是否开机自启
   launchOnStartup?: boolean;
-  // 静默启动（程序启动时不显示主窗口）
-  silentStartup?: boolean;
   // 是否启用主页面本地代理功能（默认关闭）
   enableLocalProxy?: boolean;
   // User has confirmed the local proxy first-run notice
@@ -384,8 +263,6 @@ export interface Settings {
   usageDashboardRefreshIntervalMs?: number;
   // 会话用量自动扫描开关（默认开启=自动模式；关闭后仅手动同步时扫描会话日志，代理记账不受影响）
   sessionAutoSyncEnabled?: boolean;
-  // Whether to show the failover toggle independently on the main page
-  enableFailoverToggle?: boolean;
   // Whether to show the project profile switcher on the main page header
   showProfileSwitcher?: boolean;
   // Preserve Codex ChatGPT login in auth.json when switching third-party providers
@@ -443,24 +320,11 @@ export interface Settings {
   // Skill 存储位置：cc_switch（默认）或 unified（~/.agents/skills/）
   skillStorageLocation?: SkillStorageLocation;
 
-  // ===== WebDAV v2 同步设置 =====
-  webdavSync?: WebDavSyncSettings;
-
-  // ===== S3 同步设置 =====
-  s3Sync?: S3SyncSettings;
-
   // ===== 备份策略设置 =====
   // Auto-backup interval in hours (0=disabled, default 24)
   backupIntervalHours?: number;
   // Maximum backup files to retain (default 10)
   backupRetainCount?: number;
-
-  // ===== 终端设置 =====
-  // 首选终端应用（可选，默认使用系统默认终端）
-  // macOS: "terminal" | "iterm2" | "warp" | "alacritty" | "kitty" | "ghostty" | "otty" | "wezterm" | "kaku"
-  // Windows: "cmd" | "powershell" | "wt"
-  // Linux: "gnome-terminal" | "konsole" | "xfce4-terminal" | "alacritty" | "kitty" | "ghostty"
-  preferredTerminal?: string;
 
   // ===== 本机自动迁移状态 =====
   localMigrations?: {

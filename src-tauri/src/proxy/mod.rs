@@ -1,15 +1,13 @@
 //! 代理服务器模块
 //!
-//! 提供本地HTTP代理服务，支持多Provider故障转移和请求透传
+//! Local OpenAI-compatible HTTP server for GitHub Copilot.
 
 pub mod body_filter;
 pub mod cache_injector;
-pub mod circuit_breaker;
 pub(crate) mod content_encoding;
 pub mod copilot_optimizer;
 pub mod error;
 pub mod error_mapper;
-pub(crate) mod failover_switch;
 mod forwarder;
 pub mod gemini_url;
 pub mod handler_config;
@@ -36,10 +34,6 @@ pub(crate) mod types;
 pub mod usage;
 
 // 公开导出给外部使用（commands, services等模块需要）
-#[allow(unused_imports)]
-pub use circuit_breaker::{
-    CircuitBreaker, CircuitBreakerConfig, CircuitBreakerStats, CircuitState,
-};
 #[allow(unused_imports)]
 pub use error::ProxyError;
 #[allow(unused_imports)]

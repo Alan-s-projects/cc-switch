@@ -24,6 +24,13 @@ describe("read-only Codex connection suggestions", () => {
       suggestion,
       endpoint: "http://127.0.0.1:15721/v1",
       configured: false,
+      currentProvider: "Copilot Bridge",
+      copilotConfig: suggestion,
+      copilotDiff:
+        "--- a/config.toml\n+++ b/config.toml\n-old proxy\n+Atlas proxy\n",
+      openaiConfig:
+        'model_provider = "openai"\nforced_login_method = "chatgpt"\n',
+      openaiDiff: "--- a/config.toml\n+++ b/config.toml\n-old proxy\n+OpenAI\n",
     });
     mocks.copy.mockReset().mockResolvedValue(undefined);
   });
@@ -33,13 +40,32 @@ describe("read-only Codex connection suggestions", () => {
     expect(
       await screen.findByText("C:/Users/test/.codex/config.toml"),
     ).toBeVisible();
-    expect(screen.getByText("bridge.readOnly")).toBeVisible();
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: "bridge.copySuggestion" }),
+    expect(
+      screen.getByText(/Atlas reads your configuration and never writes it/),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Configuration diff")).toHaveTextContent(
+      "+Atlas proxy",
     );
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy proposed TOML" }));
     await waitFor(() => expect(mocks.copy).toHaveBeenCalledWith(suggestion));
-    fireEvent.click(screen.getByRole("button", { name: "common.refresh" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Return to OpenAI sign-in" }),
+    );
+    expect(screen.getByLabelText("Configuration diff")).toHaveTextContent(
+      "+OpenAI",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Proposed TOML" }));
+    expect(screen.getByLabelText("Proposed TOML")).toHaveTextContent(
+      'model_provider = "openai"',
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy proposed TOML" }));
+    await waitFor(() =>
+      expect(mocks.copy).toHaveBeenLastCalledWith(
+        'model_provider = "openai"\nforced_login_method = "chatgpt"\n',
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() =>
       expect(mocks.invoke.mock.calls.length).toBeGreaterThan(1),
     );
@@ -55,7 +81,7 @@ describe("read-only Codex connection suggestions", () => {
     renderPanel();
     expect(await screen.findByRole("alert")).toHaveTextContent("invalid");
     expect(
-      screen.queryByRole("button", { name: "bridge.copySuggestion" }),
+      screen.queryByRole("button", { name: "Copy proposed TOML" }),
     ).not.toBeInTheDocument();
     expect(mocks.copy).not.toHaveBeenCalled();
     expect(mocks.invoke).toHaveBeenCalledWith("get_codex_setup_suggestion");

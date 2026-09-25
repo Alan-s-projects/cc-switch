@@ -10,12 +10,8 @@ interface EditProviderDialogProps {
   open: boolean;
   provider: Provider | null;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (payload: {
-    provider: Provider;
-    originalId?: string;
-  }) => Promise<void> | void;
+  onSubmit: (payload: { provider: Provider }) => Promise<void> | void;
   appId: AppId;
-  isProxyTakeover?: boolean;
 }
 
 export function EditProviderDialog({
@@ -39,14 +35,13 @@ export function EditProviderDialog({
     <>
       <FullScreenPanel
         isOpen={open}
-        title={t("provider.editProvider")}
+        title="GitHub Copilot setup"
         onClose={close}
       >
         {open && provider && (
           <ProviderForm
             key={provider.id}
             appId="codex"
-            providerId={provider.id}
             initialData={provider}
             submitLabel={t("common.save")}
             onCancel={close}
@@ -55,11 +50,6 @@ export function EditProviderDialog({
               await onSubmit({
                 provider: {
                   ...provider,
-                  name: values.name,
-                  notes: values.notes,
-                  websiteUrl: values.websiteUrl ?? provider.websiteUrl,
-                  icon: values.icon ?? provider.icon,
-                  iconColor: values.iconColor ?? provider.iconColor,
                   settingsConfig: JSON.parse(values.settingsConfig),
                   meta: values.meta,
                 },

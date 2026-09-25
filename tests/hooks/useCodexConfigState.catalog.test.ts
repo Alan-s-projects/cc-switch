@@ -1,6 +1,5 @@
-import { renderHook } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
-import { useCodexConfigState } from "@/components/providers/forms/hooks/useCodexConfigState";
+import { mapCodexCatalogModelForForm } from "@/utils/codexModelCatalog";
 
 // 回归：编辑已存在的原生 Responses 供应商时，读回 modelCatalog 必须保留隐藏字段
 // (supportsParallelToolCalls / inputModalities / baseInstructions)，否则保存会
@@ -8,7 +7,7 @@ import { useCodexConfigState } from "@/components/providers/forms/hooks/useCodex
 //
 // 注意：initialData 必须是稳定引用（hook 的 init effect 依赖 [initialData]）。
 // 写成内联字面量会每次 re-render 产生新引用 → effect 反复 setState → 死循环 OOM。
-describe("useCodexConfigState catalog load", () => {
+describe("Copilot model catalog field preservation", () => {
   it("preserves native-profile hidden fields (camelCase, DB SSOT)", () => {
     const initialData = {
       settingsConfig: {
@@ -29,9 +28,11 @@ describe("useCodexConfigState catalog load", () => {
       },
     };
 
-    const { result } = renderHook(() => useCodexConfigState({ initialData }));
+    const models = initialData.settingsConfig.modelCatalog.models.map(
+      mapCodexCatalogModelForForm,
+    );
 
-    expect(result.current.codexCatalogModels).toEqual([
+    expect(models).toEqual([
       {
         model: "MiniMax-M3",
         displayName: "MiniMax-M3",
@@ -63,9 +64,11 @@ describe("useCodexConfigState catalog load", () => {
       },
     };
 
-    const { result } = renderHook(() => useCodexConfigState({ initialData }));
+    const models = initialData.settingsConfig.modelCatalog.models.map(
+      mapCodexCatalogModelForForm,
+    );
 
-    expect(result.current.codexCatalogModels).toEqual([
+    expect(models).toEqual([
       {
         model: "mimo-v2.5-pro",
         displayName: "MiMo V2.5 Pro",

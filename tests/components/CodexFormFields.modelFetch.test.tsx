@@ -6,7 +6,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { FormProvider, useForm } from "react-hook-form";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { CodexFormFields } from "@/components/providers/forms/CodexFormFields";
@@ -15,14 +14,12 @@ import {
   copilotGetModelsForAccount,
   type CopilotModel,
 } from "@/lib/api/copilot";
-import { showFetchModelsError } from "@/lib/api/model-fetch";
 import type { CodexCatalogModel } from "@/types";
 
 vi.mock("@/lib/api/copilot", () => ({
   copilotGetModels: vi.fn(),
   copilotGetModelsForAccount: vi.fn(),
 }));
-vi.mock("@/lib/api/model-fetch", () => ({ showFetchModelsError: vi.fn() }));
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
@@ -33,37 +30,16 @@ vi.mock("@/components/providers/forms/CopilotAuthSection", () => ({
 type Props = ComponentProps<typeof CodexFormFields>;
 function props(overrides: Partial<Props> = {}): Props {
   return {
-    isCopilotPreset: true,
     isCopilotAuthenticated: true,
     selectedGitHubAccountId: "account-a",
-    codexApiKey: "",
-    onApiKeyChange: vi.fn(),
-    category: "third_party",
-    shouldShowApiKeyLink: false,
-    websiteUrl: "",
-    shouldShowSpeedTest: false,
-    codexBaseUrl: "https://api.githubcopilot.com",
-    onBaseUrlChange: vi.fn(),
-    isFullUrl: false,
-    onFullUrlChange: vi.fn(),
-    isEndpointModalOpen: false,
-    onEndpointModalToggle: vi.fn(),
-    autoSelect: false,
-    onAutoSelectChange: vi.fn(),
-    apiFormat: "openai_chat",
-    onApiFormatChange: vi.fn(),
     copilotApiFormat: "auto",
-    anthropicAuthField: "ANTHROPIC_AUTH_TOKEN",
-    onAnthropicAuthFieldChange: vi.fn(),
-    impersonateClaudeCode: false,
-    onImpersonateClaudeCodeChange: vi.fn(),
-    maxOutputTokens: "",
-    onMaxOutputTokensChange: vi.fn(),
+    onCopilotApiFormatChange: vi.fn(),
+    codexChatReasoning: {},
+    onCodexChatReasoningChange: vi.fn(),
     promptCacheRouting: "auto",
     onPromptCacheRoutingChange: vi.fn(),
     catalogModels: [],
     onCatalogModelsChange: vi.fn(),
-    speedTestEndpoints: [],
     customUserAgent: "",
     onCustomUserAgentChange: vi.fn(),
     localProxyHeadersOverride: "",
@@ -74,7 +50,6 @@ function props(overrides: Partial<Props> = {}): Props {
   };
 }
 function Harness(input: Props) {
-  const form = useForm();
   const [models, setModels] = useState<CodexCatalogModel[]>(
     input.catalogModels ?? [],
   );
@@ -82,7 +57,7 @@ function Harness(input: Props) {
     setModels(input.catalogModels ?? []);
   }, [input.catalogModels]);
   return (
-    <FormProvider {...form}>
+    <>
       <CodexFormFields
         {...input}
         catalogModels={models}
@@ -91,7 +66,7 @@ function Harness(input: Props) {
           setModels(next);
         }}
       />
-    </FormProvider>
+    </>
   );
 }
 function model(id: string, endpoint = "/responses"): CopilotModel {
@@ -105,11 +80,12 @@ function model(id: string, endpoint = "/responses"): CopilotModel {
   };
 }
 const fetchButton = () =>
-  screen.getAllByRole("button", { name: "providerForm.fetchModels" })[0];
+  screen.getAllByRole("button", { name: "Refresh models" })[0];
 
 describe("Copilot model catalog import", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    HTMLElement.prototype.scrollIntoView = vi.fn();
   });
 
   it("filters models by Copilot transport and imports them into the bridge catalog", async () => {
@@ -127,10 +103,10 @@ describe("Copilot model catalog import", () => {
     expect(copilotGetModelsForAccount).toHaveBeenCalledWith("account-a");
   });
 
-  it("keeps explicit model declarations and defaults new GPT imports to image input", async () => {
+  it("preserves explicit limits and imports live image support", async () => {
     vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
       model("gpt-existing"),
-      model("gpt-new"),
+      { ...model("gpt-new"), supports_vision: true },
     ]);
     const input = props({
       catalogModels: [
@@ -176,18 +152,40 @@ describe("Copilot model catalog import", () => {
     expect(input.onCatalogModelsChange).not.toHaveBeenCalled();
   });
 
+  it("clears a removed default reasoning level without restoring the old selection", async () => {
+    const input = props({
+      catalogModels: [
+        {
+          model: "gpt-6-astra",
+          reasoningLevels: ["low", "medium"],
+          defaultReasoningLevel: "medium",
+        },
+      ],
+    });
+    render(<Harness {...input} />);
+    const reasoning = screen.getByRole("combobox", {
+      name: "Reasoning levels",
+    });
+    expect(reasoning).toHaveTextContent("low, medium");
+    fireEvent.click(reasoning);
+    fireEvent.click(await screen.findByRole("option", { name: "medium" }));
+    await waitFor(() =>
+      expect(input.onCatalogModelsChange).toHaveBeenLastCalledWith([
+        expect.objectContaining({
+          reasoningLevels: ["low"],
+          defaultReasoningLevel: undefined,
+        }),
+      ]),
+    );
+  });
+
   it("reports failures and releases the loading state", async () => {
     const failure = new Error("offline");
     vi.mocked(copilotGetModelsForAccount).mockRejectedValue(failure);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     render(<Harness {...props()} />);
     fireEvent.click(fetchButton());
-    await waitFor(() =>
-      expect(showFetchModelsError).toHaveBeenCalledWith(
-        failure,
-        expect.any(Function),
-      ),
-    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("offline"));
     await waitFor(() => expect(fetchButton()).not.toBeDisabled());
     warn.mockRestore();
   });
@@ -197,7 +195,9 @@ describe("Copilot model catalog import", () => {
     render(<Harness {...props()} />);
     fireEvent.click(fetchButton());
     await waitFor(() =>
-      expect(toast.info).toHaveBeenCalledWith("providerForm.fetchModelsEmpty"),
+      expect(toast.error).toHaveBeenCalledWith(
+        "No models support the selected protocol. Try Automatic.",
+      ),
     );
   });
 

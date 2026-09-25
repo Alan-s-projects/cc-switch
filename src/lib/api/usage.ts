@@ -12,43 +12,9 @@ import type {
   ModelsDevSyncState,
   ProviderLimitStatus,
   PaginatedLogs,
-  SessionSyncResult,
-  DataSourceSummary,
 } from "@/types/usage";
-import type { UsageResult } from "@/types";
-import type { AppId } from "./types";
-import type { TemplateType } from "@/config/constants";
 
 export const usageApi = {
-  // Provider usage script methods
-  query: async (providerId: string, appId: AppId): Promise<UsageResult> => {
-    return invoke("queryProviderUsage", { providerId, app: appId });
-  },
-
-  testScript: async (
-    providerId: string,
-    appId: AppId,
-    scriptCode: string,
-    timeout?: number,
-    apiKey?: string,
-    baseUrl?: string,
-    accessToken?: string,
-    userId?: string,
-    templateType?: TemplateType,
-  ): Promise<UsageResult> => {
-    return invoke("testUsageScript", {
-      providerId,
-      app: appId,
-      scriptCode,
-      timeout,
-      apiKey,
-      baseUrl,
-      accessToken,
-      userId,
-      templateType,
-    });
-  },
-
   // Proxy usage statistics methods
   getUsageSummary: async (
     startDate?: number,
@@ -196,18 +162,5 @@ export const usageApi = {
     appType: string,
   ): Promise<ProviderLimitStatus> => {
     return invoke("check_provider_limits", { providerId, appType });
-  },
-
-  // Session usage sync
-  syncSessionUsage: async (): Promise<SessionSyncResult> => {
-    return invoke("sync_session_usage");
-  },
-
-  rebuildCodexUsage: async (): Promise<SessionSyncResult> => {
-    return invoke("rebuild_codex_usage");
-  },
-
-  getDataSourceBreakdown: async (): Promise<DataSourceSummary[]> => {
-    return invoke("get_usage_data_sources");
   },
 };

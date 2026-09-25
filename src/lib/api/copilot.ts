@@ -110,6 +110,9 @@ export interface CopilotModel {
   model_picker_enabled: boolean;
   context_window?: number;
   supported_endpoints?: string[];
+  supports_parallel_tool_calls?: boolean;
+  supports_vision?: boolean;
+  reasoning_efforts?: string[];
 }
 
 /**

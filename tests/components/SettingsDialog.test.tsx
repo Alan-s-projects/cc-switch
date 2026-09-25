@@ -56,7 +56,6 @@ const createSettingsMock = (overrides: Partial<SettingsMock> = {}) => {
     settings: {
       showInTray: true,
       minimizeToTrayOnClose: true,
-      enableClaudePluginIntegration: false,
       language: "zh",
       claudeConfigDir: "/claude",
       codexConfigDir: "/codex",
@@ -221,12 +220,6 @@ vi.mock("@/components/settings/AboutSection", () => ({
   AboutSection: ({ isPortable }: any) => <div>about:{String(isPortable)}</div>,
 }));
 
-vi.mock("@/components/settings/WebdavSyncSection", () => ({
-  WebdavSyncSection: ({ config }: any) => (
-    <div>webdav-sync-section:{config?.baseUrl ?? "none"}</div>
-  ),
-}));
-
 let settingsApi: any;
 
 const renderSettingsPage = (
@@ -317,8 +310,9 @@ describe("SettingsPage Component", () => {
     });
 
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
-    fireEvent.click(screen.getByText("settings.advanced.cloudSync.title"));
-    expect(screen.getByText("webdav-sync-section:none")).toBeInTheDocument();
+    expect(
+      screen.queryByText("settings.advanced.cloudSync.title"),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("settings.advanced.data.title"));
 
     // 有文件时，点击导入按钮执行 importConfig

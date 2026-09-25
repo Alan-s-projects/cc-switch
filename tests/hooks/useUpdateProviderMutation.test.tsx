@@ -1,149 +1,32 @@
 import type { ReactNode } from "react";
 import { act, renderHook } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { expect, it, vi } from "vitest";
 import { useUpdateProviderMutation } from "@/lib/query/mutations";
-import { usageKeys } from "@/lib/query/usage";
-import type { Provider } from "@/types";
-
-const apiMocks = vi.hoisted(() => ({
-  update: vi.fn(),
-}));
-
-vi.mock("@/lib/api", () => ({
-  providersApi: {
-    update: (...args: unknown[]) => apiMocks.update(...args),
-  },
-  sessionsApi: {},
-  settingsApi: {},
-}));
-
-vi.mock("@/hooks/useHermes", () => ({
-  invalidateHermesProviderCaches: vi.fn(),
-}));
-
-vi.mock("@/hooks/useOpenClaw", () => ({
-  openclawKeys: {
-    health: ["openclaw", "health"],
-  },
-}));
-
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (_key: string, options?: { defaultValue?: string }) =>
-      options?.defaultValue ?? _key,
-  }),
-}));
-
-vi.mock("sonner", () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
-
-function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  });
-  const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-
+import { createTestQueryClient } from "../utils/testQueryClient";
+const update = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+vi.mock("@/lib/api", () => ({ providersApi: { update }, settingsApi: {} }));
+it("refreshes Copilot, quota and the connection preview after editing", async () => {
+  const client = createTestQueryClient();
+  const invalidate = vi.spyOn(client, "invalidateQueries");
   const wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-
-  return { wrapper, invalidateSpy };
-}
-
-function createProvider(overrides: Partial<Provider> = {}): Provider {
-  return {
-    id: "provider-1",
-    name: "Test Provider",
+  const { result } = renderHook(() => useUpdateProviderMutation("codex"), {
+    wrapper,
+  });
+  const provider = {
+    id: "copilot",
+    name: "GitHub Copilot",
     settingsConfig: {},
-    ...overrides,
   };
-}
-
-beforeEach(() => {
-  apiMocks.update.mockReset().mockResolvedValue(true);
-});
-
-describe("useUpdateProviderMutation", () => {
-  it("invalidates the updated provider usage query", async () => {
-    const { wrapper, invalidateSpy } = createWrapper();
-    const provider = createProvider({ id: "provider-b" });
-    const { result } = renderHook(() => useUpdateProviderMutation("codex"), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync({ provider });
-    });
-
-    expect(apiMocks.update).toHaveBeenCalledWith(provider, "codex", undefined);
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: ["providers", "codex"],
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: usageKeys.script("provider-b", "codex"),
-    });
-    expect(invalidateSpy).not.toHaveBeenCalledWith({
-      queryKey: usageKeys.all,
-    });
-  });
-
-  it("also invalidates the previous usage query when provider id changes", async () => {
-    const { wrapper, invalidateSpy } = createWrapper();
-    const provider = createProvider({ id: "provider-new" });
-    const { result } = renderHook(() => useUpdateProviderMutation("openclaw"), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync({
-        provider,
-        originalId: "provider-old",
-      });
-    });
-
-    expect(apiMocks.update).toHaveBeenCalledWith(
-      provider,
-      "openclaw",
-      "provider-old",
-    );
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: usageKeys.script("provider-new", "openclaw"),
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: usageKeys.script("provider-old", "openclaw"),
-    });
-    expect(invalidateSpy).not.toHaveBeenCalledWith({
-      queryKey: usageKeys.all,
-    });
-  });
-
-  it("refreshes Pi provider caches even when an update fails", async () => {
-    apiMocks.update.mockRejectedValueOnce(new Error("conflict"));
-    const { wrapper, invalidateSpy } = createWrapper();
-    const provider = createProvider({ id: "pi-provider" });
-    const { result } = renderHook(() => useUpdateProviderMutation("pi"), {
-      wrapper,
-    });
-
-    await act(async () => {
-      await expect(result.current.mutateAsync({ provider })).rejects.toThrow(
-        "conflict",
-      );
-    });
-
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: ["pi", "currentState"],
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: ["providers", "pi"],
-    });
-  });
+  await act(() => result.current.mutateAsync({ provider }));
+  expect(update).toHaveBeenCalledWith(provider, "codex");
+  for (const queryKey of [
+    ["providers", "codex"],
+    ["copilot", "quota"],
+    ["codex-setup-suggestion"],
+  ]) {
+    expect(invalidate).toHaveBeenCalledWith({ queryKey });
+  }
 });

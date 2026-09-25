@@ -36,21 +36,6 @@ export interface RequestLog {
   dataSource?: string;
 }
 
-export interface SessionSyncResult {
-  imported: number;
-  skipped: number;
-  filesScanned: number;
-  suspectedDuplicates: number;
-  deferredFiles: number;
-  errors: string[];
-}
-
-export interface DataSourceSummary {
-  dataSource: string;
-  requestCount: number;
-  totalCostUsd: string;
-}
-
 export interface PaginatedLogs {
   data: RequestLog[];
   total: number;

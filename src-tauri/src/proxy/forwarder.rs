@@ -7,10 +7,8 @@ use super::{
     body_filter::filter_private_params_with_whitelist,
     content_encoding::{decompress_body_with_limit, get_content_encoding},
     error::*,
-    failover_switch::FailoverSwitchManager,
     json_canonical::{canonicalize_value, short_value_hash},
     log_codes::fwd as log_fwd,
-    provider_router::ProviderRouter,
     providers::{
         codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore, get_adapter,
         AuthInfo, AuthStrategy, ProviderAdapter, ProviderType,
@@ -22,12 +20,11 @@ use super::{
     types::{CopilotOptimizerConfig, OptimizerConfig, ProxyStatus, RectifierConfig},
     ProxyError,
 };
-use crate::commands::{CodexOAuthState, CopilotAuthState, XaiOAuthState};
+use crate::commands::CopilotAuthState;
 use crate::proxy::providers::copilot_auth::{CopilotAuthError, CopilotAuthManager};
 use crate::proxy::providers::copilot_model_map::{
     CopilotProtocol, CopilotTransport, ResolvedCopilotModel,
 };
-use crate::proxy::providers::xai_oauth_auth::XaiOAuthManager;
 use crate::{
     app_config::AppType,
     provider::{CodexCopilotApiFormat, LocalProxyRequestOverrides, Provider},
@@ -229,17 +226,14 @@ impl Drop for ActiveConnectionGuard {
 
 pub struct RequestForwarder {
     /// 共享的 ProviderRouter（持有熔断器状态）
-    router: Arc<ProviderRouter>,
     status: Arc<RwLock<ProxyStatus>>,
     current_providers: Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
     gemini_shadow: Arc<GeminiShadowStore>,
     codex_chat_history: Arc<CodexChatHistoryStore>,
     /// 故障转移切换管理器
-    failover_manager: Arc<FailoverSwitchManager>,
     /// AppHandle，用于发射事件和更新托盘
     app_handle: Option<tauri::AppHandle>,
     /// 请求开始时的"当前供应商 ID"（用于判断是否需要同步 UI/托盘）
-    current_provider_id_at_start: String,
     /// 代理会话 ID（用于 Gemini Native shadow replay）
     session_id: String,
     /// Session ID 是否由客户端提供；生成值不能作为上游缓存身份。
@@ -254,12 +248,6 @@ pub struct RequestForwarder {
     non_streaming_timeout: std::time::Duration,
     /// 流式请求响应头等待超时（秒）
     streaming_first_byte_timeout: std::time::Duration,
-    /// 单个客户端请求最多尝试的 provider 数。
-    ///
-    /// 由 `AppProxyConfig.max_retries` (UI: "请求失败时的重试次数, 0-10") 派生：
-    /// `max_attempts = max_retries + 1`，所以 max_retries=0 表示仅尝试一家、
-    /// max_retries=3（默认）表示最多 4 家。loop 同时受 providers.len() 自然限制。
-    max_attempts: usize,
 }
 
 impl RequestForwarder {
@@ -310,15 +298,12 @@ impl RequestForwarder {
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        router: Arc<ProviderRouter>,
         non_streaming_timeout: u64,
         status: Arc<RwLock<ProxyStatus>>,
         current_providers: Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
         gemini_shadow: Arc<GeminiShadowStore>,
         codex_chat_history: Arc<CodexChatHistoryStore>,
-        failover_manager: Arc<FailoverSwitchManager>,
         app_handle: Option<tauri::AppHandle>,
-        current_provider_id_at_start: String,
         session_id: String,
         session_client_provided: bool,
         streaming_first_byte_timeout: u64,
@@ -326,20 +311,15 @@ impl RequestForwarder {
         rectifier_config: RectifierConfig,
         optimizer_config: OptimizerConfig,
         copilot_optimizer_config: CopilotOptimizerConfig,
-        max_retries: u32,
     ) -> Self {
         // max_retries 是「失败后重试次数」语义，attempt 上限 = retries + 1。
         // saturating_add 防止 u32::MAX + 1 溢出。
-        let max_attempts = (max_retries as usize).saturating_add(1);
         Self {
-            router,
             status,
             current_providers,
             gemini_shadow,
             codex_chat_history,
-            failover_manager,
             app_handle,
-            current_provider_id_at_start,
             session_id,
             session_client_provided,
             rectifier_config,
@@ -349,42 +329,7 @@ impl RequestForwarder {
             streaming_first_byte_timeout: std::time::Duration::from_secs(
                 streaming_first_byte_timeout,
             ),
-            max_attempts,
         }
-    }
-
-    async fn record_success_result(
-        &self,
-        provider_id: &str,
-        app_type: &str,
-        used_half_open_permit: bool,
-    ) {
-        if used_half_open_permit {
-            if let Err(e) = self
-                .router
-                .record_result(provider_id, app_type, true, true, None)
-                .await
-            {
-                log::warn!(
-                    "[{app_type}] 记录 Provider 成功结果失败: provider_id={provider_id}, error={e}"
-                );
-            }
-            return;
-        }
-
-        let router = self.router.clone();
-        let provider_id = provider_id.to_string();
-        let app_type = app_type.to_string();
-        tokio::spawn(async move {
-            if let Err(e) = router
-                .record_result(&provider_id, &app_type, false, true, None)
-                .await
-            {
-                log::warn!(
-                    "[{app_type}] 异步记录 Provider 成功结果失败: provider_id={provider_id}, error={e}"
-                );
-            }
-        });
     }
 
     /// 整流（thinking signature 或 budget）重试失败后的统一收尾。
@@ -399,7 +344,6 @@ impl RequestForwarder {
         retry_err: ProxyError,
         provider: &Provider,
         app_type_str: &str,
-        used_half_open_permit: bool,
         rectifier_label: &str,
         last_error: &mut Option<ProxyError>,
         last_provider: &mut Option<Provider>,
@@ -413,16 +357,6 @@ impl RequestForwarder {
         };
 
         if is_provider_error {
-            let _ = self
-                .router
-                .record_result(
-                    &provider.id,
-                    app_type_str,
-                    used_half_open_permit,
-                    false,
-                    Some(retry_err.to_string()),
-                )
-                .await;
             {
                 let mut status = self.status.write().await;
                 status.last_error = Some(format!(
@@ -435,9 +369,6 @@ impl RequestForwarder {
             return None;
         }
 
-        self.router
-            .release_permit_neutral(&provider.id, app_type_str, used_half_open_permit)
-            .await;
         let mut status = self.status.write().await;
         status.failed_requests += 1;
         status.last_error = Some(retry_err.to_string());
@@ -529,43 +460,11 @@ impl RequestForwarder {
         let mut last_provider = None;
         let mut attempted_providers = 0usize;
 
-        // 单 Provider 场景下跳过熔断器检查（故障转移关闭时）
-        let bypass_circuit_breaker = providers.len() == 1;
-
-        // 依次尝试每个供应商
-        for provider in providers.iter() {
-            // 整流器重试标记：每个 provider 独立持有，避免标记跨 provider 短路故障转移
-            // —— 首家 provider 整流后被 5xx/timeout 击落时，下家仍能用整流后的请求体走整流流程
+        // Atlas forwards through exactly one Copilot entry. Protocol repairs stay on it.
+        for provider in providers.iter().take(1) {
             let mut rectifier_retried = false;
             let mut budget_rectifier_retried = false;
             let mut media_rectifier_retried = false;
-
-            // 上限检查：尊重用户在 AppProxyConfig.max_retries 上配置的「重试次数」。
-            // 放在熔断器 allow 检查之前，避免在已经超限时还占用 HalfOpen 探测名额。
-            if attempted_providers >= self.max_attempts {
-                log::warn!(
-                    "[{app_type_str}] 已达最大尝试次数上限 ({}/{}), 停止故障转移",
-                    attempted_providers,
-                    self.max_attempts
-                );
-                break;
-            }
-
-            // 发起请求前先获取熔断器放行许可（HalfOpen 会占用探测名额）
-            // 单 Provider 场景下跳过此检查，避免熔断器阻塞所有请求
-            let (allowed, used_half_open_permit) = if bypass_circuit_breaker {
-                (true, false)
-            } else {
-                let permit = self
-                    .router
-                    .allow_provider_request(&provider.id, app_type_str)
-                    .await;
-                (permit.allowed, permit.used_half_open_permit)
-            };
-
-            if !allowed {
-                continue;
-            }
 
             // PRE-SEND 优化器：每个 provider 独立决定是否优化
             // clone body 以避免 Bedrock 优化字段泄漏到非 Bedrock provider（failover 场景）
@@ -613,8 +512,6 @@ impl RequestForwarder {
                 Ok((response, claude_api_format, outbound_model, codex_upstream_format)) => {
                     // 成功：普通闭合熔断状态异步记录，避免阻塞流式首包返回；
                     // HalfOpen 探测仍同步等待，保证 permit 与熔断状态及时释放。
-                    self.record_success_result(&provider.id, app_type_str, used_half_open_permit)
-                        .await;
 
                     // 更新当前应用类型使用的 provider
                     {
@@ -630,22 +527,7 @@ impl RequestForwarder {
                         let mut status = self.status.write().await;
                         status.success_requests += 1;
                         status.last_error = None;
-                        let should_switch =
-                            self.current_provider_id_at_start.as_str() != provider.id.as_str();
-                        if should_switch {
-                            status.failover_count += 1;
 
-                            // 异步触发供应商切换，更新 UI/托盘，并把“当前供应商”同步为实际使用的 provider
-                            let fm = self.failover_manager.clone();
-                            let ah = self.app_handle.clone();
-                            let pid = provider.id.clone();
-                            let pname = provider.name.clone();
-                            let at = app_type_str.to_string();
-
-                            tokio::spawn(async move {
-                                let _ = fm.try_switch(ah.as_ref(), &at, &pid, &pname).await;
-                            });
-                        }
                         // 重新计算成功率
                         if status.total_requests > 0 {
                             status.success_rate = (status.success_requests as f32
@@ -719,12 +601,6 @@ impl RequestForwarder {
                                     log::info!(
                                         "[{app_type_str}] [Media] Unsupported-image retry succeeded"
                                     );
-                                    self.record_success_result(
-                                        &provider.id,
-                                        app_type_str,
-                                        used_half_open_permit,
-                                    )
-                                    .await;
 
                                     {
                                         let mut current_providers =
@@ -739,23 +615,7 @@ impl RequestForwarder {
                                         let mut status = self.status.write().await;
                                         status.success_requests += 1;
                                         status.last_error = None;
-                                        let should_switch =
-                                            self.current_provider_id_at_start.as_str()
-                                                != provider.id.as_str();
-                                        if should_switch {
-                                            status.failover_count += 1;
-                                            let fm = self.failover_manager.clone();
-                                            let ah = self.app_handle.clone();
-                                            let pid = provider.id.clone();
-                                            let pname = provider.name.clone();
-                                            let at = app_type_str.to_string();
 
-                                            tokio::spawn(async move {
-                                                let _ = fm
-                                                    .try_switch(ah.as_ref(), &at, &pid, &pname)
-                                                    .await;
-                                            });
-                                        }
                                         if status.total_requests > 0 {
                                             status.success_rate = (status.success_requests as f32
                                                 / status.total_requests as f32)
@@ -781,7 +641,6 @@ impl RequestForwarder {
                                             retry_err,
                                             provider,
                                             app_type_str,
-                                            used_half_open_permit,
                                             "media 降级",
                                             &mut last_error,
                                             &mut last_provider,
@@ -806,13 +665,6 @@ impl RequestForwarder {
                             if rectifier_retried {
                                 log::warn!("[{app_type_str}] [RECT-005] 整流器已触发过，不再重试");
                                 // 释放 HalfOpen permit（不记录熔断器，这是客户端兼容性问题）
-                                self.router
-                                    .release_permit_neutral(
-                                        &provider.id,
-                                        app_type_str,
-                                        used_half_open_permit,
-                                    )
-                                    .await;
                                 let mut status = self.status.write().await;
                                 status.failed_requests += 1;
                                 status.last_error = Some(e.to_string());
@@ -869,12 +721,6 @@ impl RequestForwarder {
                                         codex_upstream_format,
                                     )) => {
                                         log::info!("[{app_type_str}] [RECT-002] 整流重试成功");
-                                        self.record_success_result(
-                                            &provider.id,
-                                            app_type_str,
-                                            used_half_open_permit,
-                                        )
-                                        .await;
 
                                         // 更新当前应用类型使用的 provider
                                         {
@@ -891,25 +737,7 @@ impl RequestForwarder {
                                             let mut status = self.status.write().await;
                                             status.success_requests += 1;
                                             status.last_error = None;
-                                            let should_switch =
-                                                self.current_provider_id_at_start.as_str()
-                                                    != provider.id.as_str();
-                                            if should_switch {
-                                                status.failover_count += 1;
 
-                                                // 异步触发供应商切换，更新 UI/托盘
-                                                let fm = self.failover_manager.clone();
-                                                let ah = self.app_handle.clone();
-                                                let pid = provider.id.clone();
-                                                let pname = provider.name.clone();
-                                                let at = app_type_str.to_string();
-
-                                                tokio::spawn(async move {
-                                                    let _ = fm
-                                                        .try_switch(ah.as_ref(), &at, &pid, &pname)
-                                                        .await;
-                                                });
-                                            }
                                             if status.total_requests > 0 {
                                                 status.success_rate = (status.success_requests
                                                     as f32
@@ -936,7 +764,6 @@ impl RequestForwarder {
                                                 retry_err,
                                                 provider,
                                                 app_type_str,
-                                                used_half_open_permit,
                                                 "整流",
                                                 &mut last_error,
                                                 &mut last_provider,
@@ -964,13 +791,6 @@ impl RequestForwarder {
                                 log::warn!(
                                     "[{app_type_str}] [RECT-013] budget 整流器已触发过，不再重试"
                                 );
-                                self.router
-                                    .release_permit_neutral(
-                                        &provider.id,
-                                        app_type_str,
-                                        used_half_open_permit,
-                                    )
-                                    .await;
                                 let mut status = self.status.write().await;
                                 status.failed_requests += 1;
                                 status.last_error = Some(e.to_string());
@@ -990,13 +810,6 @@ impl RequestForwarder {
                                 log::warn!(
                                     "[{app_type_str}] [RECT-014] budget 整流器触发但无可整流内容，不做无意义重试"
                                 );
-                                self.router
-                                    .release_permit_neutral(
-                                        &provider.id,
-                                        app_type_str,
-                                        used_half_open_permit,
-                                    )
-                                    .await;
                                 let mut status = self.status.write().await;
                                 status.failed_requests += 1;
                                 status.last_error = Some(e.to_string());
@@ -1041,12 +854,6 @@ impl RequestForwarder {
                                     codex_upstream_format,
                                 )) => {
                                     log::info!("[{app_type_str}] [RECT-011] budget 整流重试成功");
-                                    self.record_success_result(
-                                        &provider.id,
-                                        app_type_str,
-                                        used_half_open_permit,
-                                    )
-                                    .await;
 
                                     {
                                         let mut current_providers =
@@ -1061,22 +868,7 @@ impl RequestForwarder {
                                         let mut status = self.status.write().await;
                                         status.success_requests += 1;
                                         status.last_error = None;
-                                        let should_switch =
-                                            self.current_provider_id_at_start.as_str()
-                                                != provider.id.as_str();
-                                        if should_switch {
-                                            status.failover_count += 1;
-                                            let fm = self.failover_manager.clone();
-                                            let ah = self.app_handle.clone();
-                                            let pid = provider.id.clone();
-                                            let pname = provider.name.clone();
-                                            let at = app_type_str.to_string();
-                                            tokio::spawn(async move {
-                                                let _ = fm
-                                                    .try_switch(ah.as_ref(), &at, &pid, &pname)
-                                                    .await;
-                                            });
-                                        }
+
                                         if status.total_requests > 0 {
                                             status.success_rate = (status.success_requests as f32
                                                 / status.total_requests as f32)
@@ -1102,7 +894,6 @@ impl RequestForwarder {
                                             retry_err,
                                             provider,
                                             app_type_str,
-                                            used_half_open_permit,
                                             "budget 整流",
                                             &mut last_error,
                                             &mut last_provider,
@@ -1118,13 +909,6 @@ impl RequestForwarder {
                     }
 
                     if signature_rectifier_non_retryable_client_error {
-                        self.router
-                            .release_permit_neutral(
-                                &provider.id,
-                                app_type_str,
-                                used_half_open_permit,
-                            )
-                            .await;
                         let mut status = self.status.write().await;
                         status.failed_requests += 1;
                         status.last_error = Some(e.to_string());
@@ -1147,16 +931,6 @@ impl RequestForwarder {
                     match category {
                         ErrorCategory::Retryable => {
                             // 可重试：真正的 provider 故障 → 记录失败并更新熔断器/DB 健康度
-                            let _ = self
-                                .router
-                                .record_result(
-                                    &provider.id,
-                                    app_type_str,
-                                    used_half_open_permit,
-                                    false,
-                                    Some(e.to_string()),
-                                )
-                                .await;
 
                             {
                                 let mut status = self.status.write().await;
@@ -1179,13 +953,6 @@ impl RequestForwarder {
                         }
                         ErrorCategory::NonRetryable | ErrorCategory::ClientAbort => {
                             // 不可重试：客户端层错误或客户端断连 → 不污染健康度，仅释放 HalfOpen permit
-                            self.router
-                                .release_permit_neutral(
-                                    &provider.id,
-                                    app_type_str,
-                                    used_half_open_permit,
-                                )
-                                .await;
                             {
                                 let mut status = self.status.write().await;
                                 status.failed_requests += 1;
@@ -1204,23 +971,6 @@ impl RequestForwarder {
                     }
                 }
             }
-        }
-
-        if attempted_providers == 0 {
-            // providers 列表非空，但全部被熔断器拒绝（典型：HalfOpen 探测名额被占用）
-            {
-                let mut status = self.status.write().await;
-                status.failed_requests += 1;
-                status.last_error = Some("所有供应商暂时不可用（熔断器限制）".to_string());
-                if status.total_requests > 0 {
-                    status.success_rate =
-                        (status.success_requests as f32 / status.total_requests as f32) * 100.0;
-                }
-            }
-            return Err(ForwardError {
-                error: ProxyError::NoAvailableProvider,
-                provider: None,
-            });
         }
 
         // 所有供应商都失败了
@@ -1304,48 +1054,6 @@ impl RequestForwarder {
         let mut copilot_endpoint_override: Option<String> = None;
         let codex_official_auth_passthrough = matches!(app_type, AppType::Codex)
             && super::providers::is_codex_official_provider(provider);
-
-        if codex_official_auth_passthrough {
-            let (expected_chatgpt_account_id, managed_session_matches) = match provider
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
-            {
-                Some(local_account_id) => {
-                    let app_handle = self.app_handle.as_ref().ok_or_else(|| {
-                        ProxyError::AuthError("Codex OAuth 认证不可用（无 AppHandle）".to_string())
-                    })?;
-                    let codex_state = app_handle.state::<CodexOAuthState>();
-                    let chatgpt_account_id = codex_state
-                        .0
-                        .chatgpt_account_id_for_account(&local_account_id)
-                        .await
-                        .map_err(|error| {
-                            ProxyError::AuthError(format!("Codex OAuth 账号解析失败: {error}"))
-                        })?;
-                    let session_matches = match codex_bearer_access_token(headers) {
-                        Some(access_token) => {
-                            crate::codex_config::codex_live_auth_matches_managed_request(
-                                &local_account_id,
-                                access_token,
-                            )
-                            .map_err(|error| {
-                                ProxyError::AuthError(format!("Codex OAuth 会话校验失败: {error}"))
-                            })?
-                        }
-                        None => false,
-                    };
-                    (Some(chatgpt_account_id), Some(session_matches))
-                }
-                None => (None, None),
-            };
-            validate_codex_official_authorization(
-                headers,
-                provider,
-                expected_chatgpt_account_id.as_deref(),
-                managed_session_matches,
-            )?;
-        }
 
         // 应用模型映射（独立于格式转换）
         // Claude Desktop proxy 模式必须先把 Desktop 可见的 claude-* route
@@ -1884,8 +1592,8 @@ impl RequestForwarder {
             || request_is_streaming;
 
         // Codex OAuth 需要注入的 ChatGPT-Account-Id（在动态 token 获取期间填充）
-        let mut codex_oauth_account_id: Option<String> = None;
-        let mut should_send_codex_oauth_session_headers = false;
+        let codex_oauth_account_id: Option<String> = None;
+        let should_send_codex_oauth_session_headers = false;
 
         // 获取认证头（提前准备，用于内联替换），同时保留仅用于日志脱敏的
         // 精确认证材料。实际日志永远不输出这些值。
@@ -1943,109 +1651,10 @@ impl RequestForwarder {
             }
 
             // Codex OAuth 特殊处理：从 CodexOAuthManager 获取真实 access_token
-            if auth.strategy == AuthStrategy::CodexOAuth {
-                if let Some(app_handle) = &self.app_handle {
-                    let codex_state = app_handle.state::<CodexOAuthState>();
-                    let codex_auth = &codex_state.0;
-
-                    // 从 provider.meta 获取关联的 ChatGPT 账号 ID
-                    let account_id = provider
-                        .meta
-                        .as_ref()
-                        .and_then(|m| m.managed_account_id_for("codex_oauth"));
-
-                    let resolved_account_id = match account_id {
-                        Some(id) => Some(id),
-                        None => codex_auth.default_account_id().await,
-                    };
-
-                    let token_result = match &resolved_account_id {
-                        Some(id) => {
-                            log::debug!("[CodexOAuth] 使用指定账号 {id} 获取 token");
-                            codex_auth.get_valid_token_for_account(id).await
-                        }
-                        None => {
-                            return Err(ProxyError::AuthError(
-                                "Codex OAuth 认证失败: 无可用的 ChatGPT 账号".to_string(),
-                            ));
-                        }
-                    };
-
-                    match token_result {
-                        Ok(token) => {
-                            auth = AuthInfo::new(token, AuthStrategy::CodexOAuth);
-                            should_send_codex_oauth_session_headers = true;
-                            // 本地账号 ID 只用于绑定；请求头必须使用上游 workspace ID。
-                            codex_oauth_account_id = match resolved_account_id.as_deref() {
-                                Some(id) => Some(
-                                    codex_auth
-                                        .chatgpt_account_id_for_account(id)
-                                        .await
-                                        .map_err(|e| {
-                                            ProxyError::AuthError(format!(
-                                                "Codex OAuth 账号解析失败: {e}"
-                                            ))
-                                        })?,
-                                ),
-                                None => None,
-                            };
-                            log::debug!(
-                                "[CodexOAuth] 成功获取 access_token (account={})",
-                                codex_oauth_account_id.as_deref().unwrap_or("default")
-                            );
-                        }
-                        Err(e) => {
-                            log::error!("[CodexOAuth] 获取 access_token 失败: {e}");
-                            return Err(ProxyError::AuthError(format!(
-                                "Codex OAuth 认证失败: {e}"
-                            )));
-                        }
-                    }
-                } else {
-                    log::error!("[CodexOAuth] AppHandle 不可用");
-                    return Err(ProxyError::AuthError(
-                        "Codex OAuth 认证不可用（无 AppHandle）".to_string(),
-                    ));
-                }
-            }
 
             // xAI OAuth: resolve a managed account token immediately before
             // sending the request. Invalid refresh credentials are persisted as
             // requiring re-authentication by the manager.
-            if auth.strategy == AuthStrategy::XaiOAuth {
-                if let Some(app_handle) = &self.app_handle {
-                    let xai_state = app_handle.state::<XaiOAuthState>();
-                    let xai_auth: tokio::sync::RwLockReadGuard<'_, XaiOAuthManager> =
-                        xai_state.0.read().await;
-                    let account_id = provider
-                        .meta
-                        .as_ref()
-                        .and_then(|meta| meta.managed_account_id_for("xai_oauth"));
-                    let token_result = match &account_id {
-                        Some(id) => xai_auth.get_valid_token_for_account(id).await,
-                        None => xai_auth.get_valid_token().await,
-                    };
-                    match token_result {
-                        Ok(token) => {
-                            auth = AuthInfo::new(token, AuthStrategy::XaiOAuth);
-                            log::debug!(
-                                "[XaiOAuth] 成功获取 access_token (account={})",
-                                account_id.as_deref().unwrap_or("default")
-                            );
-                        }
-                        Err(error) => {
-                            log::error!("[XaiOAuth] 获取 access_token 失败: {error}");
-                            return Err(ProxyError::AuthError(format!(
-                                "xAI OAuth 认证失败: {error}"
-                            )));
-                        }
-                    }
-                } else {
-                    return Err(ProxyError::AuthError(
-                        "xAI OAuth 认证不可用（无 AppHandle）".to_string(),
-                    ));
-                }
-            }
 
             for secret in std::iter::once(&auth.api_key).chain(auth.access_token.iter()) {
                 if !secret.is_empty() && !log_secrets.contains(secret) {
@@ -2538,7 +2147,7 @@ impl RequestForwarder {
 
         if status.is_success() {
             let mut response = self
-                .prepare_success_response_for_failover(response, request_is_streaming)
+                .validate_success_response(response, request_is_streaming)
                 .await?;
             // Streaming requests normally return SSE. If a compatible gateway
             // explicitly returns JSON instead, buffer and validate it inside the retry
@@ -2601,7 +2210,7 @@ impl RequestForwarder {
     ///
     /// - 非流式：先把完整 body 读到内存，读超时/连接中断会回到 retry loop 尝试下一家。
     /// - 流式：至少等首个 chunk 到达，避免上游返回 200 后一直不吐 SSE 时被误记成功。
-    async fn prepare_success_response_for_failover(
+    async fn validate_success_response(
         &self,
         response: ProxyResponse,
         request_is_streaming: bool,
@@ -4158,17 +3767,12 @@ mod tests {
         non_streaming_timeout: Duration,
         streaming_first_byte_timeout: Duration,
     ) -> RequestForwarder {
-        let db = Arc::new(Database::memory().expect("memory db"));
-
         RequestForwarder {
-            router: Arc::new(ProviderRouter::new(db.clone())),
             status: Arc::new(RwLock::new(ProxyStatus::default())),
             current_providers: Arc::new(RwLock::new(HashMap::new())),
             gemini_shadow: Arc::new(GeminiShadowStore::new()),
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
-            failover_manager: Arc::new(FailoverSwitchManager::new(db)),
             app_handle: None,
-            current_provider_id_at_start: String::new(),
             session_id: String::new(),
             session_client_provided: false,
             rectifier_config: RectifierConfig::default(),
@@ -4176,7 +3780,6 @@ mod tests {
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
             non_streaming_timeout,
             streaming_first_byte_timeout,
-            max_attempts: 1,
         }
     }
 
@@ -4198,31 +3801,8 @@ mod tests {
     }
 
     #[test]
-    fn multi_provider_retryable_log_keeps_failover_wording() {
-        let error = ProxyError::Timeout("upstream timed out after 30s".to_string());
-
-        let (code, message) = build_retryable_failure_log("primary", 1, 3, &error);
-
-        assert_eq!(code, log_fwd::PROVIDER_FAILED_RETRY);
-        assert!(message.contains("继续尝试下一个 (1/3)"));
-        assert!(message.contains("请求超时"));
-    }
-
-    #[test]
     fn single_provider_has_no_terminal_all_failed_log() {
         assert!(build_terminal_failure_log(1, 1, None).is_none());
-    }
-
-    #[test]
-    fn multi_provider_terminal_log_contains_last_error_summary() {
-        let error = ProxyError::ForwardFailed("connection reset by peer".to_string());
-
-        let (code, message) =
-            build_terminal_failure_log(2, 2, Some(&error)).expect("expected terminal log");
-
-        assert_eq!(code, log_fwd::ALL_PROVIDERS_FAILED);
-        assert!(message.contains("已尝试 2/2 个 Provider，均失败"));
-        assert!(message.contains("connection reset by peer"));
     }
 
     #[test]
@@ -4435,7 +4015,7 @@ mod tests {
         );
 
         let prepared = forwarder
-            .prepare_success_response_for_failover(response, false)
+            .validate_success_response(response, false)
             .await
             .expect("response should be buffered");
 
@@ -4459,10 +4039,7 @@ mod tests {
             }),
         );
 
-        let err = match forwarder
-            .prepare_success_response_for_failover(response, false)
-            .await
-        {
+        let err = match forwarder.validate_success_response(response, false).await {
             Ok(_) => panic!("body read errors should fail the attempt"),
             Err(err) => err,
         };
@@ -4483,7 +4060,7 @@ mod tests {
         );
 
         let prepared = forwarder
-            .prepare_success_response_for_failover(response, true)
+            .validate_success_response(response, true)
             .await
             .expect("stream should be primed");
 
@@ -4507,10 +4084,7 @@ mod tests {
             }),
         );
 
-        let err = match forwarder
-            .prepare_success_response_for_failover(response, true)
-            .await
-        {
+        let err = match forwarder.validate_success_response(response, true).await {
             Ok(_) => panic!("first chunk errors should fail the attempt"),
             Err(err) => err,
         };
@@ -5738,74 +5312,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn codex_copilot_capability_failure_tries_healthy_later_provider() {
-        let captured = Arc::new(tokio::sync::Mutex::new(Vec::<Value>::new()));
-        let app = axum::Router::new().route(
-            "/v1/responses",
-            axum::routing::post({
-                let captured = captured.clone();
-                move |axum::Json(body): axum::Json<Value>| {
-                    let captured = captured.clone();
-                    async move {
-                        captured.lock().await.push(body);
-                        axum::Json(json!({"status": "completed", "output": []}))
-                    }
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let addr = listener.local_addr().unwrap();
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-                .unwrap();
-        });
-        let mut forwarder = test_forwarder(Duration::from_secs(5), Duration::from_secs(5));
-        forwarder.max_attempts = 2;
-        // Avoid persisting a provider switch outside this in-memory test.
-        forwarder.current_provider_id_at_start = "healthy".to_string();
-        let copilot = test_provider_with_type(Some("github_copilot"));
-        let mut healthy = test_provider_with_type(None);
-        healthy.id = "healthy".to_string();
-        healthy.settings_config = json!({
-            "base_url": format!("http://{addr}/v1"),
-            "auth": {"OPENAI_API_KEY": "test-key"}
-        });
-        let body = json!({"model": "gpt-5.5", "input": "Hello", "stream": false});
-
-        let result = forwarder
-            .forward_with_retry(
-                &AppType::Codex,
-                http::Method::POST,
-                "/v1/responses",
-                body.clone(),
-                HeaderMap::new(),
-                Extensions::new(),
-                vec![copilot, healthy],
-            )
-            .await;
-
-        shutdown_tx.send(()).unwrap();
-        server.await.unwrap();
-        let result = result.unwrap_or_else(|failure| {
-            panic!(
-                "Copilot capability failure blocked failover: {}",
-                failure.error
-            )
-        });
-        assert_eq!(result.provider.id, "healthy");
-        assert_eq!(result.response.status(), StatusCode::OK);
-        assert_eq!(*captured.lock().await, vec![body]);
-        assert_eq!(forwarder.status.read().await.success_requests, 1);
-    }
-
     #[test]
     fn codex_copilot_metadata_selects_advertised_transport_at_forwarding_seam() {
         use super::super::providers::copilot_auth::CopilotModel;
@@ -5895,6 +5401,7 @@ mod tests {
                 model_picker_enabled: false,
                 context_window: Some(400_000),
                 supported_endpoints: endpoints.into_iter().map(str::to_string).collect(),
+                ..Default::default()
             }];
             let mut body = json!({"model": "GPT-5.6", "input": "Hello"});
             let resolved = resolve_model_with_format("GPT-5.6", &models, api_format);

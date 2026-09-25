@@ -5,28 +5,13 @@ import { homeDir, join } from "@tauri-apps/api/path";
 import { settingsApi, type AppId } from "@/lib/api";
 import type { SettingsFormState } from "./useSettingsForm";
 
-export type DirectoryAppId = Exclude<AppId, "claude-desktop" | "mcode">;
-type AppDirectoryKey =
-  | "claude"
-  | "codex"
-  | "gemini"
-  | "grokbuild"
-  | "opencode"
-  | "openclaw"
-  | "hermes"
-  | "pi";
+export type DirectoryAppId = AppId;
+type AppDirectoryKey = "codex";
 type DirectoryKey = "appConfig" | AppDirectoryKey;
 
 export interface ResolvedDirectories {
   appConfig: string;
-  claude: string;
   codex: string;
-  gemini: string;
-  grokbuild: string;
-  opencode: string;
-  openclaw: string;
-  hermes: string;
-  pi: string;
 }
 
 // Single source of truth for per-app directory metadata.
@@ -34,28 +19,14 @@ const APP_DIRECTORY_META: Record<
   DirectoryAppId,
   { key: AppDirectoryKey; defaultFolder: string }
 > = {
-  claude: { key: "claude", defaultFolder: ".claude" },
   codex: { key: "codex", defaultFolder: ".codex" },
-  gemini: { key: "gemini", defaultFolder: ".gemini" },
-  grokbuild: { key: "grokbuild", defaultFolder: ".grok" },
-  opencode: { key: "opencode", defaultFolder: ".config/opencode" },
-  openclaw: { key: "openclaw", defaultFolder: ".openclaw" },
-  hermes: { key: "hermes", defaultFolder: ".hermes" },
-  pi: { key: "pi", defaultFolder: ".pi/agent" },
 };
 
 const DIRECTORY_KEY_TO_SETTINGS_FIELD: Record<
   AppDirectoryKey,
   keyof SettingsFormState
 > = {
-  claude: "claudeConfigDir",
   codex: "codexConfigDir",
-  gemini: "geminiConfigDir",
-  grokbuild: "grokConfigDir",
-  opencode: "opencodeConfigDir",
-  openclaw: "openclawConfigDir",
-  hermes: "hermesConfigDir",
-  pi: "piConfigDir",
 };
 
 const sanitizeDir = (value?: string | null): string | undefined => {
@@ -135,27 +106,13 @@ export function useDirectorySettings({
   );
   const [resolvedDirs, setResolvedDirs] = useState<ResolvedDirectories>({
     appConfig: "",
-    claude: "",
     codex: "",
-    gemini: "",
-    grokbuild: "",
-    opencode: "",
-    openclaw: "",
-    hermes: "",
-    pi: "",
   });
   const [isLoading, setIsLoading] = useState(true);
 
   const defaultsRef = useRef<ResolvedDirectories>({
     appConfig: "",
-    claude: "",
     codex: "",
-    gemini: "",
-    grokbuild: "",
-    opencode: "",
-    openclaw: "",
-    hermes: "",
-    pi: "",
   });
   const initialAppConfigDirRef = useRef<string | undefined>(undefined);
 
@@ -166,45 +123,13 @@ export function useDirectorySettings({
 
     const load = async () => {
       try {
-        const [
-          overrideRaw,
-          claudeDir,
-          codexDir,
-          geminiDir,
-          grokDir,
-          opencodeDir,
-          openclawDir,
-          hermesDir,
-          piDir,
-          defaultAppConfig,
-          defaultClaudeDir,
-          defaultCodexDir,
-          defaultGeminiDir,
-          defaultGrokDir,
-          defaultOpencodeDir,
-          defaultOpenclawDir,
-          defaultHermesDir,
-          defaultPiDir,
-        ] = await Promise.all([
-          settingsApi.getAppConfigDirOverride(),
-          settingsApi.getConfigDir("claude"),
-          settingsApi.getConfigDir("codex"),
-          settingsApi.getConfigDir("gemini"),
-          settingsApi.getConfigDir("grokbuild"),
-          settingsApi.getConfigDir("opencode"),
-          settingsApi.getConfigDir("openclaw"),
-          settingsApi.getConfigDir("hermes"),
-          settingsApi.getConfigDir("pi"),
-          computeDefaultAppConfigDir(),
-          computeDefaultConfigDir("claude"),
-          computeDefaultConfigDir("codex"),
-          computeDefaultConfigDir("gemini"),
-          computeDefaultConfigDir("grokbuild"),
-          computeDefaultConfigDir("opencode"),
-          computeDefaultConfigDir("openclaw"),
-          computeDefaultConfigDir("hermes"),
-          computeDefaultConfigDir("pi"),
-        ]);
+        const [overrideRaw, codexDir, defaultAppConfig, defaultCodexDir] =
+          await Promise.all([
+            settingsApi.getAppConfigDirOverride(),
+            settingsApi.getConfigDir("codex"),
+            computeDefaultAppConfigDir(),
+            computeDefaultConfigDir("codex"),
+          ]);
 
         if (!active) return;
 
@@ -212,14 +137,7 @@ export function useDirectorySettings({
 
         defaultsRef.current = {
           appConfig: defaultAppConfig ?? "",
-          claude: defaultClaudeDir ?? "",
           codex: defaultCodexDir ?? "",
-          gemini: defaultGeminiDir ?? "",
-          grokbuild: defaultGrokDir ?? "",
-          opencode: defaultOpencodeDir ?? "",
-          openclaw: defaultOpenclawDir ?? "",
-          hermes: defaultHermesDir ?? "",
-          pi: defaultPiDir ?? "",
         };
 
         setAppConfigDir(normalizedOverride);
@@ -227,14 +145,7 @@ export function useDirectorySettings({
 
         setResolvedDirs({
           appConfig: normalizedOverride ?? defaultsRef.current.appConfig,
-          claude: claudeDir || defaultsRef.current.claude,
           codex: codexDir || defaultsRef.current.codex,
-          gemini: geminiDir || defaultsRef.current.gemini,
-          grokbuild: grokDir || defaultsRef.current.grokbuild,
-          opencode: opencodeDir || defaultsRef.current.opencode,
-          openclaw: openclawDir || defaultsRef.current.openclaw,
-          hermes: hermesDir || defaultsRef.current.hermes,
-          pi: piDir || defaultsRef.current.pi,
         });
       } catch (error) {
         console.error(
@@ -306,7 +217,7 @@ export function useDirectorySettings({
         console.error("[useDirectorySettings] Failed to pick directory", error);
         toast.error(
           t("settings.selectFileFailed", {
-            defaultValue: "选择目录失败",
+            defaultValue: "Could not select a directory",
           }),
         );
       }
@@ -328,7 +239,7 @@ export function useDirectorySettings({
       );
       toast.error(
         t("settings.selectFileFailed", {
-          defaultValue: "选择目录失败",
+          defaultValue: "Could not select a directory",
         }),
       );
     }
@@ -370,14 +281,7 @@ export function useDirectorySettings({
       setResolvedDirs({
         appConfig:
           initialAppConfigDirRef.current ?? defaultsRef.current.appConfig,
-        claude: overrides?.claude ?? defaultsRef.current.claude,
         codex: overrides?.codex ?? defaultsRef.current.codex,
-        gemini: overrides?.gemini ?? defaultsRef.current.gemini,
-        grokbuild: overrides?.grokbuild ?? defaultsRef.current.grokbuild,
-        opencode: overrides?.opencode ?? defaultsRef.current.opencode,
-        openclaw: overrides?.openclaw ?? defaultsRef.current.openclaw,
-        hermes: overrides?.hermes ?? defaultsRef.current.hermes,
-        pi: overrides?.pi ?? defaultsRef.current.pi,
       });
     },
     [],

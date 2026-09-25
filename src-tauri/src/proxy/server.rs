@@ -9,7 +9,6 @@
 //! a direct (non-proxied) CLI request.
 
 use super::{
-    failover_switch::FailoverSwitchManager,
     handlers,
     log_codes::srv as log_srv,
     provider_router::ProviderRouter,
@@ -46,8 +45,6 @@ pub struct ProxyState {
     pub codex_chat_history: Arc<CodexChatHistoryStore>,
     /// AppHandle，用于发射事件和更新托盘菜单
     pub app_handle: Option<tauri::AppHandle>,
-    /// 故障转移切换管理器
-    pub failover_manager: Arc<FailoverSwitchManager>,
 }
 
 /// 代理HTTP服务器
@@ -68,7 +65,6 @@ impl ProxyServer {
         // 创建共享的 ProviderRouter（熔断器状态将跨所有请求保持）
         let provider_router = Arc::new(ProviderRouter::new(db.clone()));
         // 创建故障转移切换管理器
-        let failover_manager = Arc::new(FailoverSwitchManager::new(db.clone()));
 
         let state = ProxyState {
             db,
@@ -80,7 +76,6 @@ impl ProxyServer {
             gemini_shadow: Arc::new(GeminiShadowStore::default()),
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
             app_handle,
-            failover_manager,
         };
 
         Self {
@@ -360,35 +355,6 @@ impl ProxyServer {
     /// 在不重启服务的情况下更新运行时配置
     pub async fn apply_runtime_config(&self, config: &ProxyConfig) {
         *self.state.config.write().await = config.clone();
-    }
-
-    /// 热更新熔断器配置
-    ///
-    /// 将新配置应用到所有已创建的熔断器实例
-    pub async fn update_circuit_breaker_configs(
-        &self,
-        config: super::circuit_breaker::CircuitBreakerConfig,
-    ) {
-        self.state.provider_router.update_all_configs(config).await;
-    }
-
-    pub async fn update_circuit_breaker_config_for_app(
-        &self,
-        app_type: &str,
-        config: super::circuit_breaker::CircuitBreakerConfig,
-    ) {
-        self.state
-            .provider_router
-            .update_app_configs(app_type, config)
-            .await;
-    }
-
-    /// 重置指定 Provider 的熔断器
-    pub async fn reset_provider_circuit_breaker(&self, provider_id: &str, app_type: &str) {
-        self.state
-            .provider_router
-            .reset_provider_breaker(provider_id, app_type)
-            .await;
     }
 }
 

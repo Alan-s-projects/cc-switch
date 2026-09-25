@@ -162,7 +162,7 @@ describe("SettingsPage integration", () => {
     fireEvent.click(screen.getByText("settings.selectConfigFile"));
     await waitFor(() =>
       expect(screen.getByTestId("selected-file").textContent).toContain(
-        "/mock/import-settings.json",
+        "/mock/import-settings.sql",
       ),
     );
 
