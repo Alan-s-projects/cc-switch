@@ -195,8 +195,6 @@ export interface Settings {
   // ===== 设备级 UI 设置 =====
   // 是否在系统托盘（macOS 菜单栏）显示图标
   showInTray: boolean;
-  // 点击关闭按钮时是否最小化到托盘而不是关闭应用
-  minimizeToTrayOnClose: boolean;
   // 是否开机自启
   launchOnStartup?: boolean;
   // 是否启用主页面本地代理功能（默认关闭）

@@ -87,7 +87,6 @@ vi.mock("@/lib/api", () => ({
 const createSettingsFormMock = (overrides: Record<string, unknown> = {}) => ({
   settings: {
     showInTray: true,
-    minimizeToTrayOnClose: true,
     claudeConfigDir: "/claude",
     codexConfigDir: "/codex",
     geminiConfigDir: "/gemini",
@@ -159,7 +158,6 @@ describe("useSettings hook", () => {
 
     serverSettings = {
       showInTray: true,
-      minimizeToTrayOnClose: true,
       claudeConfigDir: "/server/claude",
       codexConfigDir: "/server/codex",
       geminiConfigDir: "/server/gemini",

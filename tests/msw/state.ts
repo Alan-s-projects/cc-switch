@@ -2,7 +2,7 @@ import type { AppId } from "@/lib/api/types";
 import type { Provider, Settings } from "@/types";
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 let providers: Record<string, Provider> = {};
-let settings: Settings = { showInTray: true, minimizeToTrayOnClose: true };
+let settings: Settings = { showInTray: true };
 let appConfigDir: string | null = null;
 export const resetProviderState = () => {
   providers = {
@@ -15,7 +15,6 @@ export const resetProviderState = () => {
   };
   settings = {
     showInTray: true,
-    minimizeToTrayOnClose: true,
     codexConfigDir: "/default/codex",
     language: "en",
   };
