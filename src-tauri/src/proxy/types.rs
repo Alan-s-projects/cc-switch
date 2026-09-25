@@ -184,58 +184,12 @@ pub struct AppProxyConfig {
     pub circuit_min_requests: u32,
 }
 
-/// 整流器配置
-///
-/// 存储在 settings 表中
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RectifierConfig {
-    /// 总开关：是否启用整流器（默认开启）
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// 请求整流：启用 thinking 签名整流器（默认开启）
-    ///
-    /// 处理错误：Invalid 'signature' in 'thinking' block
-    #[serde(default = "default_true")]
-    pub request_thinking_signature: bool,
-    /// 请求整流：启用 thinking budget 整流器（默认开启）
-    ///
-    /// 处理错误：budget_tokens + thinking 相关约束
-    #[serde(default = "default_true")]
-    pub request_thinking_budget: bool,
-    /// 请求整流：不支持的图片降级（默认开启）
-    ///
-    /// 上游拒绝图片输入时，把图片块替换为 [Unsupported Image] 标记，
-    /// 让对话不中断。总开关，管辖「显式声明 text-only」与「上游报错后兜底」两条事实驱动路径。
-    #[serde(default = "default_true")]
-    pub request_media_fallback: bool,
-    /// 请求整流：确认纯文本注册表的发送前降级（默认开启）
-    ///
-    /// 在模型未声明能力时，按内置的确认纯文本注册表预先剥离图片。
-    /// 受 request_media_fallback 管辖；单独关闭只停用代理的注册表预判，
-    /// 仍保留「显式声明」与「上游兜底」，且不改变 Codex 模型目录声明。
-    #[serde(default = "default_true")]
-    pub request_media_heuristic: bool,
-}
-
 fn default_true() -> bool {
     true
 }
 
 fn default_log_level() -> String {
     "info".to_string()
-}
-
-impl Default for RectifierConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            request_thinking_signature: true,
-            request_thinking_budget: true,
-            request_media_fallback: true,
-            request_media_heuristic: true,
-        }
-    }
 }
 
 /// Copilot 优化器配置
@@ -272,8 +226,7 @@ pub struct CopilotOptimizerConfig {
     pub warmup_model: String,
     /// 请求前主动剥离 assistant 消息里的 thinking / redacted_thinking block
     ///
-    /// Copilot 走 OpenAI 兼容端点，thinking block 会被上游拒绝并触发 rectifier 反应式
-    /// 重试，那时第一次请求已经消耗了一次 premium quota。主动剥离避免这次浪费。
+    /// Copilot 的 OpenAI 兼容端点不接受 Anthropic thinking block。
     #[serde(default = "default_true")]
     pub strip_thinking: bool,
 }
@@ -341,81 +294,6 @@ impl LogConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_rectifier_config_default_enabled() {
-        // 验证 RectifierConfig::default() 返回全开启状态
-        let config = RectifierConfig::default();
-        assert!(config.enabled, "整流器总开关默认应为 true");
-        assert!(
-            config.request_thinking_signature,
-            "thinking 签名整流器默认应为 true"
-        );
-        assert!(
-            config.request_thinking_budget,
-            "thinking budget 整流器默认应为 true"
-        );
-        assert!(
-            config.request_media_fallback,
-            "media 降级总开关默认应为 true"
-        );
-        assert!(
-            config.request_media_heuristic,
-            "启发式 text-only 模型识别默认应为 true"
-        );
-    }
-
-    #[test]
-    fn test_rectifier_config_serde_default() {
-        // 验证反序列化缺字段时使用默认值 true
-        let json = "{}";
-        let config: RectifierConfig = serde_json::from_str(json).unwrap();
-        assert!(config.enabled);
-        assert!(config.request_thinking_signature);
-        assert!(config.request_thinking_budget);
-        assert!(
-            config.request_media_fallback,
-            "缺 requestMediaFallback 时应回退默认值 true"
-        );
-        assert!(
-            config.request_media_heuristic,
-            "缺 requestMediaHeuristic 时应回退默认值 true"
-        );
-    }
-
-    #[test]
-    fn test_rectifier_config_serde_explicit_true() {
-        // 验证显式设置 true 时正确反序列化
-        let json =
-            r#"{"enabled": true, "requestThinkingSignature": true, "requestThinkingBudget": true}"#;
-        let config: RectifierConfig = serde_json::from_str(json).unwrap();
-        assert!(config.enabled);
-        assert!(config.request_thinking_signature);
-        assert!(config.request_thinking_budget);
-    }
-
-    #[test]
-    fn test_rectifier_config_serde_partial_fields() {
-        // 验证只设置部分字段时，缺失字段使用默认值 true
-        let json = r#"{"enabled": true, "requestThinkingSignature": false}"#;
-        let config: RectifierConfig = serde_json::from_str(json).unwrap();
-        assert!(config.enabled);
-        assert!(!config.request_thinking_signature);
-        assert!(config.request_thinking_budget);
-    }
-
-    #[test]
-    fn test_rectifier_config_serde_media_explicit_false() {
-        // 验证 media 两字段显式 false 时被如实反序列化（用户主动关闭须生效，不能被默认值覆盖）
-        let json = r#"{"requestMediaFallback": false, "requestMediaHeuristic": false}"#;
-        let config: RectifierConfig = serde_json::from_str(json).unwrap();
-        assert!(!config.request_media_fallback);
-        assert!(!config.request_media_heuristic);
-        // 其余字段仍走默认 true
-        assert!(config.enabled);
-        assert!(config.request_thinking_signature);
-        assert!(config.request_thinking_budget);
-    }
 
     #[test]
     fn test_log_config_default() {

@@ -1,33 +1,38 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings, ArrowLeft, BarChart2, Loader2 } from "lucide-react";
+import {
+  Settings,
+  ArrowLeft,
+  BarChart2,
+  FileText,
+  Loader2,
+} from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useProvidersQuery, useUpdateProviderMutation } from "@/lib/query";
+import { useProvidersQuery } from "@/lib/query";
 import { providersApi } from "@/lib/api";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { CopilotCard } from "@/components/providers/CopilotCard";
-import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
+import { HealthCheckButton } from "@/components/providers/HealthCheckButton";
 import { SettingsPage } from "@/components/settings/SettingsPage";
+import { UsagePage } from "@/components/usage/UsagePage";
+import { BridgeOverview } from "@/components/overview/BridgeOverview";
 import { CodexSetupSuggestion } from "@/components/providers/CodexSetupSuggestion";
 import { ProxyToggle } from "@/components/proxy/ProxyToggle";
 import { RoutingActivationBrand } from "@/components/proxy/RoutingActivationBrand";
 import { Button } from "@/components/ui/button";
 
-type View = "provider" | "settings" | "setup";
+type View = "provider" | "settings" | "setup" | "usage";
 
 export default function App() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [view, setView] = useState<View>("provider");
-  const [settingsTab, setSettingsTab] = useState("general");
-  const [editing, setEditing] = useState(false);
   const { isRunning, status } = useProxyStatus();
   const { data, isLoading, refetch } = useProvidersQuery("codex");
   const provider =
     data?.providers[data.currentProviderId] ??
     Object.values(data?.providers ?? {})[0];
-  const update = useUpdateProviderMutation("codex");
 
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -50,7 +55,6 @@ export default function App() {
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "," && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
-        setSettingsTab("general");
         setView("settings");
       } else if (
         event.key === "Escape" &&
@@ -65,10 +69,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", keydown);
   }, []);
 
-  const openSettings = (tab: string) => {
-    setSettingsTab(tab);
-    setView("settings");
-  };
   const refreshData = async () => {
     await queryClient.invalidateQueries();
     await providersApi.updateTrayMenu();
@@ -88,14 +88,19 @@ export default function App() {
             <>
               <Button
                 variant="outline"
-                size="icon"
+                size="sm"
                 aria-label={t("common.back")}
                 onClick={() => setView("provider")}
               >
-                <ArrowLeft className="h-4 w-4" />
+                <ArrowLeft aria-hidden className="mr-2 h-4 w-4" />
+                {t("common.back")}
               </Button>
               <h1 className="text-lg font-semibold">
-                {view === "setup" ? t("bridge.setup") : t("settings.title")}
+                {view === "setup"
+                  ? t("bridge.setup")
+                  : view === "usage"
+                    ? t("usage.title")
+                    : t("settings.title")}
               </h1>
             </>
           )}
@@ -103,43 +108,57 @@ export default function App() {
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
-            size="icon"
+            size="sm"
             title={t("usage.title")}
-            onClick={() => openSettings("usage")}
+            onClick={() => setView("usage")}
           >
-            <BarChart2 className="h-4 w-4" />
+            <BarChart2 aria-hidden className="mr-2 h-4 w-4" />
+            Usage
           </Button>
           <Button
             variant="ghost"
-            size="icon"
+            size="sm"
             title={t("common.settings")}
-            onClick={() => openSettings("general")}
+            onClick={() => setView("settings")}
           >
-            <Settings className="h-4 w-4" />
+            <Settings aria-hidden className="mr-2 h-4 w-4" />
+            {t("common.settings")}
+          </Button>
+          <HealthCheckButton providerId={provider?.id} />
+          <Button
+            variant="ghost"
+            size="sm"
+            title={t("bridge.setup")}
+            onClick={() => setView("setup")}
+          >
+            <FileText aria-hidden className="mr-2 h-4 w-4" />
+            Connect
           </Button>
           <ProxyToggle />
         </div>
       </header>
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <main
+        className={`flex min-h-0 flex-1 flex-col ${view === "setup" ? "overflow-hidden" : "overflow-y-auto"}`}
+      >
         {view === "settings" ? (
           <SettingsPage
             open
             onOpenChange={() => setView("provider")}
-            defaultTab={settingsTab}
             onImportSuccess={refreshData}
           />
         ) : view === "setup" ? (
           <CodexSetupSuggestion />
+        ) : view === "usage" ? (
+          <UsagePage />
         ) : (
-          <div className="px-6 pb-6 pt-4">
+          <div className="space-y-5 px-6 pb-6 pt-4">
             {isLoading ? (
               <Loader2 className="h-6 w-6 animate-spin" />
             ) : provider ? (
-              <CopilotCard
-                provider={provider}
-                onConnect={() => setView("setup")}
-                onEdit={() => setEditing(true)}
-              />
+              <>
+                <CopilotCard provider={provider} />
+                <BridgeOverview status={status} />
+              </>
             ) : (
               <Button variant="outline" onClick={() => void refetch()}>
                 Reload GitHub Copilot
@@ -148,17 +167,6 @@ export default function App() {
           </div>
         )}
       </main>
-      <EditProviderDialog
-        open={editing}
-        provider={provider ?? null}
-        appId="codex"
-        onOpenChange={setEditing}
-        onSubmit={async ({ provider: next }) => {
-          await update.mutateAsync({ provider: next });
-          setEditing(false);
-          await providersApi.updateTrayMenu();
-        }}
-      />
     </div>
   );
 }

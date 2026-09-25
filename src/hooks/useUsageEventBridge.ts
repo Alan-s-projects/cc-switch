@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useQueryClient } from "@tanstack/react-query";
+import { focusManager, useQueryClient } from "@tanstack/react-query";
 import { usageKeys } from "@/lib/query/usage";
+import { useWindowActive } from "@/lib/windowActivity";
 
 /**
  * 监听后端 `usage-log-recorded` 事件，收到后立刻 invalidate 所有
@@ -14,13 +15,16 @@ import { usageKeys } from "@/lib/query/usage";
  */
 export function useUsageEventBridge() {
   const queryClient = useQueryClient();
+  const active = useWindowActive();
 
   useEffect(() => {
+    if (!active) return;
     let unlisten: UnlistenFn | undefined;
     let disposed = false;
 
     (async () => {
       const off = await listen("usage-log-recorded", () => {
+        if (disposed || !focusManager.isFocused()) return;
         // invalidate 整个 usage 命名空间：summary / trends / providerStats /
         // modelStats / logs 全部跟着重拉
         queryClient.invalidateQueries({ queryKey: usageKeys.all });
@@ -37,5 +41,5 @@ export function useUsageEventBridge() {
       disposed = true;
       unlisten?.();
     };
-  }, [queryClient]);
+  }, [active, queryClient]);
 }

@@ -20,6 +20,7 @@ export function ProxyToggle() {
           className={`h-4 w-4 ${isRunning ? "text-emerald-500" : "text-muted-foreground"}`}
         />
       )}
+      <span className="text-xs font-medium">Proxy</span>
       <Switch
         checked={isRunning}
         disabled={isLoading || isPending}

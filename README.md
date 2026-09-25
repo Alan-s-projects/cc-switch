@@ -6,13 +6,13 @@ at **4.1.0**. Its only development branch is `atlas`.
 
 ## Install and connect
 
-Download `CC-Switch-atlas-4.1.2-Windows-x64.msi` from
+Download `CC-Switch-atlas-4.1.3-Windows-x64.msi` from
 [GitHub Releases](https://github.com/Alan-s-projects/cc-switch/releases).
 Exit the previous CC Switch app, install the MSI, and open Atlas.
 
-1. The one **GitHub Copilot** entry starts with **Needs setup**. Choose **Edit**,
-   sign in, refresh your models, and save.
-2. Start the proxy, then choose **Connect** beside **Edit** on the Copilot card.
+1. The one **GitHub Copilot** entry starts with **Needs setup**. Open
+   **Settings → Copilot**, sign in, refresh your models, and save.
+2. Turn on **Proxy**, then choose **Connect** in the top bar.
 3. Review **Connect through Copilot** in **Side by side**, **Inline**, or **Proposed TOML**.
    Copy and apply the proposed changes yourself, then reload Codex.
 4. To reconnect using your OpenAI account, review **Return to OpenAI sign-in**,
@@ -30,11 +30,17 @@ If automatic detection cannot find your `config.toml`, enter its full path or us
 returns to automatic selection. Atlas remembers the last valid manual selection
 for previews only. It does not change Codex's configuration directory or write the file.
 
-Optional **Recommended settings** checkboxes remove fixed context-window,
-auto-compaction, and reasoning overrides from the proposed TOML. Choose the
-defaults you want, review the diff, then use **Copy proposed TOML**.
-Context and compaction can follow model defaults as described in the
+Optional TOML changes include a **Use 1M context** preset: a 1,000,000-token context
+window and compaction at 900,000 tokens. The Copilot preview caps both values when
+Atlas's saved catalog reports a smaller model limit. These settings do not increase
+a provider's actual limits; check support when selecting another model.
+Other checkboxes compare explicit approval, sandbox, and reasoning overrides with
+the documented Codex file defaults. Choose each change separately and review the
+diff; unchecked choices keep the current values. Profiles and app settings may
+override these file-level values. Defaults are documented in the
 [official Codex configuration sample](https://learn.chatgpt.com/docs/config-file/config-sample).
+The comparison toolbar contains **Copy proposed TOML** and **Copy diff**; long files
+scroll inside the code panel while the page controls remain visible.
 
 When upgrading from an older CC Switch build, that older app may restore its saved
 Codex configuration when it exits. Review the Atlas connection preview afterwards.
@@ -43,22 +49,35 @@ The MSI is unsigned, installs per user, and supports replacing the provisional
 
 ## Scope
 
+- A read-only home overview with account/quota, proxy address and activity,
+  today's requests, estimated cost, success/cache rates, and the latest ten
+  requests with HTTP status codes. **Refresh overview** refreshes the page's data.
+- Home warnings identify a stopped proxy or a detected Codex TOML that points
+  elsewhere. Connection checks run on opening/returning to the window and manual
+  refresh; they never change the file.
+- Usage snapshots update from request events, coalesced over five seconds, and
+  at local midnight. There is no idle usage polling on the home page. Status and
+  quota polling pause while the window is inactive; no charts run on the home page.
 - One Copilot provider and account management, with model and protocol controls.
 - Automatic routing from each model's live Copilot endpoint declarations.
 - Model capabilities, reasoning choices and input budgets from Copilot. Existing
   smaller context limits are retained; limits above the reported input budget are capped.
-- Proxy start/stop, outbound networking and request compatibility controls.
+- Proxy start/stop and outbound networking.
+- Image input is forwarded without text-only preflight or image-stripping retries.
+  Unsupported images return an error instead of an incomplete text-only answer.
 - Close the window to keep Atlas in the tray; use the tray menu's **Quit** action
   to exit. Lightweight mode is removed.
-- A manual health check beside **Edit** on the Copilot card shows endpoint
+- A labeled **Health check** in the top bar shows endpoint
   reachability and latency without sending a model request.
-- Usage trends, request history, cache statistics, latency and estimated costs;
+- A separate **Usage Statistics** page, opened by the chart button, with usage
+  trends, request history, cache statistics, latency and estimated costs.
   Copilot subscription quota is shown separately.
 - Local application-data backups.
 
 Atlas is English-only and builds only a Windows x64 MSI. Other clients, native
 provider authentication, provider add/duplicate/delete actions, usage scripts,
-manual request overrides, failover, cloud sync, CLI management, and MCP/skill/instruction/session management
+manual request overrides, Anthropic request rectifiers, image fallback, failover,
+cloud sync, CLI management, and MCP/skill/instruction/session management
 are removed. Legacy database data stays available in backups. Dashboard statistics
 count proxy traffic, excluding imported conversation totals and their historical
 rollups. Conversation files are never scanned. Estimated token costs are not a

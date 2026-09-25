@@ -86,7 +86,7 @@ export function ConfigDiff({
     <div
       role="region"
       aria-label="Configuration diff"
-      className="overflow-auto"
+      className="min-h-0 flex-1 overflow-auto"
     >
       {unchanged && (
         <p className="border-b p-4 text-sm text-muted-foreground">
@@ -100,7 +100,7 @@ export function ConfigDiff({
           </caption>
           {layout === "split" ? (
             <>
-              <thead className="border-b bg-muted/40">
+              <thead className="sticky top-0 z-10 border-b bg-muted">
                 <tr>
                   <th
                     scope="col"
@@ -149,7 +149,7 @@ export function ConfigDiff({
                 <col className="w-14" />
                 <col />
               </colgroup>
-              <thead className="border-b bg-muted/40">
+              <thead className="sticky top-0 z-10 border-b bg-muted">
                 <tr>
                   <th
                     scope="col"

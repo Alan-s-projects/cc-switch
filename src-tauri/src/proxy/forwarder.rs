@@ -11,13 +11,9 @@ use super::{
     log_codes::fwd as log_fwd,
     providers::{
         codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore, get_adapter,
-        AuthInfo, AuthStrategy, ProviderAdapter, ProviderType,
+        AuthInfo, AuthStrategy, ProviderAdapter,
     },
-    thinking_budget_rectifier::{rectify_thinking_budget, should_rectify_thinking_budget},
-    thinking_rectifier::{
-        normalize_thinking_type, rectify_anthropic_request, should_rectify_thinking_signature,
-    },
-    types::{CopilotOptimizerConfig, ProxyStatus, RectifierConfig},
+    types::{CopilotOptimizerConfig, ProxyStatus},
     ProxyError,
 };
 use crate::commands::CopilotAuthState;
@@ -238,8 +234,6 @@ pub struct RequestForwarder {
     session_id: String,
     /// Session ID 是否由客户端提供；生成值不能作为上游缓存身份。
     session_client_provided: bool,
-    /// 整流器配置
-    rectifier_config: RectifierConfig,
     /// Copilot 优化器配置
     copilot_optimizer_config: CopilotOptimizerConfig,
     /// 非流式请求超时（秒）
@@ -249,51 +243,6 @@ pub struct RequestForwarder {
 }
 
 impl RequestForwarder {
-    /// 预防式 media 降级：发送前对 text-only 模型把图片块替换为标记。
-    ///
-    /// 受 `enabled && request_media_fallback` 管辖；其中"启发式模型名单预测"
-    /// 再受 `request_media_heuristic` 单独管辖（显式声明 text-only 始终生效）。
-    /// 返回被替换的图片块数量（0 = 未触发或开关关闭）。
-    fn apply_media_prevention(&self, body: &mut Value, provider: &Provider) -> usize {
-        if !(self.rectifier_config.enabled && self.rectifier_config.request_media_fallback) {
-            return 0;
-        }
-        let replaced_images = super::media_sanitizer::replace_images_for_text_only_model(
-            body,
-            provider,
-            self.rectifier_config.request_media_heuristic,
-        );
-        if replaced_images > 0 {
-            let model = body.get("model").and_then(Value::as_str).unwrap_or("");
-            log::info!(
-                "[Media] Replaced {replaced_images} image block(s) with {} for text-only provider={}, model={}",
-                super::media_sanitizer::UNSUPPORTED_IMAGE_MARKER,
-                provider.id,
-                model
-            );
-        }
-        replaced_images
-    }
-
-    /// 反应式 media 重试判定：上游因图片输入报错后，是否应替换图片块并对同一供应商重试一次。
-    ///
-    /// 受 `enabled && request_media_fallback` 管辖；不涉及 `request_media_heuristic`——
-    /// 这里是上游"实测"错误后的纯恢复，不是预测，故启发式开关与它无关。
-    fn media_retry_should_trigger(
-        &self,
-        adapter_name: &str,
-        already_retried: bool,
-        provider_body: &Value,
-        error: &ProxyError,
-    ) -> bool {
-        matches!(adapter_name, "Claude" | "Codex")
-            && self.rectifier_config.enabled
-            && self.rectifier_config.request_media_fallback
-            && !already_retried
-            && super::media_sanitizer::contains_image_blocks(provider_body)
-            && super::media_sanitizer::is_unsupported_image_error(error)
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         non_streaming_timeout: u64,
@@ -306,7 +255,6 @@ impl RequestForwarder {
         session_client_provided: bool,
         streaming_first_byte_timeout: u64,
         _streaming_idle_timeout: u64,
-        rectifier_config: RectifierConfig,
         copilot_optimizer_config: CopilotOptimizerConfig,
     ) -> Self {
         // max_retries 是「失败后重试次数」语义，attempt 上限 = retries + 1。
@@ -319,63 +267,12 @@ impl RequestForwarder {
             app_handle,
             session_id,
             session_client_provided,
-            rectifier_config,
             copilot_optimizer_config,
             non_streaming_timeout: std::time::Duration::from_secs(non_streaming_timeout),
             streaming_first_byte_timeout: std::time::Duration::from_secs(
                 streaming_first_byte_timeout,
             ),
         }
-    }
-
-    /// 整流（thinking signature 或 budget）重试失败后的统一收尾。
-    ///
-    /// `None` 表示已记录熔断器、累积 `last_error`/`last_provider`，
-    /// 调用方应 `continue` 让下一家 provider 继续故障转移；
-    /// `Some(ForwardError)` 表示是客户端错误，没有 provider 能修复，
-    /// 调用方应直接 `return` 把错误返回给客户端。
-    #[allow(clippy::too_many_arguments)]
-    async fn handle_rectifier_retry_failure(
-        &self,
-        retry_err: ProxyError,
-        provider: &Provider,
-        app_type_str: &str,
-        rectifier_label: &str,
-        last_error: &mut Option<ProxyError>,
-        last_provider: &mut Option<Provider>,
-    ) -> Option<ForwardError> {
-        // Provider 错误：本家上游/网络确实出问题，下一家 provider 可能可用 → 继续故障转移。
-        // 客户端错误：整流后请求仍违法，下一家也修不好 → 直接返回。
-        let is_provider_error = match &retry_err {
-            ProxyError::Timeout(_) | ProxyError::ForwardFailed(_) => true,
-            ProxyError::UpstreamError { status, .. } => *status >= 500,
-            _ => false,
-        };
-
-        if is_provider_error {
-            {
-                let mut status = self.status.write().await;
-                status.last_error = Some(format!(
-                    "Provider {} {rectifier_label}重试失败: {}",
-                    provider.name, retry_err
-                ));
-            }
-            *last_error = Some(retry_err);
-            *last_provider = Some(provider.clone());
-            return None;
-        }
-
-        let mut status = self.status.write().await;
-        status.failed_requests += 1;
-        status.last_error = Some(retry_err.to_string());
-        if status.total_requests > 0 {
-            status.success_rate =
-                (status.success_requests as f32 / status.total_requests as f32) * 100.0;
-        }
-        Some(ForwardError {
-            error: retry_err,
-            provider: Some(provider.clone()),
-        })
     }
 
     /// 转发请求（带故障转移）
@@ -456,14 +353,8 @@ impl RequestForwarder {
         let mut last_provider = None;
         let mut attempted_providers = 0usize;
 
-        // Atlas forwards through exactly one Copilot entry. Protocol repairs stay on it.
+        // Atlas forwards through exactly one Copilot entry.
         for provider in providers.iter().take(1) {
-            let mut rectifier_retried = false;
-            let mut budget_rectifier_retried = false;
-            let mut media_rectifier_retried = false;
-
-            let mut provider_body = body.clone();
-
             attempted_providers += 1;
 
             // 更新状态中的当前 Provider 信息（per-attempt 维度的标识）
@@ -484,7 +375,7 @@ impl RequestForwarder {
                     &method,
                     provider,
                     endpoint,
-                    &provider_body,
+                    &body,
                     &headers,
                     &extensions,
                     adapter.as_ref(),
@@ -528,383 +419,6 @@ impl RequestForwarder {
                     });
                 }
                 Err(e) => {
-                    // 检测是否需要触发整流器（仅 Claude/ClaudeAuth 供应商）
-                    let provider_type = ProviderType::from_app_type_and_config(app_type, provider);
-                    let is_anthropic_provider = matches!(
-                        provider_type,
-                        Some(ProviderType::Claude | ProviderType::ClaudeAuth)
-                    );
-                    let mut signature_rectifier_non_retryable_client_error = false;
-
-                    if self.media_retry_should_trigger(
-                        adapter.name(),
-                        media_rectifier_retried,
-                        &provider_body,
-                        &e,
-                    ) {
-                        let mut media_body = provider_body.clone();
-                        let replaced_images =
-                            super::media_sanitizer::replace_image_blocks_with_marker(
-                                &mut media_body,
-                            );
-
-                        if replaced_images > 0 {
-                            let _ = std::mem::replace(&mut media_rectifier_retried, true);
-                            let model = media_body
-                                .get("model")
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-                            log::info!(
-                                "[{app_type_str}] [Media] Upstream rejected image input; retrying provider={} model={} with {replaced_images} image block(s) replaced by {}",
-                                provider.id,
-                                model,
-                                super::media_sanitizer::UNSUPPORTED_IMAGE_MARKER
-                            );
-
-                            match self
-                                .forward(
-                                    app_type,
-                                    &method,
-                                    provider,
-                                    endpoint,
-                                    &media_body,
-                                    &headers,
-                                    &extensions,
-                                    adapter.as_ref(),
-                                )
-                                .await
-                            {
-                                Ok((
-                                    response,
-                                    claude_api_format,
-                                    outbound_model,
-                                    codex_upstream_format,
-                                )) => {
-                                    log::info!(
-                                        "[{app_type_str}] [Media] Unsupported-image retry succeeded"
-                                    );
-
-                                    {
-                                        let mut current_providers =
-                                            self.current_providers.write().await;
-                                        current_providers.insert(
-                                            app_type_str.to_string(),
-                                            (provider.id.clone(), provider.name.clone()),
-                                        );
-                                    }
-
-                                    {
-                                        let mut status = self.status.write().await;
-                                        status.success_requests += 1;
-                                        status.last_error = None;
-
-                                        if status.total_requests > 0 {
-                                            status.success_rate = (status.success_requests as f32
-                                                / status.total_requests as f32)
-                                                * 100.0;
-                                        }
-                                    }
-
-                                    return Ok(ForwardResult {
-                                        response,
-                                        provider: provider.clone(),
-                                        claude_api_format,
-                                        codex_upstream_format,
-                                        outbound_model,
-                                        connection_guard: None,
-                                    });
-                                }
-                                Err(retry_err) => {
-                                    log::warn!(
-                                        "[{app_type_str}] [Media] Unsupported-image retry still failed: {retry_err}"
-                                    );
-                                    if let Some(err) = self
-                                        .handle_rectifier_retry_failure(
-                                            retry_err,
-                                            provider,
-                                            app_type_str,
-                                            "media 降级",
-                                            &mut last_error,
-                                            &mut last_provider,
-                                        )
-                                        .await
-                                    {
-                                        return Err(err);
-                                    }
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-
-                    if is_anthropic_provider {
-                        let error_message = extract_error_message(&e);
-                        if should_rectify_thinking_signature(
-                            error_message.as_deref(),
-                            &self.rectifier_config,
-                        ) {
-                            // 已经重试过：直接返回错误（不可重试客户端错误）
-                            if rectifier_retried {
-                                log::warn!("[{app_type_str}] [RECT-005] 整流器已触发过，不再重试");
-                                // 释放 HalfOpen permit（不记录熔断器，这是客户端兼容性问题）
-                                let mut status = self.status.write().await;
-                                status.failed_requests += 1;
-                                status.last_error = Some(e.to_string());
-                                if status.total_requests > 0 {
-                                    status.success_rate = (status.success_requests as f32
-                                        / status.total_requests as f32)
-                                        * 100.0;
-                                }
-                                return Err(ForwardError {
-                                    error: e,
-                                    provider: Some(provider.clone()),
-                                });
-                            }
-
-                            // 首次触发：整流请求体
-                            let rectified = rectify_anthropic_request(&mut provider_body);
-
-                            // 整流未生效：继续尝试 budget 整流路径，避免误判后短路
-                            if !rectified.applied {
-                                log::warn!(
-                                    "[{app_type_str}] [RECT-006] thinking 签名整流器触发但无可整流内容，继续检查 budget；若 budget 也未命中则按客户端错误返回"
-                                );
-                                signature_rectifier_non_retryable_client_error = true;
-                            } else {
-                                log::info!(
-                                    "[{}] [RECT-001] thinking 签名整流器触发, 移除 {} thinking blocks, {} redacted_thinking blocks, {} signature fields",
-                                    app_type_str,
-                                    rectified.removed_thinking_blocks,
-                                    rectified.removed_redacted_thinking_blocks,
-                                    rectified.removed_signature_fields
-                                );
-
-                                // 标记已重试（当前逻辑下重试后必定 return，保留标记以备将来扩展）
-                                let _ = std::mem::replace(&mut rectifier_retried, true);
-
-                                // 使用同一供应商重试（不计入熔断器）
-                                match self
-                                    .forward(
-                                        app_type,
-                                        &method,
-                                        provider,
-                                        endpoint,
-                                        &provider_body,
-                                        &headers,
-                                        &extensions,
-                                        adapter.as_ref(),
-                                    )
-                                    .await
-                                {
-                                    Ok((
-                                        response,
-                                        claude_api_format,
-                                        outbound_model,
-                                        codex_upstream_format,
-                                    )) => {
-                                        log::info!("[{app_type_str}] [RECT-002] 整流重试成功");
-
-                                        // 更新当前应用类型使用的 provider
-                                        {
-                                            let mut current_providers =
-                                                self.current_providers.write().await;
-                                            current_providers.insert(
-                                                app_type_str.to_string(),
-                                                (provider.id.clone(), provider.name.clone()),
-                                            );
-                                        }
-
-                                        // 更新成功统计
-                                        {
-                                            let mut status = self.status.write().await;
-                                            status.success_requests += 1;
-                                            status.last_error = None;
-
-                                            if status.total_requests > 0 {
-                                                status.success_rate = (status.success_requests
-                                                    as f32
-                                                    / status.total_requests as f32)
-                                                    * 100.0;
-                                            }
-                                        }
-
-                                        return Ok(ForwardResult {
-                                            response,
-                                            provider: provider.clone(),
-                                            claude_api_format,
-                                            codex_upstream_format,
-                                            outbound_model,
-                                            connection_guard: None,
-                                        });
-                                    }
-                                    Err(retry_err) => {
-                                        log::warn!(
-                                            "[{app_type_str}] [RECT-003] 整流重试仍失败: {retry_err}"
-                                        );
-                                        if let Some(err) = self
-                                            .handle_rectifier_retry_failure(
-                                                retry_err,
-                                                provider,
-                                                app_type_str,
-                                                "整流",
-                                                &mut last_error,
-                                                &mut last_provider,
-                                            )
-                                            .await
-                                        {
-                                            return Err(err);
-                                        }
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 检测是否需要触发 budget 整流器（仅 Claude/ClaudeAuth 供应商）
-                    if is_anthropic_provider {
-                        let error_message = extract_error_message(&e);
-                        if should_rectify_thinking_budget(
-                            error_message.as_deref(),
-                            &self.rectifier_config,
-                        ) {
-                            // 已经重试过：直接返回错误（不可重试客户端错误）
-                            if budget_rectifier_retried {
-                                log::warn!(
-                                    "[{app_type_str}] [RECT-013] budget 整流器已触发过，不再重试"
-                                );
-                                let mut status = self.status.write().await;
-                                status.failed_requests += 1;
-                                status.last_error = Some(e.to_string());
-                                if status.total_requests > 0 {
-                                    status.success_rate = (status.success_requests as f32
-                                        / status.total_requests as f32)
-                                        * 100.0;
-                                }
-                                return Err(ForwardError {
-                                    error: e,
-                                    provider: Some(provider.clone()),
-                                });
-                            }
-
-                            let budget_rectified = rectify_thinking_budget(&mut provider_body);
-                            if !budget_rectified.applied {
-                                log::warn!(
-                                    "[{app_type_str}] [RECT-014] budget 整流器触发但无可整流内容，不做无意义重试"
-                                );
-                                let mut status = self.status.write().await;
-                                status.failed_requests += 1;
-                                status.last_error = Some(e.to_string());
-                                if status.total_requests > 0 {
-                                    status.success_rate = (status.success_requests as f32
-                                        / status.total_requests as f32)
-                                        * 100.0;
-                                }
-                                return Err(ForwardError {
-                                    error: e,
-                                    provider: Some(provider.clone()),
-                                });
-                            }
-
-                            log::info!(
-                                "[{}] [RECT-010] thinking budget 整流器触发, before={:?}, after={:?}",
-                                app_type_str,
-                                budget_rectified.before,
-                                budget_rectified.after
-                            );
-
-                            let _ = std::mem::replace(&mut budget_rectifier_retried, true);
-
-                            // 使用同一供应商重试（不计入熔断器）
-                            match self
-                                .forward(
-                                    app_type,
-                                    &method,
-                                    provider,
-                                    endpoint,
-                                    &provider_body,
-                                    &headers,
-                                    &extensions,
-                                    adapter.as_ref(),
-                                )
-                                .await
-                            {
-                                Ok((
-                                    response,
-                                    claude_api_format,
-                                    outbound_model,
-                                    codex_upstream_format,
-                                )) => {
-                                    log::info!("[{app_type_str}] [RECT-011] budget 整流重试成功");
-
-                                    {
-                                        let mut current_providers =
-                                            self.current_providers.write().await;
-                                        current_providers.insert(
-                                            app_type_str.to_string(),
-                                            (provider.id.clone(), provider.name.clone()),
-                                        );
-                                    }
-
-                                    {
-                                        let mut status = self.status.write().await;
-                                        status.success_requests += 1;
-                                        status.last_error = None;
-
-                                        if status.total_requests > 0 {
-                                            status.success_rate = (status.success_requests as f32
-                                                / status.total_requests as f32)
-                                                * 100.0;
-                                        }
-                                    }
-
-                                    return Ok(ForwardResult {
-                                        response,
-                                        provider: provider.clone(),
-                                        claude_api_format,
-                                        codex_upstream_format,
-                                        outbound_model,
-                                        connection_guard: None,
-                                    });
-                                }
-                                Err(retry_err) => {
-                                    log::warn!(
-                                        "[{app_type_str}] [RECT-012] budget 整流重试仍失败: {retry_err}"
-                                    );
-                                    if let Some(err) = self
-                                        .handle_rectifier_retry_failure(
-                                            retry_err,
-                                            provider,
-                                            app_type_str,
-                                            "budget 整流",
-                                            &mut last_error,
-                                            &mut last_provider,
-                                        )
-                                        .await
-                                    {
-                                        return Err(err);
-                                    }
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-
-                    if signature_rectifier_non_retryable_client_error {
-                        let mut status = self.status.write().await;
-                        status.failed_requests += 1;
-                        status.last_error = Some(e.to_string());
-                        if status.total_requests > 0 {
-                            status.success_rate = (status.success_requests as f32
-                                / status.total_requests as f32)
-                                * 100.0;
-                        }
-                        return Err(ForwardError {
-                            error: e,
-                            provider: Some(provider.clone()),
-                        });
-                    }
-
                     // 先分类错误，决定是否计入 provider 健康度
                     // —— NonRetryable / ClientAbort 是客户端层错误，无论换哪家 provider 都会被拒绝，
                     //    不应污染熔断器和数据库健康度（与 release_permit_neutral 同语义）。
@@ -1040,7 +554,7 @@ impl RequestForwarder {
         // 应用模型映射（独立于格式转换）
         // Claude Desktop proxy 模式必须先把 Desktop 可见的 claude-* route
         // 映射成真实上游模型名，并且未知 route 要直接报错，不能使用默认模型兜底。
-        let mapped_body = if matches!(app_type, AppType::ClaudeDesktop) {
+        let mut mapped_body = if matches!(app_type, AppType::ClaudeDesktop) {
             crate::claude_desktop_config::map_proxy_request_model(body.clone(), provider)
                 .map_err(|e| ProxyError::InvalidRequest(e.to_string()))?
         } else {
@@ -1049,8 +563,6 @@ impl RequestForwarder {
             mapped_body
         };
 
-        // 与 CCH 对齐：请求前不做 thinking 主动改写（仅保留兼容入口）
-        let mut mapped_body = normalize_thinking_type(mapped_body);
         let is_copilot_codex_responses = matches!(app_type, AppType::Codex)
             && is_copilot
             && super::providers::is_codex_responses_endpoint(endpoint);
@@ -1123,7 +635,7 @@ impl RequestForwarder {
             }
 
             // 3.5. 主动剥离 thinking block — Copilot 走 OpenAI 兼容端点不识别该块
-            //      避免上游拒绝后由 rectifier 反应式重试（首次请求已消耗 quota）
+            //      避免发送上游不支持的 thinking block 并消耗 quota
             if self.copilot_optimizer_config.strip_thinking {
                 mapped_body = super::copilot_optimizer::strip_thinking_blocks(mapped_body);
             }
@@ -1270,7 +782,6 @@ impl RequestForwarder {
                     provider,
                     api_format,
                 );
-                self.apply_media_prevention(&mut mapped_body, provider);
             }
         }
         let needs_transform = match resolved_claude_api_format.as_deref() {
@@ -1525,10 +1036,6 @@ impl RequestForwarder {
                     provider.id
                 );
             }
-        }
-
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild) {
-            self.apply_media_prevention(&mut request_body, provider);
         }
 
         // 过滤私有参数（以 `_` 开头的字段），防止内部信息泄露到上游
@@ -2572,14 +2079,6 @@ impl RequestForwarder {
     }
 }
 
-/// 从 ProxyError 中提取错误消息
-fn extract_error_message(error: &ProxyError) -> Option<String> {
-    match error {
-        ProxyError::UpstreamError { body, .. } => body.clone(),
-        _ => Some(error.to_string()),
-    }
-}
-
 fn build_retryable_failure_log(
     provider_name: &str,
     attempted_providers: usize,
@@ -3544,7 +3043,6 @@ mod tests {
             app_handle: None,
             session_id: String::new(),
             session_client_provided: false,
-            rectifier_config: RectifierConfig::default(),
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
             non_streaming_timeout,
             streaming_first_byte_timeout,
@@ -5212,283 +4710,128 @@ mod tests {
         }
     }
 
-    // ===== P3: forwarder 层 media 开关回归测试 =====
-    // 验证 gate 在 forwarder 这一层的"接线"，而非 media_sanitizer 纯函数本身。
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn image_requests_reach_responses_and_chat_upstreams_and_fail_without_retry() {
+        use axum::{Json, Router};
 
-    fn forwarder_with_rectifier(config: RectifierConfig) -> RequestForwarder {
-        let mut fwd = test_forwarder(Duration::from_secs(1), Duration::from_secs(1));
-        fwd.rectifier_config = config;
-        fwd
-    }
+        // Keep all traffic inside this fixture regardless of host proxy settings.
+        struct RestoreProxy(Option<String>);
+        impl Drop for RestoreProxy {
+            fn drop(&mut self) {
+                let _ = crate::proxy::http_client::init(self.0.as_deref());
+            }
+        }
 
-    fn provider_with_settings(settings_config: Value) -> Provider {
-        let mut p = test_provider_with_type(Some("anthropic"));
-        p.settings_config = settings_config;
-        p
-    }
+        let requests = Arc::new(tokio::sync::Mutex::new(Vec::<(String, Value)>::new()));
+        let capture = requests.clone();
+        let upstream_error =
+            json!({"error": {"message": "This model does not support image input"}});
+        let response_error = upstream_error.clone();
+        let upstream = Router::new().fallback(move |uri: http::Uri, Json(body): Json<Value>| {
+            let capture = capture.clone();
+            let response_error = response_error.clone();
+            async move {
+                capture.lock().await.push((uri.path().to_string(), body));
+                (StatusCode::BAD_REQUEST, Json(response_error))
+            }
+        });
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream_task =
+            tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let _restore = RestoreProxy(crate::proxy::http_client::get_current_proxy_url());
+        crate::proxy::http_client::init(Some(&format!("http://{address}"))).unwrap();
 
-    fn body_with_image(model: &str) -> Value {
-        json!({
-            "model": model,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "abc" } }
-                ]
-            }]
-        })
-    }
-
-    fn body_with_codex_input_image(model: &str) -> Value {
-        json!({
-            "model": model,
+        let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        let body = json!({
+            "model": "fixture-model",
+            "stream": false,
             "input": [{
                 "role": "user",
                 "content": [
-                    { "type": "input_image", "image_url": "data:image/png;base64,abc" }
+                    {"type": "input_text", "text": "Describe this image."},
+                    {"type": "input_image", "image_url": image_url, "detail": "high"}
                 ]
-            }]
-        })
-    }
-
-    fn body_with_codex_tool_output_image(stringified: bool) -> Value {
-        let output = json!({
-            "content": [{
-                "type": "input_image",
-                "image_url": "data:image/png;base64,TOOL_OUTPUT_SENTINEL"
             }]
         });
-        json!({
-            "model": "any-model",
-            "input": [{
-                "type": "function_call_output",
-                "call_id": "call_1",
-                "output": if stringified {
-                    Value::String(output.to_string())
-                } else {
-                    output
+        for (index, (api_format, supports_images)) in [
+            ("openai_responses", false),
+            ("openai_responses", true),
+            ("openai_chat", false),
+            ("openai_chat", true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let modalities = if supports_images {
+                json!(["text", "image"])
+            } else {
+                json!(["text"])
+            };
+            let mut provider = test_provider_with_type(None);
+            provider.settings_config = json!({
+                "base_url": format!("http://{address}/v1"),
+                "auth": {"OPENAI_API_KEY": "fixture-token"},
+                "api_format": api_format,
+                "modelCatalog": {
+                    "models": [{"model": "fixture-model", "inputModalities": modalities.clone()}]
+                },
+                "models": [{"id": "fixture-model", "input": modalities}]
+            });
+            let forwarder = test_forwarder(Duration::from_secs(2), Duration::from_secs(2));
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                forwarder.forward_with_retry(
+                    &AppType::Codex,
+                    http::Method::POST,
+                    "/v1/responses",
+                    body.clone(),
+                    HeaderMap::new(),
+                    Extensions::new(),
+                    vec![provider],
+                ),
+            )
+            .await
+            .expect("the loopback upstream must finish promptly");
+            let error = match result {
+                Err(error) => error.error,
+                Ok(_) => panic!("unsupported images must not produce a synthetic success"),
+            };
+            match error {
+                ProxyError::UpstreamError { status, body } => {
+                    assert_eq!(status, 400);
+                    assert_eq!(
+                        serde_json::from_str::<Value>(&body.unwrap()).unwrap(),
+                        upstream_error
+                    );
                 }
-            }]
-        })
-    }
+                other => panic!("unexpected forwarding error: {other}"),
+            }
 
-    fn body_with_stringified_chat_tool_image() -> Value {
-        let content = json!({
-            "content": [{
-                "type": "image",
-                "mimeType": "image/png",
-                "data": "CHAT_TOOL_SENTINEL"
-            }]
-        })
-        .to_string();
-        json!({
-            "model": "any-model",
-            "messages": [{
-                "role": "tool",
-                "tool_call_id": "call_1",
-                "content": content
-            }]
-        })
-    }
-
-    fn body_with_gemini_image() -> Value {
-        json!({
-            "contents": [{
-                "role": "user",
-                "parts": [{
-                    "inlineData": {
-                        "mimeType": "image/png",
-                        "data": "GEMINI_SENTINEL"
-                    }
-                }]
-            }]
-        })
-    }
-
-    fn image_unsupported_error() -> ProxyError {
-        ProxyError::UpstreamError {
-            status: 400,
-            body: Some(
-                r#"{"error":{"message":"This model does not support image input"}}"#.to_string(),
-            ),
+            let captured = requests.lock().await;
+            assert_eq!(captured.len(), index + 1, "each image request must be sent once");
+            let (path, forwarded) = &captured[index];
+            if api_format == "openai_responses" {
+                assert_eq!(path, "/v1/responses");
+                assert_eq!(forwarded["input"], body["input"]);
+            } else {
+                assert_eq!(path, "/v1/chat/completions");
+                assert_eq!(
+                    forwarded["messages"][0]["content"],
+                    json!([
+                        {"type": "text", "text": "Describe this image."},
+                        {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}}
+                    ])
+                );
+            }
+            let status = forwarder.status.read().await;
+            assert_eq!(status.total_requests, 1);
+            assert_eq!(status.failed_requests, 1);
+            assert_eq!(status.success_requests, 0);
         }
-    }
-    #[test]
-    fn prevention_replaces_when_all_switches_on_and_model_in_heuristic_list() {
-        let fwd = forwarder_with_rectifier(RectifierConfig::default());
-        let provider = provider_with_settings(json!({}));
-        let mut body = body_with_image("qwen3-coder-plus");
-
-        let replaced = fwd.apply_media_prevention(&mut body, &provider);
-
-        assert_eq!(replaced, 1, "默认全开 + 名单内模型应预替换");
-        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
-    }
-
-    #[test]
-    fn prevention_skipped_when_media_fallback_off() {
-        // 关闭 request_media_fallback：即使名单命中也不预替换。
-        let fwd = forwarder_with_rectifier(RectifierConfig {
-            request_media_fallback: false,
-            ..RectifierConfig::default()
-        });
-        let provider = provider_with_settings(json!({}));
-        let mut body = body_with_image("qwen3-coder-plus");
-
-        let replaced = fwd.apply_media_prevention(&mut body, &provider);
-
-        assert_eq!(replaced, 0);
-        assert_eq!(body["messages"][0]["content"][0]["type"], "image");
-    }
-
-    #[test]
-    fn prevention_skipped_when_master_switch_off() {
-        let fwd = forwarder_with_rectifier(RectifierConfig {
-            enabled: false,
-            ..RectifierConfig::default()
-        });
-        let provider = provider_with_settings(json!({}));
-        let mut body = body_with_image("qwen3-coder-plus");
-
-        assert_eq!(fwd.apply_media_prevention(&mut body, &provider), 0);
-        assert_eq!(body["messages"][0]["content"][0]["type"], "image");
-    }
-
-    #[test]
-    fn prevention_heuristic_off_skips_list_but_keeps_explicit_text_only() {
-        // 关闭 request_media_heuristic：名单预测失效，但显式声明 text-only 仍预替换。
-        let fwd = forwarder_with_rectifier(RectifierConfig {
-            request_media_heuristic: false,
-            ..RectifierConfig::default()
-        });
-
-        // (a) 名单内模型、无显式声明 → 不再预替换
-        let bare_provider = provider_with_settings(json!({}));
-        let mut list_body = body_with_image("qwen3-coder-plus");
-        assert_eq!(
-            fwd.apply_media_prevention(&mut list_body, &bare_provider),
-            0,
-            "heuristic 关闭后名单模型不应被预替换"
-        );
-        assert_eq!(list_body["messages"][0]["content"][0]["type"], "image");
-
-        // (b) 显式声明 text-only → 仍预替换（声明驱动，不受 heuristic 开关影响）
-        let declared_provider = provider_with_settings(json!({
-            "models": [ { "id": "some-text-model", "input": ["text"] } ]
-        }));
-        let mut declared_body = body_with_image("some-text-model");
-        assert_eq!(
-            fwd.apply_media_prevention(&mut declared_body, &declared_provider),
-            1,
-            "显式 text-only 即使关闭 heuristic 也应预替换"
-        );
-        assert_eq!(declared_body["messages"][0]["content"][0]["type"], "text");
-    }
-
-    #[test]
-    fn reactive_triggers_when_all_switches_on() {
-        let fwd = forwarder_with_rectifier(RectifierConfig::default());
-        let body = body_with_image("any-model");
-        assert!(fwd.media_retry_should_trigger("Claude", false, &body, &image_unsupported_error()));
-    }
-
-    #[test]
-    fn reactive_triggers_for_codex_image_url_deserialize_errors() {
-        let fwd = forwarder_with_rectifier(RectifierConfig::default());
-        let body = body_with_codex_input_image("deepseek-v4-flash");
-        let error = ProxyError::UpstreamError {
-            status: 400,
-            body: Some(
-                r#"{"error":{"message":"Failed to deserialize the JSON body into the target type: messages[11]: unknown variant image_url, expected text"}}"#
-                    .to_string(),
-            ),
-        };
-
-        assert!(fwd.media_retry_should_trigger("Codex", false, &body, &error));
-    }
-
-    #[test]
-    fn reactive_triggers_for_structured_and_stringified_codex_tool_images() {
-        let fwd = forwarder_with_rectifier(RectifierConfig::default());
-
-        for stringified in [false, true] {
-            let body = body_with_codex_tool_output_image(stringified);
-            assert!(
-                fwd.media_retry_should_trigger("Codex", false, &body, &image_unsupported_error()),
-                "tool-output image should trigger retry (stringified={stringified})"
-            );
-        }
-    }
-
-    #[test]
-    fn reactive_triggers_for_chat_tool_and_gemini_images() {
-        let fwd = forwarder_with_rectifier(RectifierConfig::default());
-
-        assert!(fwd.media_retry_should_trigger(
-            "Claude",
-            false,
-            &body_with_stringified_chat_tool_image(),
-            &image_unsupported_error()
-        ));
-        assert!(fwd.media_retry_should_trigger(
-            "Claude",
-            false,
-            &body_with_gemini_image(),
-            &image_unsupported_error()
-        ));
-    }
-
-    #[test]
-    fn reactive_does_not_treat_context_limit_as_image_rejection() {
-        let fwd = forwarder_with_rectifier(RectifierConfig::default());
-        let body = body_with_codex_tool_output_image(false);
-        let context_error = ProxyError::UpstreamError {
-            status: 400,
-            body: Some(r#"{"error":{"message":"maximum context length exceeded"}}"#.to_string()),
-        };
-
-        assert!(!fwd.media_retry_should_trigger("Codex", false, &body, &context_error));
-    }
-
-    #[test]
-    fn reactive_skipped_when_media_fallback_off() {
-        // 关闭 request_media_fallback：上游报图片错误也不触发兜底重试。
-        let fwd = forwarder_with_rectifier(RectifierConfig {
-            request_media_fallback: false,
-            ..RectifierConfig::default()
-        });
-        let body = body_with_image("any-model");
-        assert!(!fwd.media_retry_should_trigger(
-            "Claude",
-            false,
-            &body,
-            &image_unsupported_error()
-        ));
-    }
-
-    #[test]
-    fn reactive_skipped_when_master_switch_off() {
-        let fwd = forwarder_with_rectifier(RectifierConfig {
-            enabled: false,
-            ..RectifierConfig::default()
-        });
-        let body = body_with_image("any-model");
-        assert!(!fwd.media_retry_should_trigger(
-            "Claude",
-            false,
-            &body,
-            &image_unsupported_error()
-        ));
-    }
-
-    #[test]
-    fn reactive_unaffected_by_heuristic_switch() {
-        // 关闭 request_media_heuristic 不影响反应式兜底——它是上游实测错误后的恢复，不是预测。
-        let fwd = forwarder_with_rectifier(RectifierConfig {
-            request_media_heuristic: false,
-            ..RectifierConfig::default()
-        });
-        let body = body_with_image("any-model");
-        assert!(fwd.media_retry_should_trigger("Claude", false, &body, &image_unsupported_error()));
+        upstream_task.abort();
     }
 }

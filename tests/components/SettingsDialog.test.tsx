@@ -180,6 +180,14 @@ vi.mock("@/components/settings/WindowSettings", () => ({
     </button>
   ),
 }));
+vi.mock("@/components/settings/CopilotSettingsPanel", () => ({
+  CopilotSettingsPanel: ({ onCancel }: { onCancel: () => void }) => (
+    <div>
+      copilot-settings
+      <button onClick={onCancel}>cancel-copilot</button>
+    </div>
+  ),
+}));
 
 vi.mock("@/components/settings/DirectorySettings", () => ({
   DirectorySettings: ({
@@ -274,7 +282,7 @@ describe("SettingsPage Component", () => {
     expect(importExportMock.resetStatus).toHaveBeenCalledTimes(1);
   });
 
-  it("should render general and advanced tabs and trigger child callbacks", () => {
+  it("should render general and advanced tabs and trigger child callbacks", async () => {
     const onOpenChange = vi.fn();
     // 设置 selectedFile 后，按钮显示 settings.import（可执行导入）
     importExportMock = createImportExportMock({
@@ -284,6 +292,28 @@ describe("SettingsPage Component", () => {
     renderSettingsPage({ onOpenChange });
 
     expect(screen.getByText("theme-settings")).toBeInTheDocument();
+    for (const name of [
+      "settings.tabGeneral",
+      "settings.tabProxy",
+      "settings.tabAuth",
+      "Copilot",
+      "settings.tabAdvanced",
+    ]) {
+      expect(screen.getByRole("button", { name })).toBeVisible();
+    }
+    expect(
+      screen.queryByRole("button", { name: "usage.title" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "settings.tabAuth" })
+        .nextElementSibling,
+    ).toBe(screen.getByRole("button", { name: "Copilot" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copilot" }));
+    expect(screen.getByText("copilot-settings")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "cancel-copilot" }));
+    await waitFor(() =>
+      expect(screen.getByText("theme-settings")).toBeVisible(),
+    );
 
     fireEvent.click(screen.getByText("window-settings"));
     expect(settingsMock.updateSettings).toHaveBeenCalledWith({

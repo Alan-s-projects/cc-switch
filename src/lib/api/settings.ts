@@ -100,14 +100,6 @@ export const settingsApi = {
     return await invoke("get_auto_launch_status");
   },
 
-  async getRectifierConfig(): Promise<RectifierConfig> {
-    return await invoke("get_rectifier_config");
-  },
-
-  async setRectifierConfig(config: RectifierConfig): Promise<boolean> {
-    return await invoke("set_rectifier_config", { config });
-  },
-
   async getLogConfig(): Promise<LogConfig> {
     return await invoke("get_log_config");
   },
@@ -116,14 +108,6 @@ export const settingsApi = {
     return await invoke("set_log_config", { config });
   },
 };
-
-export interface RectifierConfig {
-  enabled: boolean;
-  requestThinkingSignature: boolean;
-  requestThinkingBudget: boolean;
-  requestMediaFallback: boolean;
-  requestMediaHeuristic: boolean;
-}
 
 export interface LogConfig {
   enabled: boolean;

@@ -479,18 +479,10 @@ pub fn sanitize_orphan_tool_results(mut body: Value) -> Value {
     body
 }
 
-/// 请求前主动剥离所有 assistant 消息里的 thinking / redacted_thinking block
-///
-/// Copilot 的三条目标端点（`/chat/completions`、`/v1/responses`、`/v1/chat/completions`）
-/// 均为 OpenAI 兼容格式，不识别 Anthropic 的 thinking block。若原样转发，上游会
-/// 拒绝并返回 invalid_request_error —— 届时 `thinking_rectifier` 才做反应式清理并
-/// 重试。那次已经失败的请求依旧消耗一次 premium quota，所以此处提前剥离。
-///
-/// 与 `thinking_rectifier::rectify_anthropic_request` 的区别：
-/// - 本函数只剥 thinking / redacted_thinking 两类 block，不触碰 signature，也不
-///   移除顶层 thinking 字段——那些是错误路径上的激进整流，常规路径不需要。
-/// - 保持与 `merge_tool_results` / `sanitize_orphan_tool_results` 一致的"消费 body、
-///   返回新 body"签名，便于接入 forwarder 管道。
+/// Adapt Anthropic assistant content before conversion to an OpenAI-compatible
+/// Copilot endpoint. This removes only `thinking` / `redacted_thinking` blocks;
+/// signatures on other blocks and the top-level thinking field are preserved.
+/// The Codex Responses path does not use this Anthropic-body adaptation.
 pub fn strip_thinking_blocks(mut body: Value) -> Value {
     let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
         return body;
@@ -1563,7 +1555,7 @@ mod tests {
 
     #[test]
     fn test_strip_thinking_preserves_signature_on_non_thinking_blocks() {
-        // signature 留给 thinking_rectifier 在错误路径处理，此处不动
+        // Non-thinking blocks retain their signatures.
         let body = serde_json::json!({
             "messages": [
                 {"role": "assistant", "content": [

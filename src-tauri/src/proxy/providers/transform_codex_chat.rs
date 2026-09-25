@@ -795,9 +795,11 @@ fn append_responses_item_as_chat_message(
                 .and_then(|v| v.as_str())
                 .map(responses_role_to_chat_role)
                 .unwrap_or("user");
+            let content =
+                responses_content_to_chat_content(role, &Value::Array(vec![item.clone()]))?;
             let message = json!({
                 "role": role,
-                "content": responses_content_to_chat_content(role, &Value::Array(vec![item.clone()]))
+                "content": content
             });
             if role == "assistant" {
                 let mut message = message;
@@ -834,7 +836,7 @@ fn append_responses_item_as_chat_message(
                     pending_reasoning,
                     messages,
                     *last_assistant_index,
-                );
+                )?;
                 update_last_assistant_index(messages, &message, last_assistant_index);
                 messages.push(message);
             } else if pending_media.is_empty() {
@@ -864,7 +866,7 @@ fn append_responses_item_as_chat_message(
                     pending_reasoning,
                     messages,
                     *last_assistant_index,
-                );
+                )?;
                 update_last_assistant_index(messages, &message, last_assistant_index);
                 messages.push(message);
             } else if pending_media.is_empty() {
@@ -1005,12 +1007,13 @@ fn responses_message_item_to_chat_message(
     pending_reasoning: &mut Option<String>,
     messages: &mut [Value],
     last_assistant_index: Option<usize>,
-) -> Value {
+) -> Result<Value, ProxyError> {
     let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
     let chat_role = responses_role_to_chat_role(role);
     let content = item
         .get("content")
         .map(|value| responses_content_to_chat_content(chat_role, value))
+        .transpose()?
         .unwrap_or(Value::Null);
 
     let mut message = json!({
@@ -1032,7 +1035,7 @@ fn responses_message_item_to_chat_message(
         );
     }
 
-    message
+    Ok(message)
 }
 
 fn responses_role_to_chat_role(role: &str) -> &'static str {
@@ -1207,13 +1210,13 @@ fn responses_reasoning_item_text(item: &Value) -> Option<String> {
     extract_reasoning_summary_text(item)
 }
 
-fn responses_content_to_chat_content(_role: &str, content: &Value) -> Value {
+fn responses_content_to_chat_content(_role: &str, content: &Value) -> Result<Value, ProxyError> {
     if content.is_null() || content.is_string() {
-        return content.clone();
+        return Ok(content.clone());
     }
 
     let Some(parts) = content.as_array() else {
-        return content.clone();
+        return Ok(content.clone());
     };
 
     let mut chat_parts: Vec<Value> = Vec::new();
@@ -1244,16 +1247,28 @@ fn responses_content_to_chat_content(_role: &str, content: &Value) -> Value {
             }
             "input_image" => {
                 if let Some(image_url) = part.get("image_url") {
-                    let image_url = if image_url.is_object() {
+                    let mut image_url = if image_url.is_object() {
                         image_url.clone()
                     } else {
                         json!({ "url": image_url.as_str().unwrap_or_default() })
                     };
+                    if let Some(detail) = part.get("detail") {
+                        image_url
+                            .as_object_mut()
+                            .expect("Chat image URL is an object")
+                            .entry("detail")
+                            .or_insert_with(|| detail.clone());
+                    }
                     chat_parts.push(json!({
                         "type": "image_url",
                         "image_url": image_url
                     }));
                     has_non_text_part = true;
+                } else if part.get("file_id").is_some() {
+                    return Err(ProxyError::InvalidRequest(
+                        "Chat Completions cannot represent input_image with only file_id; supply an image_url or data URL, or use the Responses protocol."
+                            .to_string(),
+                    ));
                 }
             }
             "input_file" => {
@@ -1279,16 +1294,16 @@ fn responses_content_to_chat_content(_role: &str, content: &Value) -> Value {
     }
 
     if !has_non_text_part {
-        return Value::String(
+        return Ok(Value::String(
             chat_parts
                 .iter()
                 .filter_map(|part| part.get("text").and_then(|v| v.as_str()))
                 .collect::<Vec<_>>()
                 .join("\n"),
-        );
+        ));
     }
 
-    Value::Array(chat_parts)
+    Ok(Value::Array(chat_parts))
 }
 
 fn responses_input_file_to_chat_file(part: &Value) -> Option<Value> {
@@ -2332,6 +2347,108 @@ mod tests {
         assert_eq!(content[0]["type"], "file");
         assert_eq!(content[0]["file"]["file_id"], "file_top");
         assert_eq!(content[0]["file"]["filename"], "top.pdf");
+    }
+
+    #[test]
+    fn responses_request_preserves_image_urls_and_detail_in_chat() {
+        let cases = [
+            (
+                json!({
+                    "type": "input_image",
+                    "image_url": "https://example.com/image.png",
+                    "detail": "high"
+                }),
+                json!({"url": "https://example.com/image.png", "detail": "high"}),
+            ),
+            (
+                json!({
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,IMAGE_SENTINEL",
+                    "detail": "low"
+                }),
+                json!({"url": "data:image/png;base64,IMAGE_SENTINEL", "detail": "low"}),
+            ),
+            (
+                json!({
+                    "type": "input_image",
+                    "image_url": {"url": "https://example.com/image.png"},
+                    "detail": "auto"
+                }),
+                json!({"url": "https://example.com/image.png", "detail": "auto"}),
+            ),
+            (
+                json!({
+                    "type": "input_image",
+                    "image_url": {"url": "https://example.com/image.png", "detail": "low"},
+                    "detail": "high"
+                }),
+                json!({"url": "https://example.com/image.png", "detail": "low"}),
+            ),
+            (
+                json!({
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,ORIGINAL_SENTINEL",
+                    "detail": "original",
+                    "file_id": "file_alternative"
+                }),
+                json!({"url": "data:image/png;base64,ORIGINAL_SENTINEL", "detail": "original"}),
+            ),
+        ];
+
+        for (image, expected_url) in cases {
+            for item in [image.clone(), json!({"role": "user", "content": [image]})] {
+                let result = responses_to_chat_completions(json!({
+                    "model": "gpt-6-astra",
+                    "input": [item]
+                }))
+                .unwrap();
+                assert_eq!(result["messages"][0]["content"][0]["type"], "image_url");
+                assert_eq!(
+                    result["messages"][0]["content"][0]["image_url"],
+                    expected_url
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn responses_request_rejects_file_id_only_images_instead_of_dropping_them() {
+        let image = json!({"type": "input_image", "file_id": "file_image"});
+        for item in [
+            image.clone(),
+            json!({"role": "user", "content": [
+                {"type": "input_text", "text": "Inspect this image."},
+                image.clone()
+            ]}),
+            json!({"type": "message", "role": "user", "content": [image.clone()]}),
+            json!({"type": "extension", "role": "user", "content": [image]}),
+        ] {
+            let error = responses_to_chat_completions(json!({
+                "model": "gpt-6-astra",
+                "input": [item]
+            }))
+            .unwrap_err();
+            assert!(matches!(&error, ProxyError::InvalidRequest(_)));
+            assert!(error.to_string().contains("input_image with only file_id"));
+            assert!(error.to_string().contains("image_url or data URL"));
+        }
+    }
+
+    #[test]
+    fn responses_request_keeps_other_unknown_content_handling_unchanged() {
+        let result = responses_to_chat_completions(json!({
+            "model": "gpt-6-astra",
+            "input": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Keep this text."},
+                    {"type": "unknown_part", "file_id": "opaque_metadata"},
+                    {"type": "input_image"}
+                ]
+            }]
+        }))
+        .unwrap();
+        assert_eq!(result["messages"][0]["content"], "Keep this text.");
     }
 
     #[test]

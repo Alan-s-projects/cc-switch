@@ -1,61 +1,55 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-
-const HEARTBEAT_INTERVAL_MS = 3000;
-const HEARTBEAT_DIM_MS = 300;
+import { focusManager } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
 
 let initialized = false;
-let heartbeatInterval: number | undefined;
-let heartbeatReset: number | undefined;
+const subscribe = (onChange: () => void) => focusManager.subscribe(onChange);
+const isActive = () => focusManager.isFocused();
 
-function stopHeartbeat() {
-  if (heartbeatInterval !== undefined) {
-    window.clearInterval(heartbeatInterval);
-    heartbeatInterval = undefined;
-  }
-  if (heartbeatReset !== undefined) {
-    window.clearTimeout(heartbeatReset);
-    heartbeatReset = undefined;
-  }
-  delete document.documentElement.dataset.statusHeartbeat;
-}
-
-function startHeartbeat() {
-  stopHeartbeat();
-  heartbeatInterval = window.setInterval(() => {
-    document.documentElement.dataset.statusHeartbeat = "true";
-    heartbeatReset = window.setTimeout(() => {
-      delete document.documentElement.dataset.statusHeartbeat;
-      heartbeatReset = undefined;
-    }, HEARTBEAT_DIM_MS);
-  }, HEARTBEAT_INTERVAL_MS);
-}
-
-function setWindowActive(active: boolean) {
-  document.documentElement.dataset.windowActive = String(active);
-
-  if (active) {
-    startHeartbeat();
-  } else {
-    stopHeartbeat();
-  }
+export function useWindowActive() {
+  return useSyncExternalStore(subscribe, isActive, () => true);
 }
 
 export function initializeWindowActivity() {
   if (initialized) return;
   initialized = true;
-
-  setWindowActive(document.hasFocus());
-
-  // Browser focus events are a fallback for non-Tauri renderer tests and dev mode.
-  window.addEventListener("focus", () => setWindowActive(true));
-  window.addEventListener("blur", () => setWindowActive(false));
-
-  if (isTauri()) {
-    void getCurrentWindow()
-      .onFocusChanged(({ payload }) => setWindowActive(payload))
-      .catch((error) => {
-        console.error("Failed to observe window focus changes", error);
-      });
-  }
+  // Native focus events also cover minimizing and hiding the window to the tray.
+  // Pause background queries instead of running a decorative heartbeat timer.
+  focusManager.setEventListener((setFocused) => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const update = () => {
+      if (!disposed) {
+        setFocused(
+          document.visibilityState !== "hidden" && document.hasFocus(),
+        );
+      }
+    };
+    update();
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
+    document.addEventListener("visibilitychange", update);
+    if (isTauri()) {
+      void getCurrentWindow()
+        .onFocusChanged(({ payload }) => {
+          if (!disposed)
+            setFocused(payload && document.visibilityState !== "hidden");
+        })
+        .then((off) => {
+          if (disposed) off();
+          else unlisten = off;
+        })
+        .catch((error) =>
+          console.error("Failed to observe window focus:", error),
+        );
+    }
+    return () => {
+      disposed = true;
+      unlisten?.();
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
+      document.removeEventListener("visibilitychange", update);
+    };
+  });
 }

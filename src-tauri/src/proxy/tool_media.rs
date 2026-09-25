@@ -2,9 +2,7 @@
 //!
 //! Responses and Anthropic tool outputs may carry structured media blocks.
 //! Chat Completions tool messages are text-only, so protocol bridges extract
-//! those blocks and re-emit them in a synthetic user message. The media
-//! sanitizer reuses the same recognition and traversal rules when it needs to
-//! remove images for a text-only upstream.
+//! those blocks and re-emit them in a synthetic user message.
 
 use crate::proxy::json_canonical::canonical_json_string;
 use serde_json::{json, Map, Value};
@@ -19,7 +17,7 @@ const MAX_MEDIA_TRAVERSAL_DEPTH: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolMediaScope {
-    /// Used by the existing image-capability sanitizer and its retry path.
+    /// Used by Anthropic and Responses bridges that attach images natively.
     ImagesOnly,
     /// Used by Gemini Native `generateContent`, whose existing bridge only
     /// promises inline base64 image input. Remote URLs and malformed data URLs
@@ -180,37 +178,6 @@ pub(crate) fn whole_string_image_data_url(value: &str) -> Option<Value> {
     }))
 }
 
-/// Read-only media detection using the same shape classifier and recursive
-/// boundaries as [`strip_media_from_tool_value`].
-pub(crate) fn tool_output_contains_media(value: &Value, scope: ToolMediaScope) -> bool {
-    tool_output_contains_media_at_depth(value, scope, 0)
-}
-
-/// Extract recognized media blocks and replace them in-place.
-///
-/// `replacement_block` is used for structured array/object parts. A scalar
-/// string that is itself a complete image data URL uses `replacement_text`, so
-/// an originally plain string stays a plain string. Parseable JSON strings are
-/// recursively transformed and canonicalized back into a string only when a
-/// replacement actually occurred.
-pub(crate) fn strip_media_from_tool_value(
-    value: &mut Value,
-    media_parts: &mut Vec<Value>,
-    scope: ToolMediaScope,
-    replacement_block: &Value,
-    replacement_text: &str,
-) -> usize {
-    strip_media_from_tool_value_at_depth(
-        value,
-        media_parts,
-        scope,
-        replacement_block,
-        replacement_text,
-        false,
-        0,
-    )
-}
-
 /// Extract media and clamp residual large data/base64 scalars on media-bearing
 /// outputs. Parseable JSON strings are clamped while still represented as a
 /// JSON tree, before they are canonicalized back into their original string
@@ -228,7 +195,6 @@ pub(crate) fn strip_and_clamp_media_from_tool_value(
         scope,
         replacement_block,
         replacement_text,
-        true,
         0,
     );
     if replaced > 0 {
@@ -267,50 +233,12 @@ pub(crate) fn clamp_base64ish_strings(value: &mut Value) {
     }
 }
 
-fn tool_output_contains_media_at_depth(value: &Value, scope: ToolMediaScope, depth: usize) -> bool {
-    if depth > MAX_MEDIA_TRAVERSAL_DEPTH {
-        return false;
-    }
-
-    match value {
-        Value::String(text) => {
-            if scope.allows(ToolMediaKind::Image) && whole_string_image_data_url(text).is_some() {
-                return true;
-            }
-
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                return false;
-            }
-            serde_json::from_str::<Value>(trimmed)
-                .ok()
-                .is_some_and(|parsed| {
-                    tool_output_contains_media_at_depth(&parsed, scope, depth + 1)
-                })
-        }
-        Value::Array(items) => items
-            .iter()
-            .any(|item| tool_output_contains_media_at_depth(item, scope, depth + 1)),
-        Value::Object(object) => {
-            if chat_media_part_from_tool_part(value, scope).is_some() {
-                return true;
-            }
-
-            object.get("content").is_some_and(|content| {
-                tool_output_contains_media_at_depth(content, scope, depth + 1)
-            })
-        }
-        _ => false,
-    }
-}
-
 fn strip_media_from_tool_value_at_depth(
     value: &mut Value,
     media_parts: &mut Vec<Value>,
     scope: ToolMediaScope,
     replacement_block: &Value,
     replacement_text: &str,
-    clamp_parsed_strings: bool,
     depth: usize,
 ) -> usize {
     if depth > MAX_MEDIA_TRAVERSAL_DEPTH {
@@ -340,13 +268,10 @@ fn strip_media_from_tool_value_at_depth(
                 scope,
                 replacement_block,
                 replacement_text,
-                clamp_parsed_strings,
                 depth + 1,
             );
             if replaced > 0 {
-                if clamp_parsed_strings {
-                    clamp_base64ish_strings(&mut parsed);
-                }
+                clamp_base64ish_strings(&mut parsed);
                 *text = canonical_json_string(&parsed);
             }
             replaced
@@ -360,7 +285,6 @@ fn strip_media_from_tool_value_at_depth(
                     scope,
                     replacement_block,
                     replacement_text,
-                    clamp_parsed_strings,
                     depth + 1,
                 )
             })
@@ -383,7 +307,6 @@ fn strip_media_from_tool_value_at_depth(
                         scope,
                         replacement_block,
                         replacement_text,
-                        clamp_parsed_strings,
                         depth + 1,
                     )
                 })
@@ -768,14 +691,8 @@ mod tests {
             }
         });
 
-        assert!(tool_output_contains_media(
-            &data,
-            ToolMediaScope::ImagesOnly
-        ));
-        assert!(!tool_output_contains_media(
-            &remote,
-            ToolMediaScope::ImagesOnly
-        ));
+        assert!(chat_media_part_from_tool_part(&data, ToolMediaScope::ImagesOnly).is_some());
+        assert!(chat_media_part_from_tool_part(&remote, ToolMediaScope::ImagesOnly).is_none());
     }
 
     #[test]
@@ -797,22 +714,19 @@ mod tests {
             "image_url": {"url": "data:image/png;base64,"}
         });
 
-        assert!(tool_output_contains_media(
-            &inline,
-            ToolMediaScope::InlineImagesOnly
-        ));
-        assert!(!tool_output_contains_media(
-            &remote,
-            ToolMediaScope::InlineImagesOnly
-        ));
-        assert!(!tool_output_contains_media(
-            &missing_base64,
-            ToolMediaScope::InlineImagesOnly
-        ));
-        assert!(!tool_output_contains_media(
-            &empty_data,
-            ToolMediaScope::InlineImagesOnly
-        ));
+        assert!(
+            chat_media_part_from_tool_part(&inline, ToolMediaScope::InlineImagesOnly).is_some()
+        );
+        assert!(
+            chat_media_part_from_tool_part(&remote, ToolMediaScope::InlineImagesOnly).is_none()
+        );
+        assert!(
+            chat_media_part_from_tool_part(&missing_base64, ToolMediaScope::InlineImagesOnly)
+                .is_none()
+        );
+        assert!(
+            chat_media_part_from_tool_part(&empty_data, ToolMediaScope::InlineImagesOnly).is_none()
+        );
     }
 
     #[test]
@@ -823,12 +737,8 @@ mod tests {
         let replacement = json!({"type": "text", "text": "moved"});
         let mut media = Vec::new();
 
-        assert!(!tool_output_contains_media(
-            &value,
-            ToolMediaScope::AllSupported
-        ));
         assert_eq!(
-            strip_media_from_tool_value(
+            strip_and_clamp_media_from_tool_value(
                 &mut value,
                 &mut media,
                 ToolMediaScope::AllSupported,
@@ -868,7 +778,7 @@ mod tests {
         });
         let mut media = Vec::new();
 
-        let replaced = strip_media_from_tool_value(
+        let replaced = strip_and_clamp_media_from_tool_value(
             &mut value,
             &mut media,
             ToolMediaScope::AllSupported,
@@ -940,22 +850,10 @@ mod tests {
             "input_audio": {"data": "YWJj", "format": "wav"}
         });
 
-        assert!(!tool_output_contains_media(
-            &file,
-            ToolMediaScope::ImagesOnly
-        ));
-        assert!(!tool_output_contains_media(
-            &audio,
-            ToolMediaScope::ImagesOnly
-        ));
-        assert!(tool_output_contains_media(
-            &file,
-            ToolMediaScope::AllSupported
-        ));
-        assert!(tool_output_contains_media(
-            &audio,
-            ToolMediaScope::AllSupported
-        ));
+        assert!(chat_media_part_from_tool_part(&file, ToolMediaScope::ImagesOnly).is_none());
+        assert!(chat_media_part_from_tool_part(&audio, ToolMediaScope::ImagesOnly).is_none());
+        assert!(chat_media_part_from_tool_part(&file, ToolMediaScope::AllSupported).is_some());
+        assert!(chat_media_part_from_tool_part(&audio, ToolMediaScope::AllSupported).is_some());
     }
 
     #[test]
@@ -998,7 +896,7 @@ mod tests {
         let replacement = json!({"type": "text", "text": "moved"});
         let mut media = Vec::new();
 
-        let replaced = strip_media_from_tool_value(
+        let replaced = strip_and_clamp_media_from_tool_value(
             &mut value,
             &mut media,
             ToolMediaScope::AllSupported,

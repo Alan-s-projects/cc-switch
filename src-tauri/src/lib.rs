@@ -696,8 +696,6 @@ pub fn run() {
             commands::open_app_config_folder,
             commands::get_settings,
             commands::save_settings,
-            commands::get_rectifier_config,
-            commands::set_rectifier_config,
             commands::get_copilot_optimizer_config,
             commands::set_copilot_optimizer_config,
             commands::get_log_config,
