@@ -1800,7 +1800,10 @@ impl RequestForwarder {
         if matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && !codex_responses_to_chat
             && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_namespace_flatten(provider)
+            && super::providers::provider_needs_responses_namespace_flatten(
+                provider,
+                request_body.get("model").and_then(Value::as_str),
+            )
         {
             if super::providers::transform_codex_responses_namespace::flatten_request_namespaces(
                 &mut request_body,

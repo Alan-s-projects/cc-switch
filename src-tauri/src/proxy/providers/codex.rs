@@ -220,10 +220,17 @@ pub fn should_convert_codex_responses_to_anthropic(provider: &Provider, endpoint
 /// Chat/Anthropic transform paths already unwrap namespaces, so this only
 /// fires on native Responses passthrough.
 ///
-/// Covers managed xAI OAuth *and* API-key providers whose live upstream is
-/// `api.x.ai` with `wire_api = "responses"`. See farion1231/cc-switch#6815.
-pub fn provider_needs_responses_namespace_flatten(provider: &Provider) -> bool {
-    provider.is_xai_oauth() || provider_is_xai_native_responses(provider)
+/// Covers managed xAI OAuth, API-key providers whose live upstream is
+/// `api.x.ai`, and Copilot requests whose resolved upstream model is Grok.
+/// Callers must use the request's model, not the provider's saved default.
+pub fn provider_needs_responses_namespace_flatten(
+    provider: &Provider,
+    upstream_model: Option<&str>,
+) -> bool {
+    provider.is_xai_oauth()
+        || provider_is_xai_native_responses(provider)
+        || (provider.is_github_copilot()
+            && upstream_model.is_some_and(|model| model.to_ascii_lowercase().starts_with("grok-")))
 }
 
 /// True when this Codex provider talks native Responses to first-party xAI
@@ -2364,7 +2371,7 @@ wire_api = "responses"
             provider_type: Some("xai_oauth".to_string()),
             ..Default::default()
         });
-        assert!(provider_needs_responses_namespace_flatten(&xai));
+        assert!(provider_needs_responses_namespace_flatten(&xai, None));
 
         // API-key Grok cards (no xai_oauth meta) still talk to api.x.ai Responses.
         let grok_key = create_provider(json!({
@@ -2379,7 +2386,7 @@ base_url = "https://api.x.ai/v1"
 wire_api = "responses"
 "#
         }));
-        assert!(provider_needs_responses_namespace_flatten(&grok_key));
+        assert!(provider_needs_responses_namespace_flatten(&grok_key, None));
 
         // A non-xAI Responses provider must not be flattened.
         let other = create_provider(json!({
@@ -2390,6 +2397,32 @@ base_url = "https://api.deepseek.com"
 wire_api = "responses"
 "#
         }));
-        assert!(!provider_needs_responses_namespace_flatten(&other));
+        assert!(!provider_needs_responses_namespace_flatten(
+            &other,
+            Some("grok-4.7")
+        ));
+    }
+
+    #[test]
+    fn copilot_namespace_flatten_gate_uses_the_resolved_request_model() {
+        let mut copilot = create_copilot_provider();
+        for default_model in ["gpt-6-astra", "grok-4.7"] {
+            copilot.settings_config = json!({
+                "config": format!("model = \"{default_model}\"\n")
+            });
+            for (model, expected) in [
+                (Some("grok-4.7"), true),
+                (Some("GROK-4.7"), true),
+                (Some("gpt-6-astra"), false),
+                (Some("gemini-3.8-flash"), false),
+                (None, false),
+            ] {
+                assert_eq!(
+                    provider_needs_responses_namespace_flatten(&copilot, model),
+                    expected,
+                    "default={default_model}, request={model:?}"
+                );
+            }
+        }
     }
 }

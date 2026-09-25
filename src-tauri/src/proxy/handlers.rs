@@ -935,10 +935,22 @@ async fn handle_responses_for_app(
         .await;
     }
 
-    // Native Responses passthrough to a strict gateway (xAI): restore flattened
-    // function-call names *and* rewrite whole-float tool arguments. The integer
-    // rewrite must run even when the request had no namespace tools.
-    if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider) {
+    let response = if ctx.provider.is_github_copilot()
+        && matches!(
+            codex_upstream_format,
+            Some(super::forwarder::CodexUpstreamFormat::NativeResponses)
+        ) {
+        streaming_copilot_responses::normalize_item_ids(response)
+    } else {
+        response
+    };
+
+    // Normalize Copilot item IDs before restoring Grok's flattened tool names.
+    // The integer rewrite also applies to requests without namespace tools.
+    if super::providers::provider_needs_responses_namespace_flatten(
+        &ctx.provider,
+        ctx.outbound_model.as_deref(),
+    ) {
         return handle_codex_xai_native_responses_rewrite(
             response,
             &ctx,
@@ -948,17 +960,6 @@ async fn handle_responses_for_app(
         )
         .await;
     }
-
-    let response = if ctx.provider.is_github_copilot()
-        && matches!(
-            codex_upstream_format,
-            Some(super::forwarder::CodexUpstreamFormat::NativeResponses)
-        )
-    {
-        streaming_copilot_responses::normalize_item_ids(response)
-    } else {
-        response
-    };
 
     process_response(
         response,
@@ -1171,7 +1172,10 @@ async fn handle_responses_compact_for_app(
         .await;
     }
 
-    if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider) {
+    if super::providers::provider_needs_responses_namespace_flatten(
+        &ctx.provider,
+        ctx.outbound_model.as_deref(),
+    ) {
         return handle_codex_xai_native_responses_rewrite(
             response,
             &ctx,
