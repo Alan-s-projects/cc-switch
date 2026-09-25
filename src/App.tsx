@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
 import {
   Settings,
-  ArrowLeft,
+  LayoutDashboard,
   BarChart2,
   FileText,
   Loader2,
@@ -13,22 +12,26 @@ import { providersApi } from "@/lib/api";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { CopilotCard } from "@/components/providers/CopilotCard";
-import { HealthCheckButton } from "@/components/providers/HealthCheckButton";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { UsagePage } from "@/components/usage/UsagePage";
 import { BridgeOverview } from "@/components/overview/BridgeOverview";
 import { CodexSetupSuggestion } from "@/components/providers/CodexSetupSuggestion";
 import { ProxyToggle } from "@/components/proxy/ProxyToggle";
-import { RoutingActivationBrand } from "@/components/proxy/RoutingActivationBrand";
 import { Button } from "@/components/ui/button";
 
 type View = "provider" | "settings" | "setup" | "usage";
 
+const navigation = [
+  { view: "provider", label: "Overview", icon: LayoutDashboard },
+  { view: "usage", label: "Usage", icon: BarChart2 },
+  { view: "setup", label: "Connect", icon: FileText },
+  { view: "settings", label: "Settings", icon: Settings },
+] as const;
+
 export default function App() {
-  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [view, setView] = useState<View>("provider");
-  const { isRunning, status } = useProxyStatus();
+  const { status } = useProxyStatus();
   const { data, isLoading, refetch } = useProvidersQuery("codex");
   const provider =
     data?.providers[data.currentProviderId] ??
@@ -76,66 +79,26 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex h-16 shrink-0 items-center justify-between gap-3 px-6">
-        <div className="flex items-center gap-2">
-          {view === "provider" ? (
-            <RoutingActivationBrand
-              active={isRunning}
-              contextKey="codex"
-              ready={status !== undefined}
-            />
-          ) : (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                aria-label={t("common.back")}
-                onClick={() => setView("provider")}
-              >
-                <ArrowLeft aria-hidden className="mr-2 h-4 w-4" />
-                {t("common.back")}
-              </Button>
-              <h1 className="text-lg font-semibold">
-                {view === "setup"
-                  ? t("bridge.setup")
-                  : view === "usage"
-                    ? t("usage.title")
-                    : t("settings.title")}
-              </h1>
-            </>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            title={t("usage.title")}
-            onClick={() => setView("usage")}
-          >
-            <BarChart2 aria-hidden className="mr-2 h-4 w-4" />
-            Usage
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            title={t("common.settings")}
-            onClick={() => setView("settings")}
-          >
-            <Settings aria-hidden className="mr-2 h-4 w-4" />
-            {t("common.settings")}
-          </Button>
-          <HealthCheckButton providerId={provider?.id} />
-          <Button
-            variant="ghost"
-            size="sm"
-            title={t("bridge.setup")}
-            onClick={() => setView("setup")}
-          >
-            <FileText aria-hidden className="mr-2 h-4 w-4" />
-            Connect
-          </Button>
-          <ProxyToggle />
-        </div>
+      <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
+        <nav
+          aria-label="Main navigation"
+          className="flex min-w-0 items-center gap-2 overflow-x-auto"
+        >
+          {navigation.map(({ view: target, label, icon: Icon }) => (
+            <Button
+              key={target}
+              variant={view === target ? "default" : "ghost"}
+              size="sm"
+              className="shrink-0"
+              aria-current={view === target ? "page" : undefined}
+              onClick={() => setView(target)}
+            >
+              <Icon aria-hidden className="h-4 w-4" />
+              {label}
+            </Button>
+          ))}
+        </nav>
+        <ProxyToggle />
       </header>
       <main
         className={`flex min-h-0 flex-1 flex-col ${view === "setup" ? "overflow-hidden" : "overflow-y-auto"}`}

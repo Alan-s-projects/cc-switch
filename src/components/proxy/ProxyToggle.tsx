@@ -6,8 +6,14 @@ export function ProxyToggle() {
   const { isRunning, isLoading, isPending, toggleProxy } = useProxyStatus();
   return (
     <div
-      className="flex h-8 items-center gap-2 rounded-lg bg-muted/50 px-2"
-      title={isRunning ? "Stop proxy" : "Start proxy"}
+      className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-muted/50 px-2"
+      title={
+        isLoading
+          ? "Checking proxy status"
+          : isRunning
+            ? "Stop proxy"
+            : "Start proxy"
+      }
     >
       {isLoading || isPending ? (
         <Loader2
@@ -20,7 +26,9 @@ export function ProxyToggle() {
           className={`h-4 w-4 ${isRunning ? "text-emerald-500" : "text-muted-foreground"}`}
         />
       )}
-      <span className="text-xs font-medium">Proxy</span>
+      <span className="text-xs font-medium">
+        {isLoading ? "Checking" : isRunning ? "Proxy Running" : "Proxy Stopped"}
+      </span>
       <Switch
         checked={isRunning}
         disabled={isLoading || isPending}

@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import App from "@/App";
@@ -41,14 +47,10 @@ vi.mock("@/components/providers/CopilotCard", () => ({
 vi.mock("@/components/overview/BridgeOverview", () => ({
   BridgeOverview: () => <div data-testid="bridge-overview">Overview</div>,
 }));
-vi.mock("@/components/providers/HealthCheckButton", () => ({
-  HealthCheckButton: ({ providerId }: { providerId?: string }) => (
-    <button disabled={!providerId}>Health check</button>
+vi.mock("@/components/proxy/ProxyToggle", () => ({
+  ProxyToggle: () => (
+    <button role="switch" aria-label="Proxy server" aria-checked={false} />
   ),
-}));
-vi.mock("@/components/proxy/ProxyToggle", () => ({ ProxyToggle: () => null }));
-vi.mock("@/components/proxy/RoutingActivationBrand", () => ({
-  RoutingActivationBrand: () => null,
 }));
 vi.mock("@/components/settings/SettingsPage", () => ({
   SettingsPage: () => <div data-testid="settings-page">settings</div>,
@@ -70,7 +72,12 @@ vi.mock("@/components/usage/UsageDashboard", () => ({
   ),
 }));
 vi.mock("@/components/providers/CodexSetupSuggestion", () => ({
-  CodexSetupSuggestion: () => <div>read-only-suggestions</div>,
+  CodexSetupSuggestion: () => (
+    <div>
+      read-only-suggestions
+      <input aria-label="Codex TOML file" />
+    </div>
+  ),
 }));
 function renderApp() {
   return render(
@@ -96,15 +103,32 @@ describe("Atlas application scope", () => {
       expect(screen.queryByTitle(title)).not.toBeInTheDocument();
     }
   });
-  it("opens usage as its own page, preserves its refresh preference, and navigates through settings and back", async () => {
+  it("keeps the navigation and proxy control visible while highlighting only the selected page", async () => {
     renderApp();
-    fireEvent.click(screen.getByTitle("usage.title"));
+    const navigation = screen.getByRole("navigation", {
+      name: "Main navigation",
+    });
+    const proxyControl = screen.getByRole("switch", { name: "Proxy server" });
+    const selectedPage = () =>
+      within(navigation).getByRole("button", { current: "page" });
+    expect(
+      within(navigation)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Overview", "Usage", "Connect", "Settings"]);
+    expect(selectedPage()).toHaveTextContent("Overview");
+    expect(
+      within(screen.getByRole("banner")).queryByRole("button", {
+        name: "Health check",
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(within(navigation).getByRole("button", { name: "Usage" }));
     expect(await screen.findByTestId("usage-dashboard")).toHaveTextContent(
       "Refresh every 10000",
     );
-    expect(
-      screen.getByRole("heading", { level: 1, name: "usage.title" }),
-    ).toBeVisible();
+    expect(selectedPage()).toHaveTextContent("Usage");
+    expect(proxyControl).toBeVisible();
+    expect(screen.queryByTestId("bridge-overview")).not.toBeInTheDocument();
     expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "Change refresh interval" }),
@@ -114,28 +138,56 @@ describe("Atlas application scope", () => {
         usageDashboardRefreshIntervalMs: 5000,
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "common.back" }));
-    expect(screen.getByText("GitHub Copilot")).toBeVisible();
-    expect(screen.queryByTestId("usage-dashboard")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTitle("usage.title"));
-    expect(screen.getByTestId("usage-dashboard")).toBeVisible();
-    fireEvent.click(screen.getByTitle("common.settings"));
+    fireEvent.click(
+      within(navigation).getByRole("button", { name: "Settings" }),
+    );
     expect(screen.getByTestId("settings-page")).toBeVisible();
-    expect(
-      screen.getByRole("heading", { level: 1, name: "settings.title" }),
-    ).toBeVisible();
+    expect(selectedPage()).toHaveTextContent("Settings");
+    expect(proxyControl).toBeVisible();
     expect(screen.queryByTestId("usage-dashboard")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "common.back" }));
+    fireEvent.click(
+      within(navigation).getByRole("button", { name: "Overview" }),
+    );
     expect(screen.getByText("GitHub Copilot")).toBeVisible();
-  });
-  it("opens read-only connection previews from the labeled header action", async () => {
-    renderApp();
-    expect(screen.getByRole("button", { name: "Usage" })).toBeVisible();
+    expect(screen.getByTestId("bridge-overview")).toBeVisible();
+    expect(selectedPage()).toHaveTextContent("Overview");
+    expect(proxyControl).toBeVisible();
+    expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "common.settings" }),
-    ).toBeVisible();
-    expect(screen.getByRole("button", { name: "Health check" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+      screen.queryByRole("button", { name: /back/i }),
+    ).not.toBeInTheDocument();
+  });
+  it("opens read-only connection previews through the persistent navigation", async () => {
+    renderApp();
+    const connect = screen.getByRole("button", { name: "Connect" });
+    fireEvent.click(connect);
     expect(await screen.findByText("read-only-suggestions")).toBeVisible();
+    expect(connect).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Overview" })).toBeVisible();
+    expect(screen.getByRole("switch", { name: "Proxy server" })).toBeVisible();
+    expect(screen.queryByTestId("bridge-overview")).not.toBeInTheDocument();
+  });
+  it("retains keyboard navigation without leaving the connection page while editing a file path", () => {
+    renderApp();
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    expect(screen.getByTestId("settings-page")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Settings" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    fireEvent.keyDown(
+      screen.getByRole("textbox", { name: "Codex TOML file" }),
+      {
+        key: "Escape",
+      },
+    );
+    expect(screen.getByText("read-only-suggestions")).toBeVisible();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByTestId("bridge-overview")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Overview" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 });

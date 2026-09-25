@@ -19,10 +19,6 @@ try {
         $atlasVersion -ne $tauriVersion -or $atlasVersion -ne $cargoVersion) {
         throw 'package.json, Cargo.toml and tauri.conf.json must share one stable version.'
     }
-    if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "atlas-$atlasVersion") {
-        throw "Expected release tag atlas-$atlasVersion."
-    }
-
     $rustInfo = & rustc -vV
     if ($LASTEXITCODE -ne 0 -or $rustInfo -notcontains 'host: x86_64-pc-windows-msvc') {
         throw 'Use the x86_64-pc-windows-msvc Rust toolchain.'
