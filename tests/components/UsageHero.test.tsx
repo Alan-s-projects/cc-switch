@@ -41,8 +41,8 @@ beforeEach(() => {
   });
 });
 
-describe("Usage token summary", () => {
-  it("labels the total only Tokens Processed without client branding", () => {
+describe("Usage summary", () => {
+  it("shows a compact unified summary with every metric and no client branding", () => {
     render(
       <UsageHero
         range={{ preset: "today" }}
@@ -52,13 +52,15 @@ describe("Usage token summary", () => {
     );
 
     expect(
-      screen.getByRole("heading", { name: "Tokens Processed" }),
+      screen.getByRole("heading", { name: "Usage summary" }),
     ).toBeVisible();
     expect(screen.queryByText("Codex")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("img", { name: "Codex" }),
     ).not.toBeInTheDocument();
     expect(screen.getByTitle((1050).toLocaleString())).toBeVisible();
+    expect(screen.getByText("Tokens Processed")).toBeVisible();
+    expect(screen.getByText("Requests")).toBeVisible();
     expect(screen.getByText("$1")).toBeVisible();
     expect(screen.getByText("80.0%")).toBeVisible();
     expect(screen.getByText("Success Rate")).toBeVisible();
@@ -68,39 +70,40 @@ describe("Usage token summary", () => {
     expect(screen.queryByText("Creation")).not.toBeInTheDocument();
     expect(screen.getByText("Hit")).toBeVisible();
     expect(screen.getByText("800")).toBeVisible();
-    const tokens = screen.getByRole("region", { name: "Tokens Processed" });
-    const requests = screen.getByRole("region", { name: "Requests" });
-    const cost = screen.getByRole("region", { name: "Total Cost" });
-    expect(tokens.parentElement).toBe(cost.parentElement);
-    expect(requests.parentElement).toBe(tokens.parentElement);
-    expect(cost.parentElement).toHaveClass("grid-cols-1");
+    const summary = screen.getByRole("region", { name: "Usage summary" });
+    expect(screen.getAllByRole("region")).toHaveLength(1);
     expect(
-      cost.compareDocumentPosition(tokens) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      tokens.compareDocumentPosition(requests) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(tokens.firstElementChild).toHaveClass(
-      "sm:grid-cols-[minmax(190px,0.8fr)_minmax(0,2fr)]",
-    );
-    expect(tokens.querySelector("dl")).toHaveClass(
+      within(summary)
+        .getAllByRole("term")
+        .map((term) => term.textContent),
+    ).toEqual([
+      "Total Cost",
+      "Tokens Processed",
+      "Requests",
+      "Fresh Input",
+      "Output",
+      "Hit",
+      "Cache Hit Rate",
+      "Average Latency",
+      "Success Rate",
+    ]);
+    const tokenDetails = within(summary).getByRole("group", {
+      name: "Token details",
+    });
+    const requestDetails = within(summary).getByRole("group", {
+      name: "Request details",
+    });
+    expect(tokenDetails.querySelector("dl")).toHaveClass(
       "grid-cols-2",
-      "sm:grid-cols-4",
+      "md:grid-cols-4",
     );
-    expect(requests.querySelector("dl")).toHaveClass("grid-cols-2");
-    expect(
-      within(tokens)
-        .getAllByRole("term")
-        .map((term) => term.textContent),
-    ).toEqual(["Fresh Input", "Output", "Hit", "Cache Hit Rate"]);
-    expect(
-      within(requests)
-        .getAllByRole("term")
-        .map((term) => term.textContent),
-    ).toEqual(["Average Latency", "Success Rate"]);
-    expect(within(tokens).getByText("80.0%")).toHaveClass("text-emerald-700");
-    expect(within(requests).getByText("91.7%")).toHaveClass("text-emerald-700");
+    expect(requestDetails.querySelector("dl")).toHaveClass("grid-cols-2");
+    expect(within(tokenDetails).getByText("80.0%")).toHaveClass(
+      "text-emerald-700",
+    );
+    expect(within(requestDetails).getByText("91.7%")).toHaveClass(
+      "text-emerald-700",
+    );
     expect(summaryMock).toHaveBeenLastCalledWith(
       { preset: "today" },
       { appType: "codex", providerName: undefined, model: "gpt-6-astra" },
@@ -108,13 +111,16 @@ describe("Usage token summary", () => {
     );
   });
 
-  it("retains the loading state until the summary is available", () => {
+  it("keeps a compact loading state until the summary is available", () => {
     summaryMock.mockReturnValue({ isLoading: true, data: undefined });
     render(<UsageHero range={{ preset: "today" }} refreshIntervalMs={5000} />);
 
     expect(
-      screen.queryByRole("heading", { name: "Tokens Processed" }),
+      screen.queryByRole("heading", { name: "Usage summary" }),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading usage" })).toHaveClass(
+      "min-h-24",
+    );
     expect(summaryMock).toHaveBeenLastCalledWith(
       { preset: "today" },
       { appType: "codex", providerName: undefined, model: undefined },
@@ -146,18 +152,15 @@ describe("Usage token summary", () => {
     const summary = { totalRequests: 0, totalCost: raw };
     summaryMock.mockReturnValue({ isLoading: false, data: summary });
     render(<UsageHero range={{ preset: "today" }} refreshIntervalMs={0} />);
-    expect(
-      within(screen.getByRole("region", { name: "Total Cost" })).getByText(
-        display,
-      ),
-    ).toBeVisible();
+    const usageSummary = screen.getByRole("region", { name: "Usage summary" });
+    const displayedCost = within(usageSummary).getAllByRole("definition")[0];
+    expect(displayedCost).toHaveTextContent(display);
+    expect(displayedCost).toBeVisible();
     expect(summary.totalCost).toBe(raw);
-    const costCard = screen.getByRole("region", { name: "Total Cost" });
-    expect(within(costCard).queryByText("USD")).not.toBeInTheDocument();
-    expect(costCard.firstElementChild).toHaveClass("p-4");
-    expect(within(costCard).getByText(display)).toHaveClass(
-      "text-2xl",
-      "leading-8",
+    expect(within(usageSummary).queryByText("USD")).not.toBeInTheDocument();
+    expect(usageSummary.firstElementChild).toHaveClass("p-0");
+    expect(usageSummary.querySelector("dl")).toHaveClass(
+      "grid-cols-[minmax(0,0.9fr)_minmax(0,1.2fr)_minmax(0,0.9fr)]",
     );
   });
 });
