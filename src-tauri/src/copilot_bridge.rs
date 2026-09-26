@@ -264,11 +264,8 @@ pub struct SetupRecommendations {
 pub struct SetupContextPreset {
     pub model: Option<String>,
     pub current_context_window: Option<String>,
-    pub current_auto_compact_token_limit: Option<String>,
     pub context_window: u64,
-    pub auto_compact_token_limit: u64,
     pub copilot_context_window: u64,
-    pub copilot_auto_compact_token_limit: u64,
     pub copilot_model_limit: Option<u64>,
 }
 
@@ -348,20 +345,13 @@ fn setup_context_preset(
                 .min()
         });
     let context_window = 1_000_000;
-    let auto_compact_token_limit = 900_000;
     let copilot_context_window =
         copilot_model_limit.map_or(context_window, |limit| context_window.min(limit));
     SetupContextPreset {
         model,
         current_context_window: setup_setting_value(current, "model_context_window"),
-        current_auto_compact_token_limit: setup_setting_value(
-            current,
-            "model_auto_compact_token_limit",
-        ),
         context_window,
-        auto_compact_token_limit,
         copilot_context_window,
-        copilot_auto_compact_token_limit: copilot_context_window * 9 / 10,
         copilot_model_limit,
     }
 }
@@ -671,28 +661,15 @@ fn setup_suggestion(
         }
     }
     if let Some(recommendations) = recommendations {
-        for (doc, context_window, compact_limit) in [
-            (
-                &mut copilot,
-                context_preset.copilot_context_window,
-                context_preset.copilot_auto_compact_token_limit,
-            ),
-            (
-                &mut openai,
-                context_preset.context_window,
-                context_preset.auto_compact_token_limit,
-            ),
+        for (doc, context_window) in [
+            (&mut copilot, context_preset.copilot_context_window),
+            (&mut openai, context_preset.context_window),
         ] {
             if recommendations.context_1m {
                 set_connection_value(
                     doc.as_table_mut(),
                     "model_context_window",
                     toml_edit::value(context_window as i64),
-                );
-                set_connection_value(
-                    doc.as_table_mut(),
-                    "model_auto_compact_token_limit",
-                    toml_edit::value(compact_limit as i64),
                 );
             }
             for (enabled, key, default) in [
@@ -955,7 +932,7 @@ mod tests {
 model_provider = "bridge"
 model = "gpt-6-astra"
 model_context_window = 1048576
-model_auto_compact_token_limit = 900000
+model_auto_compact_token_limit = 234_567 # Keep my compaction threshold
 model_reasoning_effort = "high"
 approval_policy = "never"
 sandbox_mode = "workspace-write"
@@ -988,10 +965,7 @@ model_reasoning_effort = "medium"
             ),
             (
                 json!({"context1m": true}),
-                &[
-                    ("model_context_window", Some("1000000")),
-                    ("model_auto_compact_token_limit", Some("900000")),
-                ],
+                &[("model_context_window", Some("1000000"))],
             ),
             (
                 json!({"approvalPolicy": true}),
@@ -1009,7 +983,6 @@ model_reasoning_effort = "medium"
                 json!({"context1m": true, "approvalPolicy": true, "sandboxMode": true, "reasoning": true}),
                 &[
                     ("model_context_window", Some("1000000")),
-                    ("model_auto_compact_token_limit", Some("900000")),
                     ("approval_policy", Some("\"on-request\"")),
                     ("sandbox_mode", Some("\"read-only\"")),
                     ("model_reasoning_effort", None),
@@ -1121,7 +1094,7 @@ model_reasoning_effort = "medium"
     }
 
     #[test]
-    fn context_preset_adds_both_values_and_respects_the_selected_copilot_model_limit() {
+    fn context_preset_only_sets_window_and_respects_the_selected_copilot_model_limit() {
         use serde_json::json;
 
         let directory = tempfile::tempdir().unwrap();
@@ -1138,11 +1111,11 @@ model_reasoning_effort = "medium"
             context_1m: true,
             ..Default::default()
         };
-        for (model, limit, window, compact) in [
-            ("gpt-6-astra", Some(1_050_000), 1_000_000, 900_000),
-            ("GPT-6-LUNA", Some(872_000), 872_000, 784_800),
-            ("unknown-model", None, 1_000_000, 900_000),
-            ("invalid-limit", None, 1_000_000, 900_000),
+        for (model, limit, window) in [
+            ("gpt-6-astra", Some(1_050_000), 1_000_000),
+            ("GPT-6-LUNA", Some(872_000), 872_000),
+            ("unknown-model", None, 1_000_000),
+            ("invalid-limit", None, 1_000_000),
         ] {
             let text = format!("model = '{model}'\n");
             std::fs::write(&path, &text).unwrap();
@@ -1156,34 +1129,16 @@ model_reasoning_effort = "medium"
             .unwrap();
             assert_eq!(preview.context_preset.copilot_model_limit, limit);
             assert!(preview.context_preset.current_context_window.is_none());
-            assert!(preview
-                .context_preset
-                .current_auto_compact_token_limit
-                .is_none());
-            for (config, lines, expected_window, expected_compact) in [
-                (
-                    &preview.copilot_config,
-                    &preview.copilot_lines,
-                    window,
-                    compact,
-                ),
-                (
-                    &preview.openai_config,
-                    &preview.openai_lines,
-                    1_000_000,
-                    900_000,
-                ),
+            for (config, lines, expected_window) in [
+                (&preview.copilot_config, &preview.copilot_lines, window),
+                (&preview.openai_config, &preview.openai_lines, 1_000_000),
             ] {
                 let proposed = config.parse::<toml_edit::DocumentMut>().unwrap();
                 assert_eq!(
                     proposed["model_context_window"].as_integer(),
                     Some(expected_window)
                 );
-                assert_eq!(
-                    proposed["model_auto_compact_token_limit"].as_integer(),
-                    Some(expected_compact)
-                );
-                assert!(expected_compact < expected_window);
+                assert!(proposed.get("model_auto_compact_token_limit").is_none());
                 assert_diff_snapshots(lines, &text, config);
             }
             assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
@@ -1206,10 +1161,7 @@ model_reasoning_effort = "medium"
             .parse::<toml_edit::DocumentMut>()
             .unwrap();
         assert_eq!(proposed["model_context_window"].as_integer(), Some(872_000));
-        assert_eq!(
-            proposed["model_auto_compact_token_limit"].as_integer(),
-            Some(784_800)
-        );
+        assert!(proposed.get("model_auto_compact_token_limit").is_none());
         assert_eq!(
             proposed["profiles"].to_string(),
             profiled.parse::<toml_edit::DocumentMut>().unwrap()["profiles"].to_string()
