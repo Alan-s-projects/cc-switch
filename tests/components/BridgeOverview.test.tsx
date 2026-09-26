@@ -150,6 +150,15 @@ describe("read-only bridge overview", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps four decimal places for Overview cost estimates", async () => {
+    mocks.summary.mockResolvedValue({
+      ...snapshot.summary,
+      totalCost: "552.5819",
+    });
+    renderOverview();
+    expect(await screen.findByText("$552.5819")).toBeVisible();
+  });
+
   it("shows at most five requests even when an older cached response has more", async () => {
     mocks.logs.mockResolvedValue({
       data: Array.from({ length: 8 }, (_, index) => ({

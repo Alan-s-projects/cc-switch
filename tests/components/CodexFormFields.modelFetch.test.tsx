@@ -121,6 +121,8 @@ describe("Copilot model catalog import", () => {
         expect.objectContaining({
           model: "gpt-new",
           inputModalities: ["text", "image"],
+          reasoningLevels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          defaultReasoningLevel: undefined,
         }),
       ]),
     );
@@ -237,11 +239,24 @@ describe("Copilot model catalog import", () => {
     );
   });
 
-  it("requires Copilot sign-in before fetching models", () => {
+  it("explains the empty catalog when signed out and requires sign-in to fetch", () => {
     render(<Harness {...props({ isCopilotAuthenticated: false })} />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /GitHub Copilot is signed out/,
+    );
     fireEvent.click(fetchButton());
     expect(toast.error).toHaveBeenCalled();
     expect(copilotGetModelsForAccount).not.toHaveBeenCalled();
+  });
+
+  it("explains how to load models for a signed-in account with an empty catalog", () => {
+    render(<Harness {...props()} />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /No models are in this catalog yet/,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /available to your GitHub Copilot account/,
+    );
   });
 
   it("uses the default Copilot account when no account is pinned", async () => {

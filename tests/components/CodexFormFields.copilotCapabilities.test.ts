@@ -116,6 +116,19 @@ describe("Codex Copilot capabilities", () => {
     },
   );
 
+  it("defaults a new model without advertised reasoning efforts to all standard levels and Auto", () => {
+    const refreshed = mergeCopilotModelCapabilities(model(["/responses"]));
+    expect(refreshed.reasoningLevels).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(refreshed.defaultReasoningLevel).toBeUndefined();
+  });
+
   it("keeps an automatic default when the saved levels differ from Copilot", () => {
     const refreshed = mergeCopilotModelCapabilities(
       { ...model(["/responses"]), reasoning_efforts: ["low", "medium"] },

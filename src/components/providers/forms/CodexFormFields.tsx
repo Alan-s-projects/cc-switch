@@ -76,6 +76,15 @@ export function resolveCopilotCatalogContextWindow(
   return reported && reported > 0 ? Math.min(configured, reported) : current;
 }
 
+const DEFAULT_NEW_MODEL_REASONING_LEVELS = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+
 export function mergeCopilotModelCapabilities(
   model: CopilotModel,
   existing?: CodexCatalogModel,
@@ -100,9 +109,13 @@ export function mergeCopilotModelCapabilities(
           : ["text"],
     // Reasoning levels are editable preferences. Live data seeds an unset
     // list, but must not replace a saved choice or its default.
-    reasoningLevels: existing?.reasoningLevels?.length
-      ? existing.reasoningLevels
-      : model.reasoning_efforts,
+    reasoningLevels: existing
+      ? existing.reasoningLevels?.length
+        ? existing.reasoningLevels
+        : model.reasoning_efforts
+      : model.reasoning_efforts?.length
+        ? model.reasoning_efforts
+        : [...DEFAULT_NEW_MODEL_REASONING_LEVELS],
     defaultReasoningLevel: existing?.defaultReasoningLevel,
   };
 }
@@ -285,6 +298,7 @@ export function CodexFormFields({
   catalogModels,
   onCatalogModelsChange,
 }: CodexFormFieldsProps) {
+  const { t } = useTranslation();
   const [fetching, setFetching] = useState(false);
   const fetchSequence = useRef(0);
   useEffect(() => {
@@ -407,14 +421,22 @@ export function CodexFormFields({
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          Copilot supplies image and parallel-tool capabilities and initial
-          reasoning levels. Saved reasoning choices survive refresh. Input
-          limits cap the catalog context window. Save changes, then reload Codex
-          to use the updated catalog.
+          Refresh updates image and parallel-tool capabilities. New models
+          default to Copilot-reported reasoning levels, or the standard set if
+          none are reported. Saved choices survive refresh. Input limits cap the
+          catalog context window.
         </p>
         {catalogModels.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            Sign in and refresh models to finish setup.
+          <p role="status" className="text-sm text-muted-foreground">
+            {isCopilotAuthenticated
+              ? t("codexConfig.catalogEmptySignedIn", {
+                  defaultValue:
+                    "No models are in this catalog yet. Refresh models to load those available to your GitHub Copilot account.",
+                })
+              : t("codexConfig.catalogEmptySignedOut", {
+                  defaultValue:
+                    "No models are available while GitHub Copilot is signed out. Sign in to GitHub Copilot, then refresh models to load the models your account can use.",
+                })}
           </p>
         )}
         {catalogModels.map((model, index) => (

@@ -73,14 +73,13 @@ export function UsageHero({
           aria-label={t("usage.totalCost", "Total Cost")}
           className="min-w-0"
         >
-          <CardContent className="p-5">
-            <h2 className="mb-3 text-sm font-medium">
+          <CardContent className="p-4">
+            <h2 className="mb-1 text-sm font-medium">
               {t("usage.totalCost", "Total Cost")}
             </h2>
-            <p className="text-[28px] font-medium leading-9 tabular-nums">
+            <p className="text-2xl font-medium leading-8 tabular-nums">
               {fmtUsd(totalCost, 0)}
             </p>
-            <p className="mt-1.5 text-xs text-muted-foreground">USD</p>
           </CardContent>
         </Card>
         <Card
