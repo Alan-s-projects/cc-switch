@@ -3,7 +3,7 @@ import {
   Settings,
   LayoutDashboard,
   BarChart2,
-  FileText,
+  Plug,
   Loader2,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -15,6 +15,7 @@ import { CopilotCard } from "@/components/providers/CopilotCard";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { UsagePage } from "@/components/usage/UsagePage";
 import { BridgeOverview } from "@/components/overview/BridgeOverview";
+import { OverviewRefreshButton } from "@/components/overview/OverviewRefreshButton";
 import { CodexSetupSuggestion } from "@/components/providers/CodexSetupSuggestion";
 import { ProxyToggle } from "@/components/proxy/ProxyToggle";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ type View = "provider" | "settings" | "setup" | "usage";
 const navigation = [
   { view: "provider", label: "Overview", icon: LayoutDashboard },
   { view: "usage", label: "Usage", icon: BarChart2 },
-  { view: "setup", label: "Connect", icon: FileText },
+  { view: "setup", label: "Connect", icon: Plug },
   { view: "settings", label: "Settings", icon: Settings },
 ] as const;
 
@@ -115,6 +116,15 @@ export default function App() {
           <UsagePage />
         ) : (
           <div className="space-y-5 px-6 pb-6 pt-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex min-w-0 flex-col gap-1">
+                <h1 className="text-2xl font-bold tracking-tight">Overview</h1>
+                <p className="text-sm text-muted-foreground">
+                  Monitor your Copilot connection, proxy activity, and usage
+                </p>
+              </div>
+              <OverviewRefreshButton />
+            </div>
             {isLoading ? (
               <Loader2 className="h-6 w-6 animate-spin" />
             ) : provider ? (

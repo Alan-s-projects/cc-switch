@@ -14,7 +14,7 @@ export function UsagePage() {
   }
 
   return (
-    <div className="px-6 pb-6">
+    <div className="px-6 pb-6 pt-4">
       <UsageDashboard
         refreshIntervalMs={settings.usageDashboardRefreshIntervalMs}
         onRefreshIntervalChange={async (usageDashboardRefreshIntervalMs) =>

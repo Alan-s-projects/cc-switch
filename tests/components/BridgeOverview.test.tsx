@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BridgeOverview } from "@/components/overview/BridgeOverview";
+import { OverviewRefreshButton } from "@/components/overview/OverviewRefreshButton";
 import type { ProxyStatus } from "@/types/proxy";
 import { createTestQueryClient } from "../utils/testQueryClient";
 
@@ -88,6 +89,7 @@ function renderOverview(proxyStatus = status) {
   const client = createTestQueryClient();
   const rendered = render(
     <QueryClientProvider client={client}>
+      <OverviewRefreshButton />
       <BridgeOverview status={proxyStatus} />
     </QueryClientProvider>,
   );
@@ -127,8 +129,8 @@ describe("read-only bridge overview", () => {
     expect(within(table).getByText("2.50 s")).toBeVisible();
     expect(screen.getAllByRole("button")).toHaveLength(1);
     expect(
-      proxy.getByRole("button", { name: "Refresh overview" }),
-    ).toBeVisible();
+      proxy.queryByRole("button", { name: "Refresh overview" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("get_codex_setup_suggestion", {

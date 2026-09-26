@@ -1,13 +1,8 @@
-import { memo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { memo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  bridgeOverviewKey,
-  useBridgeOverview,
-} from "@/hooks/useBridgeOverview";
-import { proxyKeys, useGlobalProxyConfig } from "@/lib/query/proxy";
-import { RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useBridgeOverview } from "@/hooks/useBridgeOverview";
+import { useGlobalProxyConfig } from "@/lib/query/proxy";
 import type { ProxyStatus } from "@/types/proxy";
 import type { RequestLog } from "@/types/usage";
 import { fmtInt, fmtUsd, formatTokensShort } from "@/components/usage/format";
@@ -89,8 +84,6 @@ const RecentRequests = memo(function RecentRequests({
 });
 
 export function BridgeOverview({ status }: { status?: ProxyStatus }) {
-  const queryClient = useQueryClient();
-  const [refreshing, setRefreshing] = useState(false);
   const active = useWindowActive();
   const { data: config } = useGlobalProxyConfig();
   const connection = useQuery({
@@ -132,45 +125,15 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
         : "—",
     ],
   ];
-  const refresh = async () => {
-    setRefreshing(true);
-    try {
-      await Promise.all(
-        [
-          bridgeOverviewKey,
-          proxyKeys.status,
-          proxyKeys.globalConfig,
-          ["codex-setup-suggestion", "connection-check"],
-          ["copilot", "quota"],
-          ["managed-auth-status", "github_copilot"],
-          ["providers", "codex"],
-        ].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
-      );
-    } finally {
-      setRefreshing(false);
-    }
-  };
-  const pending = refreshing || overview.isFetching || connection.isFetching;
   return (
     <section className="space-y-5" aria-label="Bridge overview">
       <section
         className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
         aria-labelledby="bridge-proxy-title"
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 id="bridge-proxy-title" className="text-base font-semibold">
-            Proxy
-          </h2>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={pending}
-            onClick={() => void refresh()}
-          >
-            <RefreshCw aria-hidden className="mr-2 h-4 w-4" />
-            Refresh overview
-          </Button>
-        </div>
+        <h2 id="bridge-proxy-title" className="text-base font-semibold">
+          Proxy
+        </h2>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm font-medium">

@@ -15,6 +15,11 @@ import {
   ScrollText,
   HardDriveDownload,
   FlaskConical,
+  Settings2,
+  Network,
+  KeyRound,
+  Github,
+  SlidersHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -189,7 +194,13 @@ export function SettingsPage({
   const isBusy = useMemo(() => isLoading && !settings, [isLoading, settings]);
 
   return (
-    <div className="flex flex-col h-full overflow-hidden px-6">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pt-4">
+      <div className="mb-6 flex shrink-0 flex-col gap-1">
+        <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+        <p className="text-sm text-muted-foreground">
+          Manage appearance, GitHub Copilot, and proxy settings
+        </p>
+      </div>
       {isBusy ? (
         <div className="flex flex-1 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -198,26 +209,51 @@ export function SettingsPage({
         <Tabs
           value={activeTab}
           onValueChange={setActiveTab}
-          className="flex flex-col h-full"
+          orientation="vertical"
+          className="flex min-h-0 flex-1 gap-5 overflow-hidden pb-4"
         >
-          <TabsList className="grid w-full grid-cols-5 mb-6 glass rounded-lg">
-            <TabsTrigger value="general">
-              {t("settings.tabGeneral")}
-            </TabsTrigger>
-            <TabsTrigger value="proxy">{t("settings.tabProxy")}</TabsTrigger>
-            <TabsTrigger value="auth">
-              {t("settings.tabAuth", { defaultValue: "Auth" })}
-            </TabsTrigger>
-            <TabsTrigger value="copilot">Copilot</TabsTrigger>
-            <TabsTrigger value="advanced">
-              {t("settings.tabAdvanced")}
-            </TabsTrigger>
+          <TabsList
+            aria-label="Settings sections"
+            className="flex w-44 shrink-0 flex-col items-stretch justify-start gap-1 self-start rounded-xl border border-border/60 bg-muted/30 p-2"
+          >
+            {[
+              {
+                value: "general",
+                label: t("settings.tabGeneral"),
+                icon: Settings2,
+              },
+              {
+                value: "proxy",
+                label: t("settings.tabProxy"),
+                icon: Network,
+              },
+              {
+                value: "auth",
+                label: t("settings.tabAuth", { defaultValue: "Auth" }),
+                icon: KeyRound,
+              },
+              { value: "copilot", label: "Copilot", icon: Github },
+              {
+                value: "advanced",
+                label: t("settings.tabAdvanced"),
+                icon: SlidersHorizontal,
+              },
+            ].map(({ value, label, icon: Icon }) => (
+              <TabsTrigger
+                key={value}
+                value={value}
+                className="min-w-0 justify-start gap-2.5 px-3 py-2.5 text-left data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=inactive]:opacity-100 dark:data-[state=active]:bg-background"
+              >
+                <Icon aria-hidden className="h-4 w-4 shrink-0" />
+                {label}
+              </TabsTrigger>
+            ))}
           </TabsList>
 
-          <div className="flex-1 min-h-0 flex flex-col">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div
               ref={tabScrollContainerRef}
-              className="flex-1 overflow-y-auto overflow-x-hidden pr-2"
+              className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-2"
             >
               <TabsContent value="general" className="space-y-6 mt-0">
                 {settings ? (
