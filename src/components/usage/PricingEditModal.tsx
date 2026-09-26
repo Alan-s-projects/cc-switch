@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useUpdateModelPricing } from "@/lib/query/usage";
 import { isNonNegativeDecimalString, type ModelPricing } from "@/types/usage";
-import { isGptModel } from "@/utils/codexModelCatalog";
+import { isValidModelId } from "@/utils/codexModelCatalog";
 
 interface PricingEditModalProps {
   open: boolean;
@@ -45,8 +45,8 @@ export function PricingEditModal({
       toast.error(t("usage.modelIdRequired", "Model ID is required"));
       return;
     }
-    if (!isGptModel(formData.modelId)) {
-      toast.error("Only GPT model IDs (gpt-...) are supported.");
+    if (!isValidModelId(formData.modelId)) {
+      toast.error("Model IDs must not contain whitespace.");
       return;
     }
 

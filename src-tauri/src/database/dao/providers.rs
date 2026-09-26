@@ -82,12 +82,7 @@ impl Database {
             .and_then(|text| serde_json::from_str::<Value>(text).ok())
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
-        for key in [
-            "providerType",
-            "codexCopilotApiFormat",
-            "authBinding",
-            "githubAccountId",
-        ] {
+        for key in ["providerType", "authBinding", "githubAccountId"] {
             stored_meta.remove(key);
         }
         if let Some(meta) = &provider.meta {

@@ -1,7 +1,7 @@
 import type { CodexCatalogModel } from "@/types";
 
-export const isGptModel = (model: string): boolean =>
-  /^gpt-.+/i.test(model.trim());
+export const isValidModelId = (model: string): boolean =>
+  model.trim().length > 0 && !/[\s\u0000-\u001f\u007f]/u.test(model.trim());
 
 export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
   // Preserve saved capabilities and reasoning preferences through load/save.
@@ -37,6 +37,19 @@ export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
   return {
     model: typeof item?.model === "string" ? item.model : "",
     ...(typeof item?.enabled === "boolean" ? { enabled: item.enabled } : {}),
+    ...(typeof item?.available === "boolean"
+      ? { available: item.available }
+      : {}),
+    ...(typeof item?.vendor === "string" ? { vendor: item.vendor } : {}),
+    ...(typeof item?.maxOutputTokens === "number"
+      ? { maxOutputTokens: item.maxOutputTokens }
+      : {}),
+    ...(typeof item?.supportsToolCalls === "boolean"
+      ? { supportsToolCalls: item.supportsToolCalls }
+      : {}),
+    ...(Array.isArray(item?.supportedReasoningLevels)
+      ? { supportedReasoningLevels: item.supportedReasoningLevels }
+      : {}),
     displayName:
       typeof item?.displayName === "string"
         ? item.displayName
@@ -56,9 +69,7 @@ export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
       : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(baseInstructions ? { baseInstructions } : {}),
-    ...(reasoningLevels && reasoningLevels.length > 0
-      ? { reasoningLevels }
-      : {}),
+    ...(reasoningLevels ? { reasoningLevels } : {}),
     ...(defaultReasoningLevel ? { defaultReasoningLevel } : {}),
   };
 };

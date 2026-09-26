@@ -112,40 +112,83 @@ describe("Manual pricing configuration", () => {
     const source = screen.getByRole("link", { name: "View built-in prices" });
     expect(source).toHaveAttribute(
       "href",
-      "https://github.com/Alan-s-projects/copilot-bridge-atlas/blob/atlas/src-tauri/src/database/schema.rs",
+      "https://github.com/Alan-s-projects/copilot-bridge-atlas/blob/atlas/src-tauri/src/resources/model-pricing.json",
     );
     fireEvent.click(source);
     expect(mocks.openSource).toHaveBeenCalledWith(
-      "https://github.com/Alan-s-projects/copilot-bridge-atlas/blob/atlas/src-tauri/src/database/schema.rs",
+      "https://github.com/Alan-s-projects/copilot-bridge-atlas/blob/atlas/src-tauri/src/resources/model-pricing.json",
     );
 
     fireEvent.click(
       screen.getByRole("button", { name: "Reset to code defaults" }),
     );
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent("GPT deletion tombstones");
+    expect(dialog).toHaveTextContent("deletion tombstones");
     expect(dialog).toHaveTextContent(
-      "Custom GPT models without a bundled default will become unpriced.",
+      "Custom models without a bundled default will become unpriced.",
     );
     expect(dialog).toHaveTextContent(
-      "Non-GPT pricing and retired metadata are preserved.",
-    );
-    expect(dialog).toHaveTextContent(
-      "Previously recorded request costs are unchanged.",
+      "Retired metadata and previously recorded request costs are unchanged.",
     );
     expect(
       within(dialog).getByRole("link", {
-        name: "View bundled defaults in schema.rs",
+        name: "View bundled defaults in model-pricing.json",
       }),
     ).toBeVisible();
     expect(mocks.reset).not.toHaveBeenCalled();
 
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "Reset GPT prices" }),
+      within(dialog).getByRole("button", { name: "Reset prices" }),
     );
     expect(mocks.reset).toHaveBeenCalledWith(undefined, expect.anything());
     expect(
-      screen.queryByRole("dialog", { name: /Reset GPT prices/ }),
+      screen.queryByRole("dialog", { name: /Reset prices/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("filters model IDs and display names immediately without changing prices", () => {
+    mocks.pricing.mockReturnValue({
+      isLoading: false,
+      data: [
+        model,
+        {
+          ...model,
+          modelId: "gemini-future",
+          displayName: "Gemini Future Flash",
+        },
+        { ...model, modelId: "custom/next", displayName: "New Vendor Agent" },
+      ],
+    });
+    render(<PricingConfigPanel />);
+    const search = screen.getByRole("textbox", { name: "Search model prices" });
+    fireEvent.change(search, { target: { value: "  GEMINI   flash  " } });
+    expect(screen.getByText("gemini-future")).toBeVisible();
+    expect(screen.queryByText(model.modelId)).not.toBeInTheDocument();
+    expect(screen.queryByText("custom/next")).not.toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "custom/next" } });
+    expect(screen.getByText("New Vendor Agent")).toBeVisible();
+    expect(screen.queryByText("gemini-future")).not.toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "new vendor" } });
+    expect(screen.getByText("custom/next")).toBeVisible();
+    expect(mocks.remove).not.toHaveBeenCalled();
+    expect(mocks.reset).not.toHaveBeenCalled();
+  });
+
+  it("shows an empty state and clears the filter with the clear button or Escape", () => {
+    render(<PricingConfigPanel />);
+    const search = screen.getByRole("textbox", { name: "Search model prices" });
+    fireEvent.change(search, { target: { value: "unmatched-model" } });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "No matching model prices.",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear pricing search" }),
+    );
+    expect(search).toHaveValue("");
+    expect(screen.getByText(model.modelId)).toBeVisible();
+    fireEvent.change(search, { target: { value: "another-miss" } });
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(search).toHaveValue("");
+    expect(screen.getByText(model.modelId)).toBeVisible();
   });
 });

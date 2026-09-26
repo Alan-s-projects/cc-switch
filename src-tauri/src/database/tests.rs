@@ -119,18 +119,18 @@ fn unsupported_schema_does_not_modify_tables_or_version() {
 }
 
 #[test]
-fn pricing_seeds_only_gpt_models_and_preserves_custom_prices() {
+fn pricing_seeds_all_bundled_models_and_preserves_custom_prices() {
     let db = Database::memory().unwrap();
     {
         let conn = db.conn.lock().unwrap();
-        assert_eq!(
+        assert!(
             conn.query_row(
                 "SELECT COUNT(*) FROM model_pricing WHERE model_id NOT LIKE 'gpt-%'",
                 [],
                 |row| row.get::<_, i64>(0)
             )
-            .unwrap(),
-            0
+            .unwrap()
+                > 0
         );
         conn.execute("UPDATE model_pricing SET input_cost_per_million = '123.456' WHERE model_id = 'gpt-6-astra'", []).unwrap();
     }
@@ -147,6 +147,34 @@ fn pricing_seeds_only_gpt_models_and_preserves_custom_prices() {
             .unwrap(),
         "123.456"
     );
+}
+
+#[test]
+fn bundled_prices_are_unique_valid_cc_switch_estimates_for_multiple_vendors() {
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+    let prices = Database::bundled_model_prices().unwrap();
+    assert_eq!(prices.len(), 219);
+    let mut ids = std::collections::HashSet::new();
+    for [id, name, input, output, cache_read, cache_creation] in &prices {
+        assert!(ids.insert(id));
+        assert!(crate::proxy::providers::copilot_model_map::is_valid_model_id(id));
+        assert!(!name.trim().is_empty());
+        for value in [input, output, cache_read, cache_creation] {
+            assert!(Decimal::from_str(value).unwrap() >= Decimal::ZERO);
+        }
+    }
+    for (id, input, output, cache) in [
+        ("gemini-3.8-flash", "0.75", "3.75", "0.075"),
+        ("gemini-3.5-flash", "1.50", "9.00", "0.15"),
+        ("grok-4.7", "2", "6", "0.50"),
+        ("grok-4.5", "2", "6", "0.30"),
+    ] {
+        let row = prices.iter().find(|row| row[0] == id).unwrap();
+        assert_eq!((&*row[2], &*row[3], &*row[4]), (input, output, cache));
+    }
+    assert!(!ids.contains(&"mai-code-1.1-flash".to_string()));
+    assert!(!ids.contains(&"gpt-5.6-sol-fast".to_string()));
 }
 
 #[test]

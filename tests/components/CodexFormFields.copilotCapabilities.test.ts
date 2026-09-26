@@ -5,7 +5,6 @@ import {
   mergeCopilotModelCapabilities,
 } from "@/components/providers/forms/CodexFormFields";
 import type { CopilotModel } from "@/lib/api/copilot";
-import type { CodexCopilotApiFormat } from "@/types";
 import endpointCases from "../fixtures/copilot-endpoint-cases.json";
 
 function model(supportedEndpoints?: string[]): CopilotModel {
@@ -22,16 +21,9 @@ describe("Codex Copilot capabilities", () => {
   it.each(endpointCases)(
     "matches the backend endpoint contract: $name",
     ({ endpoints, formats }) => {
-      const selections: CodexCopilotApiFormat[] = [
-        "auto",
-        "openai_responses",
-        "openai_chat",
-      ];
-      for (const format of selections) {
-        expect(isCopilotModelSupportedByCodex(model(endpoints), format)).toBe(
-          formats.includes(format),
-        );
-      }
+      expect(isCopilotModelSupportedByCodex(model(endpoints))).toBe(
+        formats.includes("auto"),
+      );
     },
   );
 
@@ -116,16 +108,10 @@ describe("Codex Copilot capabilities", () => {
     },
   );
 
-  it("defaults a new model without advertised reasoning efforts to all standard levels and Auto", () => {
+  it("does not invent reasoning efforts for a new model without a declaration", () => {
     const refreshed = mergeCopilotModelCapabilities(model(["/responses"]));
-    expect(refreshed.reasoningLevels).toEqual([
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-      "ultra",
-    ]);
+    expect(refreshed.reasoningLevels).toEqual([]);
+    expect(refreshed.supportedReasoningLevels).toEqual([]);
     expect(refreshed.defaultReasoningLevel).toBeUndefined();
   });
 
@@ -142,16 +128,62 @@ describe("Codex Copilot capabilities", () => {
     expect(isCopilotModelSupportedByCodex(model())).toBe(false);
   });
 
-  it("accepts GPT IDs without case sensitivity and rejects other models", () => {
+  it("accepts current and future model names without a vendor allowlist", () => {
     const compatible = model(["/responses"]);
     expect(
       isCopilotModelSupportedByCodex({ ...compatible, id: " GPT-6-ASTRA " }),
     ).toBe(true);
-    expect(
-      isCopilotModelSupportedByCodex({ ...compatible, id: "other-model" }),
-    ).toBe(false);
-    expect(isCopilotModelSupportedByCodex({ ...compatible, id: "gpt-" })).toBe(
-      false,
+    for (const id of [
+      "grok-4.7",
+      "gemini-3.8-flash",
+      "mai-code-1.1-flash",
+      "future-vendor/model-v2",
+    ]) {
+      expect(isCopilotModelSupportedByCodex({ ...compatible, id })).toBe(true);
+    }
+    for (const id of ["", "   ", "model with spaces"]) {
+      expect(isCopilotModelSupportedByCodex({ ...compatible, id })).toBe(false);
+    }
+  });
+
+  it("respects model type, policy and picker eligibility", () => {
+    const compatible = model(["/responses"]);
+    for (const patch of [
+      { model_type: "embeddings" },
+      { model_type: "completion" },
+      { model_picker_enabled: false },
+      { policy_state: "disabled" },
+    ]) {
+      expect(isCopilotModelSupportedByCodex({ ...compatible, ...patch })).toBe(
+        false,
+      );
+    }
+  });
+
+  it("keeps live limits separate from editable choices for future models", () => {
+    const refreshed = mergeCopilotModelCapabilities(
+      {
+        ...model(["/chat/completions"]),
+        id: "future-vendor/agent",
+        vendor: "New Vendor",
+        max_output_tokens: 16384,
+        supports_tool_calls: false,
+        reasoning_efforts: ["low"],
+      },
+      {
+        model: "future-vendor/agent",
+        enabled: false,
+        reasoningLevels: ["low", "ultra"],
+      },
     );
+    expect(refreshed).toMatchObject({
+      available: true,
+      enabled: false,
+      vendor: "New Vendor",
+      maxOutputTokens: 16384,
+      supportsToolCalls: false,
+      reasoningLevels: ["low", "ultra"],
+      supportedReasoningLevels: ["low"],
+    });
   });
 });

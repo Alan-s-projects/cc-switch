@@ -80,7 +80,7 @@ pub async fn handle_models() -> Result<Json<Value>, ProxyError> {
                         .or_else(|| model.get("id"))
                         .or_else(|| model.get("model"))
                         .and_then(Value::as_str)
-                        .is_some_and(super::providers::copilot_model_map::is_gpt_model)
+                        .is_some_and(super::providers::copilot_model_map::is_valid_model_id)
                 });
             }
             catalog

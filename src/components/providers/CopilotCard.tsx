@@ -21,7 +21,8 @@ export function CopilotCard({ provider }: { provider: Provider }) {
     (model) =>
       !model ||
       typeof model !== "object" ||
-      (model as { enabled?: unknown }).enabled !== false,
+      ((model as { enabled?: unknown }).enabled !== false &&
+        (model as { available?: unknown }).available !== false),
   ).length;
   const needsSetup = !account || enabledModelCount === 0;
   return (

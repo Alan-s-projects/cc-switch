@@ -31,7 +31,11 @@ export interface CopilotModel {
   name: string;
   vendor: string;
   model_picker_enabled: boolean;
+  model_type?: string;
+  policy_state?: string;
   context_window?: number;
+  max_output_tokens?: number;
+  supports_tool_calls?: boolean;
   supported_endpoints?: string[];
   supports_parallel_tool_calls?: boolean;
   supports_vision?: boolean;

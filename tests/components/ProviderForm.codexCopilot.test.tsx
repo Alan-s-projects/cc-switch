@@ -5,7 +5,7 @@ import {
   ProviderForm,
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
-import type { CodexCopilotApiFormat, ProviderMeta } from "@/types";
+import type { ProviderMeta } from "@/types";
 import { createTestQueryClient } from "../utils/testQueryClient";
 
 vi.mock("@/components/providers/forms/CopilotAuthSection", () => ({
@@ -52,20 +52,7 @@ function renderForm(meta?: ProviderMeta, autoSave = false) {
 }
 
 function formatControl() {
-  return screen.getByRole("combobox", { name: "Upstream format" });
-}
-
-const formatLabels = {
-  auto: "Automatic (recommended)",
-  openai_chat: "Chat Completions",
-  openai_responses: "Responses",
-};
-
-async function selectFormat(format: CodexCopilotApiFormat) {
-  fireEvent.keyDown(formatControl(), { key: "ArrowDown" });
-  fireEvent.click(
-    await screen.findByRole("option", { name: formatLabels[format] }),
-  );
+  return screen.queryByRole("combobox", { name: "Upstream format" });
 }
 
 describe("Codex Copilot provider form", () => {
@@ -105,7 +92,7 @@ describe("Codex Copilot provider form", () => {
     for (const label of ["Provider name", "Notes", "Website", "Icon"]) {
       expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
     }
-    expect(formatControl()).toHaveTextContent(formatLabels.auto);
+    expect(formatControl()).not.toBeInTheDocument();
     expect(screen.getByText("Model catalog")).toBeVisible();
     expect(
       screen.queryByText("Advanced request settings"),
@@ -145,7 +132,9 @@ describe("Codex Copilot provider form", () => {
 
   it("auto-saves Copilot edits without showing Save or Cancel buttons", async () => {
     const onSubmit = renderForm(undefined, true);
-    await selectFormat("openai_responses");
+    fireEvent.change(screen.getAllByLabelText("Display name")[0], {
+      target: { value: "Custom model name" },
+    });
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(
@@ -158,27 +147,26 @@ describe("Codex Copilot provider form", () => {
     fireEvent.click(screen.getAllByRole("switch")[1]);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
     const saved = onSubmit.mock.calls[1][0];
-    expect(saved.meta?.codexCopilotApiFormat).toBe("openai_responses");
+    expect(saved.meta?.codexCopilotApiFormat).toBeUndefined();
     expect(
       JSON.parse(saved.settingsConfig).modelCatalog.models[1],
     ).toMatchObject({ model: "gpt-6-luna", enabled: false });
   });
 
-  it.each<CodexCopilotApiFormat>(["auto", "openai_chat", "openai_responses"])(
-    "persists %s without changing the Codex client wire protocol",
+  it.each(["auto", "openai_chat", "openai_responses"])(
+    "accepts legacy %s metadata without exposing a format control or changing client configuration",
     async (format) => {
-      const onSubmit = renderForm();
-      await selectFormat(format);
+      const onSubmit = renderForm({
+        providerType: "github_copilot",
+        codexCopilotApiFormat: format,
+      });
+      expect(formatControl()).not.toBeInTheDocument();
       expect(screen.getByText("Model catalog")).toBeVisible();
       fireEvent.click(screen.getByRole("button", { name: "save" }));
       await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
       const saved = onSubmit.mock.calls[0][0];
-      expect(saved.meta?.codexCopilotApiFormat).toBe(
-        format === "auto" ? undefined : format,
-      );
-      expect(saved.meta?.apiFormat).toBe(
-        format === "auto" ? "openai_chat" : format,
-      );
+      expect(saved.meta?.codexCopilotApiFormat).toBe(format);
+      expect(saved.meta?.apiFormat).toBeUndefined();
       expect(JSON.parse(saved.settingsConfig).config).toContain(
         'wire_api = "responses"',
       );
@@ -198,7 +186,7 @@ describe("Codex Copilot provider form", () => {
 
   it("keeps legacy cards automatic and shows mapping even with an empty catalog", () => {
     renderForm({ providerType: "github_copilot", apiFormat: "openai_chat" });
-    expect(formatControl()).toHaveTextContent(formatLabels.auto);
+    expect(formatControl()).not.toBeInTheDocument();
     expect(screen.getByText("Model catalog")).toBeVisible();
   });
 
@@ -213,36 +201,31 @@ describe("Codex Copilot provider form", () => {
     expect(screen.queryByText("providerPreset.label")).not.toBeInTheDocument();
   });
 
-  it("loads a saved explicit protocol and can return it to automatic", async () => {
+  it("leaves a retired explicit protocol opaque when saving catalog changes", async () => {
     const onSubmit = renderForm({
       providerType: "github_copilot",
       apiFormat: "openai_responses",
       codexCopilotApiFormat: "openai_responses",
     });
-    expect(formatControl()).toHaveTextContent(formatLabels.openai_responses);
-    await selectFormat("auto");
+    expect(formatControl()).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "save" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(
-      onSubmit.mock.calls[0][0].meta?.codexCopilotApiFormat,
-    ).toBeUndefined();
-    expect(onSubmit.mock.calls[0][0].meta?.apiFormat).toBe("openai_chat");
+    expect(onSubmit.mock.calls[0][0].meta?.codexCopilotApiFormat).toBe(
+      "openai_responses",
+    );
+    expect(onSubmit.mock.calls[0][0].meta?.apiFormat).toBe("openai_responses");
   });
 
-  it("offers only Copilot transports and no other provider presets", async () => {
+  it("has one model catalog with neither transport options nor other provider presets", () => {
     renderForm();
-    fireEvent.keyDown(formatControl(), { key: "ArrowDown" });
-    expect(await screen.findAllByRole("option")).toHaveLength(3);
+    expect(formatControl()).not.toBeInTheDocument();
     expect(
       screen.queryByRole("option", { name: /Anthropic Messages/ }),
     ).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("option", { name: formatLabels.openai_chat }),
-    );
     expect(
       screen.queryByRole("button", { name: /DeepSeek/ }),
     ).not.toBeInTheDocument();
-    expect(formatControl()).toHaveTextContent(formatLabels.openai_chat);
+    expect(formatControl()).not.toBeInTheDocument();
     expect(screen.getByText("Model catalog")).toBeVisible();
   });
 });

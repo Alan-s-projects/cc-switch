@@ -86,7 +86,7 @@ pub fn get_model_stats(
     )
 }
 
-/// Get GPT models with token usage but no matching local price.
+/// Get models with token usage but no matching local price.
 #[tauri::command]
 pub fn get_unpriced_model_usage(
     state: State<'_, AppState>,
@@ -131,7 +131,6 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
         "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
                 cache_read_cost_per_million, cache_creation_cost_per_million
          FROM model_pricing
-         WHERE model_id LIKE 'gpt-%'
          ORDER BY display_name",
     )?;
 
@@ -187,7 +186,7 @@ pub fn delete_model_pricing(state: State<'_, AppState>, model_id: String) -> Res
     Ok(())
 }
 
-/// Reset GPT prices to the values bundled with this application.
+/// Reset all model prices to the values bundled with this application.
 #[tauri::command]
 pub fn reset_model_pricing_to_defaults(state: State<'_, AppState>) -> Result<(), AppError> {
     crate::services::model_pricing::reset_model_pricing_to_defaults(&state.db)

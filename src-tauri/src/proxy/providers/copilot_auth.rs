@@ -22,6 +22,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::proxy::error::ProxyError;
@@ -93,6 +94,7 @@ fn copilot_api_base(domain: &str) -> String {
 
 /// Token 刷新提前量（秒）
 const TOKEN_REFRESH_BUFFER_SECONDS: i64 = 60;
+const MODEL_CATALOG_TTL: Duration = Duration::from_secs(300);
 
 /// 判断是否为 GitHub Enterprise Server（非 github.com）
 fn is_ghes(domain: &str) -> bool {
@@ -263,9 +265,17 @@ pub struct CopilotModel {
     pub vendor: String,
     /// 是否在模型选择器中显示
     pub model_picker_enabled: bool,
+    #[serde(default)]
+    pub model_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_state: Option<String>,
     /// Copilot-reported context window for this exact model ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_tool_calls: Option<bool>,
     /// Upstream protocols supported by this exact model ID.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_endpoints: Vec<String>,
@@ -287,13 +297,18 @@ struct CopilotModelsResponse {
 #[derive(Debug, Deserialize)]
 struct CopilotModelsResponseItem {
     id: String,
+    #[serde(default)]
     name: String,
+    #[serde(default)]
     vendor: String,
+    #[serde(default)]
     model_picker_enabled: bool,
     #[serde(default)]
     supported_endpoints: Vec<String>,
     #[serde(default)]
     capabilities: Option<Value>,
+    #[serde(default)]
+    policy: Option<Value>,
 }
 
 fn extract_copilot_context_window(capabilities: Option<&Value>) -> Option<u64> {
@@ -312,6 +327,29 @@ impl From<CopilotModelsResponseItem> for CopilotModel {
         let supports = model.capabilities.as_ref().and_then(|c| c.get("supports"));
         Self {
             context_window: extract_copilot_context_window(model.capabilities.as_ref()),
+            model_type: model
+                .capabilities
+                .as_ref()
+                .and_then(|c| c.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or("chat")
+                .to_string(),
+            policy_state: model
+                .policy
+                .as_ref()
+                .and_then(|p| p.get("state"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            max_output_tokens: model
+                .capabilities
+                .as_ref()
+                .and_then(|c| c.get("limits"))
+                .and_then(|l| l.get("max_output_tokens"))
+                .and_then(Value::as_u64)
+                .filter(|limit| *limit > 0),
+            supports_tool_calls: supports
+                .and_then(|s| s.get("tool_calls"))
+                .and_then(Value::as_bool),
             supports_parallel_tool_calls: supports
                 .and_then(|s| s.get("parallel_tool_calls"))
                 .and_then(Value::as_bool),
@@ -328,12 +366,27 @@ impl From<CopilotModelsResponseItem> for CopilotModel {
                         .map(str::to_owned)
                         .collect()
                 }),
+            name: if model.name.trim().is_empty() {
+                model.id.clone()
+            } else {
+                model.name
+            },
             id: model.id,
-            name: model.name,
             vendor: model.vendor,
             model_picker_enabled: model.model_picker_enabled,
             supported_endpoints: model.supported_endpoints,
         }
+    }
+}
+
+struct CachedCopilotModels {
+    models: Vec<CopilotModel>,
+    fetched_at: Instant,
+}
+
+impl CachedCopilotModels {
+    fn fresh_models(&self) -> Option<Vec<CopilotModel>> {
+        (self.fetched_at.elapsed() < MODEL_CATALOG_TTL).then(|| self.models.clone())
     }
 }
 
@@ -540,7 +593,8 @@ pub struct CopilotAuthManager {
     /// Copilot Token 缓存（key = GitHub user ID，内存缓存，自动刷新）
     copilot_tokens: Arc<RwLock<HashMap<String, CopilotToken>>>,
     /// Copilot Models 缓存（key = GitHub user ID，仅进程内复用）
-    copilot_models: Arc<RwLock<HashMap<String, Vec<CopilotModel>>>>,
+    copilot_models: Arc<RwLock<HashMap<String, CachedCopilotModels>>>,
+    model_catalog_lock: Mutex<()>,
     /// Copilot API 端点缓存（key = GitHub user ID，从 /copilot_internal/user 获取）
     api_endpoints: Arc<RwLock<HashMap<String, String>>>,
     /// 每个账号的端点拉取锁，避免并发拉取重复打 GitHub API
@@ -564,6 +618,7 @@ impl CopilotAuthManager {
             refresh_locks: Arc::new(RwLock::new(HashMap::new())),
             copilot_tokens: Arc::new(RwLock::new(HashMap::new())),
             copilot_models: Arc::new(RwLock::new(HashMap::new())),
+            model_catalog_lock: Mutex::new(()),
             api_endpoints: Arc::new(RwLock::new(HashMap::new())),
             endpoint_locks: Arc::new(RwLock::new(HashMap::new())),
             storage_path,
@@ -903,32 +958,54 @@ impl CopilotAuthManager {
         account_id: &str,
     ) -> Result<Vec<CopilotModel>, CopilotAuthError> {
         Ok(self
-            .fetch_all_models_for_account(account_id)
+            .load_models_for_account(account_id, true)
             .await?
             .into_iter()
-            .filter(|model| {
-                model.model_picker_enabled && super::copilot_model_map::is_gpt_model(&model.id)
-            })
+            .filter(super::copilot_model_map::is_selectable_model)
             .collect())
     }
 
-    async fn fetch_all_models_for_account(
+    async fn load_models_for_account(
         &self,
         account_id: &str,
+        force_refresh: bool,
     ) -> Result<Vec<CopilotModel>, CopilotAuthError> {
         self.ensure_migration_complete().await?;
 
         {
             let models = self.copilot_models.read().await;
-            if let Some(cached) = models.get(account_id) {
-                return Ok(cached.clone());
+            if !force_refresh {
+                if let Some(cached) = models
+                    .get(account_id)
+                    .and_then(CachedCopilotModels::fresh_models)
+                {
+                    return Ok(cached);
+                }
             }
         }
 
+        let _guard = self.model_catalog_lock.lock().await;
+        if !force_refresh {
+            if let Some(cached) = self
+                .copilot_models
+                .read()
+                .await
+                .get(account_id)
+                .and_then(CachedCopilotModels::fresh_models)
+            {
+                return Ok(cached);
+            }
+        }
         let models = self.fetch_models_for_account_uncached(account_id).await?;
         {
             let mut cache = self.copilot_models.write().await;
-            cache.insert(account_id.to_string(), models.clone());
+            cache.insert(
+                account_id.to_string(),
+                CachedCopilotModels {
+                    models: models.clone(),
+                    fetched_at: Instant::now(),
+                },
+            );
         }
         Ok(models)
     }
@@ -978,7 +1055,6 @@ impl CopilotAuthManager {
             .data
             .into_iter()
             .map(CopilotModel::from)
-            .filter(|model| super::copilot_model_map::is_gpt_model(&model.id))
             .collect();
 
         log::info!("[CopilotAuth] 获取到 {} 个可用模型", models.len());
@@ -990,12 +1066,9 @@ impl CopilotAuthManager {
         &self,
         account_id: &str,
         model_id: &str,
-        api_format: crate::provider::CodexCopilotApiFormat,
     ) -> Result<Option<super::copilot_model_map::ResolvedCopilotModel>, CopilotAuthError> {
-        let models = self.fetch_all_models_for_account(account_id).await?;
-        Ok(super::copilot_model_map::resolve_model_with_format(
-            model_id, &models, api_format,
-        ))
+        let models = self.load_models_for_account(account_id, false).await?;
+        Ok(super::copilot_model_map::resolve_model(model_id, &models))
     }
 
     /// 获取 Copilot 可用模型列表（向后兼容：使用第一个账号）
@@ -1009,13 +1082,9 @@ impl CopilotAuthManager {
     pub async fn resolve_model(
         &self,
         model_id: &str,
-        api_format: crate::provider::CodexCopilotApiFormat,
     ) -> Result<Option<super::copilot_model_map::ResolvedCopilotModel>, CopilotAuthError> {
         match self.resolve_default_account_id().await {
-            Some(id) => {
-                self.resolve_model_for_account(&id, model_id, api_format)
-                    .await
-            }
+            Some(id) => self.resolve_model_for_account(&id, model_id).await,
             None => Err(CopilotAuthError::GitHubTokenInvalid),
         }
     }
@@ -1621,6 +1690,40 @@ fn auth_header_value(value: &str) -> Result<http::HeaderValue, ProxyError> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn model_cache_expires_and_unknown_model_metadata_is_preserved() {
+        let cache = CachedCopilotModels {
+            models: vec![CopilotModel {
+                id: "future-vendor/model".into(),
+                ..Default::default()
+            }],
+            fetched_at: Instant::now(),
+        };
+        assert_eq!(cache.fresh_models().unwrap()[0].id, "future-vendor/model");
+        let expired = CachedCopilotModels {
+            fetched_at: Instant::now() - MODEL_CATALOG_TTL,
+            ..cache
+        };
+        assert!(expired.fresh_models().is_none());
+
+        let item: CopilotModelsResponseItem = serde_json::from_value(serde_json::json!({
+            "id": "future-vendor/model", "vendor": "New Vendor", "model_picker_enabled": true,
+            "supported_endpoints": ["/chat/completions"], "policy": {"state": "enabled"},
+            "capabilities": {
+                "type": "chat", "limits": {"max_prompt_tokens": 32000, "max_output_tokens": 4096},
+                "supports": {"tool_calls": true, "parallel_tool_calls": false, "vision": false, "reasoning_effort": []}
+            },
+            "future_metadata": {"not_an_allowlist": true}
+        })).unwrap();
+        let model = CopilotModel::from(item);
+        assert_eq!(model.name, "future-vendor/model");
+        assert_eq!(model.vendor, "New Vendor");
+        assert_eq!(model.max_output_tokens, Some(4096));
+        assert_eq!(model.supports_tool_calls, Some(true));
+        assert_eq!(model.reasoning_efforts, Some(vec![]));
+        assert!(super::super::copilot_model_map::is_selectable_model(&model));
+    }
 
     #[test]
     fn extracts_model_context_and_supported_endpoints() {

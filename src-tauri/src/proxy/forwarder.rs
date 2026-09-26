@@ -7,7 +7,7 @@ use super::{
         codex_chat_history::CodexChatHistoryStore,
         copilot_auth::{build_copilot_request_headers, CopilotAuthError},
         copilot_model_map::{
-            is_gpt_model, CopilotProtocol, CopilotTransport, ResolvedCopilotModel,
+            is_valid_model_id, CopilotProtocol, CopilotTransport, ResolvedCopilotModel,
         },
         inject_codex_chat_prompt_cache_key, is_codex_responses_endpoint,
     },
@@ -15,11 +15,8 @@ use super::{
     upstream_response::{ProxyResponse, MAX_RESPONSE_BODY_BYTES},
     ProxyError,
 };
-use crate::{
-    commands::CopilotAuthState,
-    provider::{CodexCopilotApiFormat, Provider},
-};
-use serde_json::Value;
+use crate::{commands::CopilotAuthState, provider::Provider};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::RwLock;
@@ -196,9 +193,9 @@ impl RequestForwarder {
         crate::copilot_bridge::require_copilot(provider)
             .map_err(|error| ProxyError::ConfigError(error.to_string()))?;
         if let Some(model) = body.get("model") {
-            if !model.as_str().is_some_and(is_gpt_model) {
+            if !model.as_str().is_some_and(is_valid_model_id) {
                 return Err(ProxyError::InvalidRequest(
-                    "Copilot Bridge Atlas supports GPT models only".into(),
+                    "Model must be a non-empty identifier without whitespace".into(),
                 ));
             }
         }
@@ -207,15 +204,8 @@ impl RequestForwarder {
         let mut upstream_format = None;
         let mut effective_endpoint = endpoint.to_string();
         if is_responses {
-            let api_format = provider
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.codex_copilot_api_format)
-                .unwrap_or_default();
-            let resolved = self
-                .resolve_codex_copilot_model(provider, &body, api_format)
-                .await?;
-            let transport = apply_codex_copilot_model(&mut body, resolved, api_format)?;
+            let resolved = self.resolve_codex_copilot_model(provider, &body).await?;
+            let transport = apply_codex_copilot_model(&mut body, resolved)?;
             effective_endpoint = rewrite_codex_endpoint_for_copilot(endpoint, &transport.endpoint);
             upstream_format = Some(match transport.protocol {
                 CopilotProtocol::Responses => CodexUpstreamFormat::NativeResponses,
@@ -381,7 +371,6 @@ impl RequestForwarder {
         &self,
         provider: &Provider,
         body: &Value,
-        api_format: CodexCopilotApiFormat,
     ) -> Result<Option<ResolvedCopilotModel>, ProxyError> {
         let model_id = body
             .get("model")
@@ -395,13 +384,10 @@ impl RequestForwarder {
             })?;
         #[cfg(test)]
         if let Some(fixture) = &self.copilot_fixture {
-            return Ok(
-                super::providers::copilot_model_map::resolve_model_with_format(
-                    model_id,
-                    &fixture.models,
-                    api_format,
-                ),
-            );
+            return Ok(super::providers::copilot_model_map::resolve_model(
+                model_id,
+                &fixture.models,
+            ));
         }
         let app_handle = self.app_handle.as_ref().ok_or_else(|| {
             ProxyError::ConfigError(format!(
@@ -416,12 +402,8 @@ impl RequestForwarder {
             .as_ref()
             .and_then(|meta| meta.managed_account_id_for("github_copilot"));
         let resolved = match account_id.as_deref() {
-            Some(id) => {
-                copilot_auth
-                    .resolve_model_for_account(id, model_id, api_format)
-                    .await
-            }
-            None => copilot_auth.resolve_model(model_id, api_format).await,
+            Some(id) => copilot_auth.resolve_model_for_account(id, model_id).await,
+            None => copilot_auth.resolve_model(model_id).await,
         };
 
         resolved.map_err(|error| codex_copilot_lookup_error(model_id, error))
@@ -456,17 +438,8 @@ fn codex_copilot_lookup_error(model_id: &str, error: CopilotAuthError) -> ProxyE
 fn apply_codex_copilot_model(
     body: &mut Value,
     resolved: Option<ResolvedCopilotModel>,
-    api_format: CodexCopilotApiFormat,
 ) -> Result<CopilotTransport, ProxyError> {
-    let requested = match api_format {
-        CodexCopilotApiFormat::Auto => "a Responses or Chat Completions endpoint",
-        CodexCopilotApiFormat::OpenaiResponses => {
-            "the requested Responses endpoint (codexCopilotApiFormat=openai_responses)"
-        }
-        CodexCopilotApiFormat::OpenaiChat => {
-            "the requested Chat Completions endpoint (codexCopilotApiFormat=openai_chat)"
-        }
-    };
+    let requested = "a supported chat endpoint";
     let Some(resolved) = resolved else {
         let model = body
             .get("model")
@@ -482,6 +455,52 @@ fn apply_codex_copilot_model(
             resolved.id
         )));
     };
+    if let (Some(limit), Some(requested)) = (
+        resolved.max_output_tokens,
+        body.get("max_output_tokens").and_then(Value::as_u64),
+    ) {
+        if requested > limit {
+            return Err(ProxyError::InvalidRequest(format!(
+                "Model {} supports at most {limit} output tokens; requested {requested}",
+                resolved.id
+            )));
+        }
+    }
+    if resolved.supports_tool_calls == Some(false)
+        && body
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| !tools.is_empty())
+    {
+        return Err(ProxyError::InvalidRequest(format!(
+            "Model {} does not support tool calls",
+            resolved.id
+        )));
+    }
+    if resolved.supports_parallel_tool_calls == Some(false)
+        && body.get("parallel_tool_calls").is_some()
+    {
+        body["parallel_tool_calls"] = json!(false);
+    }
+    // An explicit empty list means no reasoning support. Do not manufacture a
+    // GPT-style effort for this model or forward a disabled-reasoning parameter.
+    if resolved
+        .reasoning_efforts
+        .as_ref()
+        .is_some_and(Vec::is_empty)
+    {
+        if let Some(effort) = body.pointer("/reasoning/effort").and_then(Value::as_str) {
+            if effort != "none" {
+                return Err(ProxyError::InvalidRequest(format!(
+                    "Model {} does not support reasoning effort {effort}",
+                    resolved.id
+                )));
+            }
+        }
+        if let Some(object) = body.as_object_mut() {
+            object.remove("reasoning");
+        }
+    }
     body["model"] = Value::String(resolved.id);
     Ok(transport)
 }
@@ -966,7 +985,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_non_gpt_models_before_authentication_or_forwarding() {
+    async fn rejects_invalid_model_identifiers_before_authentication_or_forwarding() {
         let forwarder = test_forwarder();
         let mut provider = Provider::with_id("copilot".into(), "Copilot".into(), json!({}));
         provider.meta = Some(crate::ProviderMeta {
@@ -978,11 +997,42 @@ mod tests {
                 &provider,
                 http::Method::POST,
                 "/responses",
-                json!({"model":"unsupported-model","input":"hello"}),
+                json!({"model":"invalid model","input":"hello"}),
                 &HeaderMap::new(),
             )
             .await;
         assert!(matches!(error, Err(ProxyError::InvalidRequest(_))));
+    }
+
+    #[test]
+    fn respects_advertised_output_tool_and_reasoning_capabilities() {
+        let model = super::super::providers::copilot_auth::CopilotModel {
+            id: "future/model".into(),
+            model_picker_enabled: true,
+            supported_endpoints: vec!["/responses".into()],
+            max_output_tokens: Some(512),
+            supports_tool_calls: Some(false),
+            supports_parallel_tool_calls: Some(false),
+            reasoning_efforts: Some(vec![]),
+            ..Default::default()
+        };
+        let resolved =
+            super::super::providers::copilot_model_map::resolve_model("future/model", &[model])
+                .unwrap();
+        for mut body in [
+            json!({"model":"future/model", "max_output_tokens":513}),
+            json!({"model":"future/model", "tools":[{"type":"function","name":"test"}]}),
+            json!({"model":"future/model", "reasoning":{"effort":"high"}}),
+        ] {
+            assert!(matches!(
+                apply_codex_copilot_model(&mut body, Some(resolved.clone())),
+                Err(ProxyError::InvalidRequest(_))
+            ));
+        }
+        let mut body = json!({"model":"future/model", "max_output_tokens":512, "parallel_tool_calls":true, "reasoning":{"effort":"none"}});
+        apply_codex_copilot_model(&mut body, Some(resolved)).unwrap();
+        assert_eq!(body["parallel_tool_calls"], false);
+        assert!(body.get("reasoning").is_none());
     }
     #[test]
     fn replaces_client_fingerprints_and_preserves_payload_headers() {
@@ -1151,6 +1201,7 @@ mod tests {
                     id: "gpt-6-astra".into(),
                     name: "GPT test model".into(),
                     vendor: "OpenAI".into(),
+                    model_picker_enabled: true,
                     supported_endpoints: endpoints,
                     // Even an explicit text-only declaration must never cause
                     // the proxy to strip an image and silently retry as text.
@@ -1167,7 +1218,6 @@ mod tests {
                 Provider::with_id("copilot-http-test".into(), "Copilot".into(), json!({}));
             provider.meta = Some(crate::ProviderMeta {
                 provider_type: Some("github_copilot".into()),
-                codex_copilot_api_format: Some(CodexCopilotApiFormat::Auto),
                 ..Default::default()
             });
             (forwarder, provider)
@@ -1192,6 +1242,60 @@ mod tests {
                     ]}
                 ]
             })
+        }
+
+        #[tokio::test]
+        async fn automatically_routes_gemini_grok_and_unseen_vendors_despite_retired_overrides() {
+            for (model_id, protocol) in [
+                ("gemini-future", CopilotProtocol::Chat),
+                ("grok-future", CopilotProtocol::Responses),
+                ("mai-future", CopilotProtocol::Responses),
+                ("new-vendor/agent", CopilotProtocol::Chat),
+            ] {
+                let upstream =
+                    mock_upstream(StatusCode::OK, HeaderMap::new(), Bytes::from_static(b"{}"))
+                        .await;
+                let (mut forwarder, mut provider) = fixture(&upstream, protocol);
+                forwarder.copilot_fixture.as_mut().unwrap().models[0].id = model_id.into();
+                provider.meta = Some(
+                    serde_json::from_value(json!({
+                        "providerType":"github_copilot", "codexCopilotApiFormat":"openai_responses"
+                    }))
+                    .unwrap(),
+                );
+                let mut body = image_request(false);
+                body["model"] = json!(model_id);
+                let result = forwarder
+                    .forward_request(
+                        http::Method::POST,
+                        "/v1/responses",
+                        body,
+                        client_headers(),
+                        &provider,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(result.outbound_model.as_deref(), Some(model_id));
+                let expected = match protocol {
+                    CopilotProtocol::Responses => {
+                        ("/responses", CodexUpstreamFormat::NativeResponses)
+                    }
+                    CopilotProtocol::Chat => {
+                        ("/chat/completions", CodexUpstreamFormat::ChatCompletions)
+                    }
+                };
+                assert_eq!(result.codex_upstream_format, Some(expected.1));
+                let requests = upstream.requests.lock().await;
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].uri.path(), expected.0);
+                assert_eq!(requests[0].body["model"], model_id);
+                if protocol == CopilotProtocol::Chat {
+                    assert!(requests[0].body["messages"].is_array());
+                    assert!(requests[0].body["tools"][0]["function"].is_object());
+                } else {
+                    assert!(requests[0].body["input"].is_array());
+                }
+            }
         }
 
         fn client_headers() -> HeaderMap {

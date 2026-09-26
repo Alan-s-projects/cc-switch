@@ -103,219 +103,8 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
     }
 
     pub(crate) fn ensure_model_pricing_seeded_on_conn(conn: &Connection) -> Result<(), AppError> {
-        // Fill missing GPT estimates; never overwrite imported or custom prices.
-        for (id, name, input, output, cache_read, cache_creation) in [
-            ("gpt-6-astra", "GPT-6 Astra", "10", "50", "1", "12.5"),
-            ("gpt-6-sol", "GPT-6 Sol", "2", "10", "0.20", "2.50"),
-            ("gpt-6-luna", "GPT-6 Luna", "0.10", "0.50", "0.01", "0.125"),
-            ("gpt-5.6-sol", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
-            ("gpt-5.6-terra", "GPT-5.6 Terra", "2", "12", "0.20", "2.50"),
-            (
-                "gpt-5.6-luna",
-                "GPT-5.6 Luna",
-                "0.20",
-                "1.20",
-                "0.02",
-                "0.25",
-            ),
-            (
-                "gpt-5.6-cyber",
-                "GPT-5.6 Cyber",
-                "12.50",
-                "75",
-                "1.25",
-                "15.625",
-            ),
-            ("gpt-5.6", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
-            ("gpt-5.6-low", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
-            ("gpt-5.6-medium", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
-            ("gpt-5.6-high", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
-            ("gpt-5.6-xhigh", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
-            ("gpt-5.6-minimal", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
-            ("gpt-5.5", "GPT-5.5", "5", "30", "0.50", "0"),
-            ("gpt-5.5-low", "GPT-5.5", "5", "30", "0.50", "0"),
-            ("gpt-5.5-medium", "GPT-5.5", "5", "30", "0.50", "0"),
-            ("gpt-5.5-high", "GPT-5.5", "5", "30", "0.50", "0"),
-            ("gpt-5.5-xhigh", "GPT-5.5", "5", "30", "0.50", "0"),
-            ("gpt-5.5-minimal", "GPT-5.5", "5", "30", "0.50", "0"),
-            ("gpt-5.4", "GPT-5.4", "2.50", "15", "0.25", "0"),
-            ("gpt-5.4-mini", "GPT-5.4 Mini", "0.75", "4.50", "0.075", "0"),
-            ("gpt-5.4-nano", "GPT-5.4 Nano", "0.20", "1.25", "0.02", "0"),
-            ("gpt-5.2", "GPT-5.2", "1.75", "14", "0.175", "0"),
-            ("gpt-5.2-low", "GPT-5.2", "1.75", "14", "0.175", "0"),
-            ("gpt-5.2-medium", "GPT-5.2", "1.75", "14", "0.175", "0"),
-            ("gpt-5.2-high", "GPT-5.2", "1.75", "14", "0.175", "0"),
-            ("gpt-5.2-xhigh", "GPT-5.2", "1.75", "14", "0.175", "0"),
-            ("gpt-5.2-codex", "GPT-5.2 Codex", "1.75", "14", "0.175", "0"),
-            (
-                "gpt-5.2-codex-low",
-                "GPT-5.2 Codex",
-                "1.75",
-                "14",
-                "0.175",
-                "0",
-            ),
-            (
-                "gpt-5.2-codex-medium",
-                "GPT-5.2 Codex",
-                "1.75",
-                "14",
-                "0.175",
-                "0",
-            ),
-            (
-                "gpt-5.2-codex-high",
-                "GPT-5.2 Codex",
-                "1.75",
-                "14",
-                "0.175",
-                "0",
-            ),
-            (
-                "gpt-5.2-codex-xhigh",
-                "GPT-5.2 Codex",
-                "1.75",
-                "14",
-                "0.175",
-                "0",
-            ),
-            ("gpt-5.3-codex", "GPT-5.3 Codex", "1.75", "14", "0.175", "0"),
-            (
-                "gpt-5.3-codex-spark",
-                "GPT-5.3 Codex Spark",
-                "1.75",
-                "14",
-                "0.175",
-                "0",
-            ),
-            (
-                "gpt-5.3-codex-low",
-                "GPT-5.3 Codex",
-                "1.75",
-                "14",
-                "0.175",
-                "0",
-            ),
-            (
-                "gpt-5.3-codex-medium",
-                "GPT-5.3 Codex",
-                "1.75",
-                "14",
-                "0.175",
-                "0",
-            ),
-            (
-                "gpt-5.3-codex-high",
-                "GPT-5.3 Codex",
-                "1.75",
-                "14",
-                "0.175",
-                "0",
-            ),
-            (
-                "gpt-5.3-codex-xhigh",
-                "GPT-5.3 Codex",
-                "1.75",
-                "14",
-                "0.175",
-                "0",
-            ),
-            ("gpt-5.1", "GPT-5.1", "1.25", "10", "0.125", "0"),
-            ("gpt-5.1-low", "GPT-5.1", "1.25", "10", "0.125", "0"),
-            ("gpt-5.1-medium", "GPT-5.1", "1.25", "10", "0.125", "0"),
-            ("gpt-5.1-high", "GPT-5.1", "1.25", "10", "0.125", "0"),
-            ("gpt-5.1-minimal", "GPT-5.1", "1.25", "10", "0.125", "0"),
-            ("gpt-5.1-codex", "GPT-5.1 Codex", "1.25", "10", "0.125", "0"),
-            (
-                "gpt-5.1-codex-mini",
-                "GPT-5.1 Codex",
-                "1.25",
-                "10",
-                "0.125",
-                "0",
-            ),
-            (
-                "gpt-5.1-codex-max",
-                "GPT-5.1 Codex",
-                "1.25",
-                "10",
-                "0.125",
-                "0",
-            ),
-            (
-                "gpt-5.1-codex-max-high",
-                "GPT-5.1 Codex",
-                "1.25",
-                "10",
-                "0.125",
-                "0",
-            ),
-            (
-                "gpt-5.1-codex-max-xhigh",
-                "GPT-5.1 Codex",
-                "1.25",
-                "10",
-                "0.125",
-                "0",
-            ),
-            ("gpt-5", "GPT-5", "1.25", "10", "0.125", "0"),
-            ("gpt-5-low", "GPT-5", "1.25", "10", "0.125", "0"),
-            ("gpt-5-medium", "GPT-5", "1.25", "10", "0.125", "0"),
-            ("gpt-5-high", "GPT-5", "1.25", "10", "0.125", "0"),
-            ("gpt-5-minimal", "GPT-5", "1.25", "10", "0.125", "0"),
-            ("gpt-5-codex", "GPT-5 Codex", "1.25", "10", "0.125", "0"),
-            ("gpt-5-codex-low", "GPT-5 Codex", "1.25", "10", "0.125", "0"),
-            (
-                "gpt-5-codex-medium",
-                "GPT-5 Codex",
-                "1.25",
-                "10",
-                "0.125",
-                "0",
-            ),
-            (
-                "gpt-5-codex-high",
-                "GPT-5 Codex",
-                "1.25",
-                "10",
-                "0.125",
-                "0",
-            ),
-            (
-                "gpt-5-codex-mini",
-                "GPT-5 Codex",
-                "1.25",
-                "10",
-                "0.125",
-                "0",
-            ),
-            (
-                "gpt-5-codex-mini-medium",
-                "GPT-5 Codex",
-                "1.25",
-                "10",
-                "0.125",
-                "0",
-            ),
-            (
-                "gpt-5-codex-mini-high",
-                "GPT-5 Codex",
-                "1.25",
-                "10",
-                "0.125",
-                "0",
-            ),
-            ("gpt-4.1", "GPT-4.1", "2", "8", "0.50", "0"),
-            ("gpt-4.1-mini", "GPT-4.1 Mini", "0.40", "1.60", "0.10", "0"),
-            ("gpt-4.1-nano", "GPT-4.1 Nano", "0.10", "0.40", "0.025", "0"),
-            ("gpt-5.5-pro", "GPT-5.5 Pro", "30", "180", "0", "0"),
-            ("gpt-5.4-pro", "GPT-5.4 Pro", "30", "180", "0", "0"),
-            ("gpt-5.2-pro", "GPT-5.2 Pro", "21", "168", "0", "0"),
-            ("gpt-4o", "GPT-4o", "2.50", "10", "1.25", "0"),
-            ("gpt-4o-mini", "GPT-4o Mini", "0.15", "0.60", "0.075", "0"),
-            ("gpt-5-mini", "GPT-5 Mini", "0.25", "2", "0.025", "0"),
-            ("gpt-5-nano", "GPT-5 Nano", "0.05", "0.40", "0.005", "0"),
-        ] {
+        // Fill missing estimates; never overwrite imported or custom prices.
+        for [id, name, input, output, cache_read, cache_creation] in Self::bundled_model_prices()? {
             conn.execute(
                 "INSERT OR IGNORE INTO model_pricing (model_id, display_name,
                  input_cost_per_million, output_cost_per_million,
@@ -326,6 +115,18 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
             .map_err(|error| AppError::Database(error.to_string()))?;
         }
         Ok(())
+    }
+
+    pub(crate) fn bundled_model_prices() -> Result<Vec<[String; 6]>, AppError> {
+        #[derive(serde::Deserialize)]
+        struct BundledPricing {
+            prices: Vec<[String; 6]>,
+        }
+        let bundled: BundledPricing = serde_json::from_str(include_str!(
+            "../resources/model-pricing.json"
+        ))
+        .map_err(|error| AppError::Config(format!("Invalid bundled model pricing: {error}")))?;
+        Ok(bundled.prices)
     }
 
     pub(crate) fn get_user_version(conn: &Connection) -> Result<i32, AppError> {

@@ -91,7 +91,7 @@ pub struct ModelStats {
     pub avg_cost_per_request: String,
 }
 
-/// Token usage for GPT models that have no matching entry in the local price table.
+/// Token usage for models that have no matching entry in the local price table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnpricedModelUsage {
@@ -1172,7 +1172,7 @@ impl Database {
         Ok(stats)
     }
 
-    /// Find GPT model usage in the selected range that cannot be priced.
+    /// Find model usage in the selected range that cannot be priced.
     ///
     /// Price matching uses the same aliases as historical cost backfill, so
     /// dated and reasoning-suffixed model IDs do not create false warnings.
@@ -1312,7 +1312,7 @@ impl Database {
 
         let mut unpriced = Vec::new();
         for model_usage in usage {
-            if is_supported_gpt_pricing_model(&model_usage.model)
+            if is_supported_pricing_model(&model_usage.model)
                 && find_model_pricing_row(&conn, &model_usage.model)?.is_none()
             {
                 unpriced.push(model_usage);
@@ -1677,7 +1677,7 @@ pub(crate) fn find_model_pricing_row(
     Ok(None)
 }
 
-/// Match the same canonical GPT aliases used by exact price lookup.
+/// Match the same canonical aliases used by exact price lookup.
 fn log_pricing_scope_matches(log: &RequestLogDetail, target_candidates: &[String]) -> bool {
     [
         Some(log.model.as_str()),
@@ -1698,7 +1698,7 @@ pub(crate) fn is_placeholder_pricing_model(model_id: &str) -> bool {
     normalized.is_empty() || matches!(normalized.as_str(), "unknown" | "null" | "none")
 }
 
-pub(crate) fn is_supported_gpt_pricing_model(model_id: &str) -> bool {
+pub(crate) fn is_supported_pricing_model(model_id: &str) -> bool {
     !model_pricing_candidates(model_id).is_empty()
 }
 
@@ -1727,11 +1727,18 @@ fn query_model_pricing_exact(
 
 fn model_pricing_candidates(model_id: &str) -> Vec<String> {
     let cleaned = clean_model_id_for_pricing(model_id);
-    if !cleaned.starts_with("gpt-") {
+    if is_placeholder_pricing_model(&cleaned)
+        || !crate::proxy::providers::copilot_model_map::is_valid_model_id(&cleaned)
+    {
         return Vec::new();
     }
 
-    let mut candidates = Vec::new();
+    let exact = model_id.trim().to_ascii_lowercase();
+    let mut candidates = if exact == cleaned {
+        Vec::new()
+    } else {
+        vec![exact]
+    };
     let mut queue = vec![cleaned];
 
     while let Some(candidate) = queue.pop() {
@@ -1742,8 +1749,12 @@ fn model_pricing_candidates(model_id: &str) -> Vec<String> {
         if let Some(stripped) = strip_model_date_suffix(&candidate) {
             queue.push(stripped);
         }
-        if let Some(stripped) = strip_reasoning_effort_suffix(&candidate) {
-            queue.push(stripped);
+        // Only legacy GPT usage names encode the effort in the model ID.
+        // A new vendor's "-high" model may be a distinct, differently priced SKU.
+        if candidate.starts_with("gpt-") {
+            if let Some(stripped) = strip_reasoning_effort_suffix(&candidate) {
+                queue.push(stripped);
+            }
         }
     }
 
@@ -1754,6 +1765,7 @@ fn clean_model_id_for_pricing(model_id: &str) -> String {
     let normalized = model_id.trim().to_ascii_lowercase().replace('@', "-");
     normalized
         .strip_prefix("openai/")
+        .filter(|id| id.starts_with("gpt-"))
         .unwrap_or(&normalized)
         .to_string()
 }
@@ -3002,18 +3014,63 @@ mod tests {
 
         let unpriced =
             db.get_unpriced_model_usage(Some(start), Some(end), Some("codex"), None, None)?;
-        assert_eq!(unpriced.len(), 1);
-        assert_eq!(unpriced[0].model, "gpt-7-future-2026-04-01-high");
-        assert_eq!(unpriced[0].request_count, 1);
-        assert_eq!(unpriced[0].fresh_input_tokens, 700);
-        assert_eq!(unpriced[0].output_tokens, 50);
-        assert_eq!(unpriced[0].cache_read_tokens, 200);
-        assert!((unpriced[0].cache_hit_rate - 0.2).abs() < 0.0001);
+        assert_eq!(unpriced.len(), 2);
+        assert!(unpriced.iter().any(|row| row.model == "claude-retired"));
+        let future = unpriced
+            .iter()
+            .find(|row| row.model == "gpt-7-future-2026-04-01-high")
+            .unwrap();
+        assert_eq!(future.request_count, 1);
+        assert_eq!(future.fresh_input_tokens, 700);
+        assert_eq!(future.output_tokens, 50);
+        assert_eq!(future.cache_read_tokens, 200);
+        assert!((future.cache_hit_rate - 0.2).abs() < 0.0001);
 
         assert!(db
             .get_unpriced_model_usage(Some(end + 10), Some(end + 100), Some("codex"), None, None)?
             .is_empty());
 
+        Ok(())
+    }
+
+    #[test]
+    fn prices_multiple_vendors_without_guessing_prices_for_future_variants() -> Result<(), AppError>
+    {
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            for model in ["gemini-3.8-flash", "grok-4.7", "new-vendor/agent"] {
+                insert_usage_log(
+                    &conn, model, "codex", "copilot", model, "proxy", 1000, 1_000_000, 1_000_000,
+                    0, 0, 200, "0",
+                )?;
+            }
+            for unknown in [
+                "grok-99",
+                "new-vendor/agent",
+                "openai/grok-4.7",
+                "google/grok-4.7",
+                "gemini-3.8-flash-high",
+            ] {
+                assert!(
+                    find_model_pricing_row(&conn, unknown)?.is_none(),
+                    "{unknown}"
+                );
+            }
+        }
+        assert_eq!(db.backfill_missing_usage_costs()?, 2);
+        let unpriced = db.get_unpriced_model_usage(None, None, Some("codex"), None, None)?;
+        assert_eq!(unpriced.len(), 1);
+        assert_eq!(unpriced[0].model, "new-vendor/agent");
+        let conn = lock_conn!(db.conn);
+        for (model, expected) in [("gemini-3.8-flash", "4.500000"), ("grok-4.7", "8.000000")] {
+            let cost: String = conn.query_row(
+                "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id = ?1",
+                [model],
+                |row| row.get(0),
+            )?;
+            assert_eq!(cost, expected);
+        }
         Ok(())
     }
 
@@ -3127,13 +3184,17 @@ mod tests {
 
         let unpriced =
             db.get_unpriced_model_usage(Some(start), Some(end), Some("codex"), None, None)?;
-        assert_eq!(unpriced.len(), 1);
-        assert_eq!(unpriced[0].model, "gpt-7-future-2026-04-01-high");
-        assert_eq!(unpriced[0].request_count, 1);
-        assert_eq!(unpriced[0].fresh_input_tokens, 700);
-        assert_eq!(unpriced[0].output_tokens, 50);
-        assert_eq!(unpriced[0].cache_read_tokens, 200);
-        assert!((unpriced[0].cache_hit_rate - 0.2).abs() < 0.0001);
+        assert_eq!(unpriced.len(), 2);
+        assert!(unpriced.iter().any(|row| row.model == "claude-retired"));
+        let future = unpriced
+            .iter()
+            .find(|row| row.model == "gpt-7-future-2026-04-01-high")
+            .unwrap();
+        assert_eq!(future.request_count, 1);
+        assert_eq!(future.fresh_input_tokens, 700);
+        assert_eq!(future.output_tokens, 50);
+        assert_eq!(future.cache_read_tokens, 200);
+        assert!((future.cache_hit_rate - 0.2).abs() < 0.0001);
 
         assert!(db
             .get_unpriced_model_usage(Some(end + 10), Some(end + 100), Some("codex"), None, None)?

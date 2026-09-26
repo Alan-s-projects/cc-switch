@@ -127,14 +127,28 @@ fn merge_live_capabilities(
         .pointer_mut("/modelCatalog/models")
         .and_then(Value::as_array_mut)
     {
-        for row in rows {
+        for row in rows.iter_mut() {
+            if !row.is_object() {
+                continue;
+            }
             let Some(model) = row
                 .get("model")
                 .and_then(Value::as_str)
                 .and_then(|id| models.iter().find(|m| m.id.eq_ignore_ascii_case(id)))
             else {
+                row["available"] = json!(false);
                 continue;
             };
+            row["available"] = json!(true);
+            row["vendor"] = json!(model.vendor);
+            row["supportedReasoningLevels"] =
+                json!(model.reasoning_efforts.as_deref().unwrap_or(&[]));
+            if let Some(limit) = model.max_output_tokens {
+                row["maxOutputTokens"] = json!(limit);
+            }
+            if let Some(tools) = model.supports_tool_calls {
+                row["supportsToolCalls"] = json!(tools);
+            }
             if let Some(parallel) = model.supports_parallel_tool_calls {
                 row["supportsParallelToolCalls"] = json!(parallel);
             }
@@ -196,6 +210,29 @@ fn merge_live_capabilities(
             {
                 row["defaultReasoningLevel"] = json!(default);
             }
+        }
+        let known: std::collections::HashSet<_> = rows
+            .iter()
+            .filter_map(|row| row.get("model").and_then(Value::as_str))
+            .map(|id| id.trim().to_ascii_lowercase())
+            .collect();
+        for model in models
+            .iter()
+            .filter(|model| !known.contains(&model.id.to_ascii_lowercase()))
+        {
+            rows.push(json!({
+                "model": model.id,
+                "displayName": model.name,
+                "available": true,
+                "vendor": model.vendor,
+                "contextWindow": model.context_window,
+                "maxOutputTokens": model.max_output_tokens,
+                "supportsToolCalls": model.supports_tool_calls,
+                "supportsParallelToolCalls": model.supports_parallel_tool_calls,
+                "inputModalities": model.supports_vision.map(|vision| if vision { vec!["text", "image"] } else { vec!["text"] }),
+                "reasoningLevels": model.reasoning_efforts.as_deref().unwrap_or(&[]),
+                "supportedReasoningLevels": model.reasoning_efforts.as_deref().unwrap_or(&[])
+            }));
         }
     }
     provider.settings_config != before
@@ -1222,12 +1259,55 @@ notify = ["unchanged"]
         assert_eq!(rows[1]["defaultReasoningLevel"], "ultra");
         assert_eq!(
             rows[2],
-            json!({"model": "custom-alias", "inputModalities": ["text"]})
+            json!({"model": "custom-alias", "inputModalities": ["text"], "available": false})
         );
         assert_eq!(
             provider.settings_config["config"],
             "keep the stored template"
         );
+        assert!(!merge_live_capabilities(&mut provider, &models));
+    }
+
+    #[test]
+    fn refresh_discovers_future_models_and_preserves_unavailable_and_disabled_rows() {
+        use crate::proxy::providers::copilot_auth::CopilotModel;
+        use serde_json::json;
+        let mut provider = Provider::with_id(
+            "copilot".into(),
+            "Copilot".into(),
+            json!({
+                "modelCatalog": {"models": [
+                    {"model":"grok-old", "enabled":false, "reasoningLevels":["high"]},
+                    null,
+                    {"model":"gemini-returning", "available":false}
+                ]}
+            }),
+        );
+        let models = [
+            CopilotModel {
+                id: "new-vendor/agent".into(),
+                name: "Future Agent".into(),
+                context_window: Some(16000),
+                max_output_tokens: Some(4096),
+                reasoning_efforts: Some(vec!["low".into()]),
+                ..Default::default()
+            },
+            CopilotModel {
+                id: "gemini-returning".into(),
+                ..Default::default()
+            },
+        ];
+        assert!(merge_live_capabilities(&mut provider, &models));
+        let rows = &provider.settings_config["modelCatalog"]["models"];
+        assert_eq!(rows.as_array().unwrap().len(), 4);
+        assert_eq!(rows[0]["enabled"], false);
+        assert_eq!(rows[0]["available"], false);
+        assert_eq!(rows[0]["reasoningLevels"], json!(["high"]));
+        assert!(rows[1].is_null());
+        assert_eq!(rows[2]["available"], true);
+        assert_eq!(rows[3]["model"], "new-vendor/agent");
+        assert_ne!(rows[3]["enabled"], false);
+        assert_eq!(rows[3]["maxOutputTokens"], 4096);
         assert!(!merge_live_capabilities(&mut provider, &models));
     }
 
@@ -1394,8 +1474,8 @@ notify = ["unchanged"]
                 .iter()
                 .map(|level| level["effort"].as_str().unwrap())
                 .collect::<Vec<_>>();
-            assert_eq!(levels, ["low", "high", "ultra"]);
-            assert_eq!(entry["default_reasoning_level"], "ultra");
+            assert_eq!(levels, ["low", "high"]);
+            assert_eq!(entry["default_reasoning_level"], "high");
         }
         for (name, contents) in files {
             assert_eq!(
