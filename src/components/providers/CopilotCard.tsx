@@ -45,7 +45,7 @@ export function CopilotCard({ provider }: { provider: Provider }) {
           </div>
           <p className="text-sm text-muted-foreground">
             {!account
-              ? "Open Settings → Copilot to sign in, fetch your models, and save the bridge settings."
+              ? "GitHub Copilot is signed out."
               : enabledModelCount === 0
                 ? "No models are enabled for Codex. Open Settings → Copilot to enable at least one."
                 : `${account.login} · ${enabledModelCount} models available to Codex`}

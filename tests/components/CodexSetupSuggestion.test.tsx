@@ -600,6 +600,7 @@ describe("read-only Codex connection suggestions", () => {
       "model_auto_compact_token_limit = 900000",
     );
     expect(localStorage.getItem(previewPathKey)).toBeNull();
+    await waitFor(() => expect(copyProposal()).toBeEnabled());
     fireEvent.click(copyProposal());
     await waitFor(() =>
       expect(mocks.copy).toHaveBeenCalledWith(preview.copilotConfig),

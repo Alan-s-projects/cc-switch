@@ -10,7 +10,8 @@ Download `Copilot-Bridge-Atlas-4.2.9-Windows-x64.msi` from
 [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 The installer is per-user and unsigned.
 
-1. Open **Settings → Copilot**, sign in to GitHub, refresh your GPT models, and save.
+1. Open **Settings → Copilot**, sign in to GitHub, and refresh your GPT models.
+   Changes save automatically.
 2. Turn on the proxy switch. The default address is `http://127.0.0.1:15722/v1`.
 3. Open **Connect**, review the proposed TOML, copy it, and apply it yourself.
 4. Reload Codex so it loads the selected provider and generated model catalog.
@@ -85,13 +86,15 @@ then alphabetically by display name.
 
 - Process: `copilot-bridge-atlas.exe`
 - Application ID: `com.alansprojects.copilotbridgeatlas`
-- Data directory: `%USERPROFILE%\.copilot-bridge-atlas`
+- Default data directory: `%USERPROFILE%\.copilot-bridge-atlas`
 - Database: `copilot-bridge-atlas.db`
 - Generated catalog: `copilot-model-catalog.json` inside the data directory
 
 The app uses its own installer identity, settings, logs, startup entry, and WebView
 profile. It does not discover or reuse another application's data directory.
 Database backups can be restored through Settings → Backup & Restore.
+Folder selections saved by older Atlas versions are still honored on startup,
+without restoring the removed directory editor or modifying those selections.
 
 ## Develop and release
 

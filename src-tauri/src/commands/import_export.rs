@@ -1,8 +1,12 @@
 #![allow(non_snake_case)]
 
+use serde_json::Value;
+use std::path::PathBuf;
 use tauri::State;
 
-use crate::commands::sync_support::{post_sync_warning_from_result, run_post_restore_sync};
+use crate::commands::sync_support::{
+    post_sync_warning_from_result, run_post_restore_sync, success_payload_with_warning,
+};
 use crate::database::backup::BackupEntry;
 use crate::database::Database;
 use crate::error::AppError;
@@ -19,6 +23,30 @@ where
 {
     let _sync_guard = app_data_mutex().lock().await;
     start_operation().await
+}
+
+/// Import an Atlas SQL backup and refresh in-memory state from the restored database.
+#[tauri::command]
+pub async fn import_config_from_file(
+    filePath: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let app_state_for_sync = state.inner().clone();
+    let db = app_state_for_sync.db.clone();
+    run_with_database_restore_lock(move || {
+        tauri::async_runtime::spawn_blocking(move || {
+            let backup_id = db.import_sql(&PathBuf::from(filePath))?;
+            let warning =
+                post_sync_warning_from_result(Ok(run_post_restore_sync(&app_state_for_sync)));
+            if let Some(message) = warning.as_ref() {
+                log::warn!("[Import] post-import sync warning: {message}");
+            }
+            Ok::<_, AppError>(success_payload_with_warning(backup_id, warning))
+        })
+    })
+    .await
+    .map_err(|error| format!("Import failed: {error}"))?
+    .map_err(|error: AppError| error.to_string())
 }
 
 // ─── Database backup management ─────────────────────────────

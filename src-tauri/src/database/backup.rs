@@ -5,8 +5,7 @@
 use super::{lock_conn, Database};
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
-use chrono::Local;
-use chrono::Utc;
+use chrono::{Local, Utc};
 use rusqlite::backup::{Backup, StepResult};
 #[cfg(test)]
 use rusqlite::types::ValueRef;
@@ -16,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use tempfile::{Builder, NamedTempFile};
 
-#[cfg(test)]
 const COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER: &str = "-- Copilot Bridge Atlas SQLite export";
 
 /// Bound combined INSERT batches while still amortizing statement parsing.
@@ -39,7 +37,6 @@ fn lock_backup_file_operations() -> Result<BackupFileOperationGuard, AppError> {
 
 /// `dump_sql` 会写出的 PRAGMA。其余 PRAGMA 一律拒绝——`temp_store_directory`
 /// 能把临时文件重定向到任意目录，`writable_schema` 能绕过 schema 完整性检查。
-#[cfg(test)]
 const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version"];
 
 /// 执行外部 SQL 期间的 authorizer：拒绝一切能**离开临时数据库文件**的动作。
@@ -65,7 +62,6 @@ const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version"];
 /// - 文件后端的虚拟表模块（`csvfile`、`zipfile` 等）能读写任意路径 → 拒 vtable
 /// - `Unknown` 是 rusqlite 对未识别动作码的兜底 → 未知即拒，将来 SQLite 新增的
 ///   跨文件语句会默认落进这里，不依赖有人记得回来补名单
-#[cfg(test)]
 fn import_authorizer(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization {
     use rusqlite::hooks::{AuthAction, Authorization};
 
@@ -118,7 +114,6 @@ impl Database {
     }
 
     /// 从 SQL 文件导入，返回生成的备份 ID（若无备份则为空字符串）
-    #[cfg(test)]
     pub fn import_sql(&self, source_path: &Path) -> Result<String, AppError> {
         if !source_path.exists() {
             return Err(AppError::InvalidInput(format!(
@@ -133,17 +128,14 @@ impl Database {
     }
 
     /// 从 SQL 字符串导入，返回生成的备份 ID（若无备份则为空字符串）
-    #[cfg(test)]
     pub fn import_sql_string(&self, sql_raw: &str) -> Result<String, AppError> {
         self.import_sql_string_inner(sql_raw)
     }
 
-    #[cfg(test)]
     fn import_sql_string_inner(&self, sql_raw: &str) -> Result<String, AppError> {
         self.import_sql_string_inner_with_hook(sql_raw, || Ok(()))
     }
 
-    #[cfg(test)]
     fn import_sql_string_inner_with_hook<F>(
         &self,
         sql_raw: &str,
@@ -247,7 +239,6 @@ impl Database {
         }
     }
 
-    #[cfg(test)]
     fn validate_copilot_bridge_atlas_sql_export(sql: &str) -> Result<(), AppError> {
         let trimmed = sql.trim_start();
         if trimmed.starts_with(COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER)

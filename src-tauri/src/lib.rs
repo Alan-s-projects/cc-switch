@@ -169,6 +169,7 @@ pub fn run() {
         .setup(|app| {
             let _ = rustls::crypto::ring::default_provider().install_default();
 
+            crate::config::initialize_legacy_app_config_dir(&app.path().app_data_dir()?);
             panic_hook::init_app_config_dir(crate::config::get_app_config_dir());
 
             // 初始化日志（输出到 <app_config_dir>/logs/copilot-bridge-atlas.log）
@@ -426,6 +427,7 @@ pub fn run() {
             commands::restore_db_backup,
             commands::rename_db_backup,
             commands::delete_db_backup,
+            commands::import_config_from_file,
             update_tray_menu,
             commands::set_auto_launch,
             commands::start_proxy_server,

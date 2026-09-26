@@ -455,7 +455,7 @@ export function CodexFormFields({
         )}
         {sortedCatalogModels.map(({ model, index }) => (
           <div key={index} className="space-y-2 rounded-lg border p-3">
-            <div className="grid gap-2 md:grid-cols-[1fr_1fr_140px_1fr_44px]">
+            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_140px_minmax(0,1fr)_44px]">
               <Input
                 aria-label="Display name"
                 value={model.displayName ?? ""}

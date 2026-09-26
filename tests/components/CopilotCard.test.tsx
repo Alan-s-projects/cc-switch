@@ -62,13 +62,14 @@ describe("Copilot account card", () => {
     });
   });
 
-  it("directs setup to Settings → Copilot and keeps connectivity available without signing in", () => {
+  it("reports a signed-out account and keeps connectivity available without signing in", () => {
     mocks.auth.accounts = [];
     renderCard();
     expect(screen.getByText("Needs setup")).toBeVisible();
     expect(
-      screen.getByText(/Open Settings → Copilot to sign in/),
+      screen.getByText("GitHub Copilot is signed out."),
     ).toBeVisible();
+    expect(screen.queryByText(/save the bridge settings/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Health check" })).toBeEnabled();
     expect(
       screen.queryByRole("button", { name: "Edit" }),

@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Settings } from "@/types";
 
+export interface ConfigTransferResult {
+  success: boolean;
+  message: string;
+  backupId?: string;
+  warning?: string;
+}
+
 export const settingsApi = {
   async get(): Promise<Settings> {
     return await invoke("get_settings");
@@ -8,6 +15,10 @@ export const settingsApi = {
 
   async save(settings: Settings): Promise<boolean> {
     return await invoke("save_settings", { settings });
+  },
+
+  async importConfigFromFile(filePath: string): Promise<ConfigTransferResult> {
+    return await invoke("import_config_from_file", { filePath });
   },
 
   async checkUpdates(): Promise<void> {
