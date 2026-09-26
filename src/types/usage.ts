@@ -43,20 +43,6 @@ export interface ModelPricing {
   cacheCreationCostPerMillion: string;
 }
 
-export interface ModelsDevSyncConfig {
-  autoSyncEnabled: boolean;
-  includeCommonModels: boolean;
-  selectedModelKeys: string[];
-  excludedCommonModelKeys: string[];
-  lastSyncAt: number | null;
-  lastSyncError: string | null;
-}
-
-export interface ModelsDevSyncState {
-  config: ModelsDevSyncConfig;
-  configPath: string;
-}
-
 export interface UsageSummary {
   totalRequests: number;
   totalCost: string;
@@ -65,6 +51,7 @@ export interface UsageSummary {
   totalCacheCreationTokens: number;
   totalCacheReadTokens: number;
   successRate: number;
+  avgLatencyMs: number;
   /** input + output + cache_creation + cache_read, all cache-normalized */
   realTotalTokens: number;
   /** cache_read / (input + cache_creation + cache_read), range 0–1 */
@@ -80,16 +67,6 @@ export interface DailyStats {
   totalOutputTokens: number;
   totalCacheCreationTokens: number;
   totalCacheReadTokens: number;
-}
-
-export interface ProviderStats {
-  providerId: string;
-  providerName: string;
-  requestCount: number;
-  totalTokens: number;
-  totalCost: string;
-  successRate: number;
-  avgLatencyMs: number;
 }
 
 export interface ModelStats {

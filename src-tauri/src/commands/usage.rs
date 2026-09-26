@@ -1,7 +1,7 @@
 //! 使用统计相关命令
 
 use crate::error::AppError;
-use crate::services::model_pricing::{ModelPricingInfo, ModelsDevSyncConfig, ModelsDevSyncState};
+use crate::services::model_pricing::ModelPricingInfo;
 use crate::services::usage_stats::*;
 use crate::store::AppState;
 use tauri::State;
@@ -157,39 +157,6 @@ pub fn update_model_pricing(
         },
     )?;
     Ok(())
-}
-
-/// 批量更新模型定价（models.dev 自动同步仅触发一次历史成本回填）
-#[tauri::command]
-pub fn update_model_pricing_batch(
-    state: State<'_, AppState>,
-    entries: Vec<ModelPricingInfo>,
-) -> Result<usize, AppError> {
-    crate::services::model_pricing::update_model_pricing_batch(&state.db, entries)
-}
-
-#[tauri::command]
-pub fn get_models_dev_sync_config(
-    state: State<'_, AppState>,
-) -> Result<ModelsDevSyncState, AppError> {
-    crate::services::model_pricing::get_models_dev_sync_state(&state.db)
-}
-
-#[tauri::command]
-pub fn save_models_dev_sync_config(
-    state: State<'_, AppState>,
-    config: ModelsDevSyncConfig,
-) -> Result<(), AppError> {
-    crate::services::model_pricing::save_models_dev_sync_config(&state.db, config)
-}
-
-#[tauri::command]
-pub fn record_models_dev_sync_result(
-    state: State<'_, AppState>,
-    synced_at: Option<i64>,
-    error: Option<String>,
-) -> Result<(), AppError> {
-    crate::services::model_pricing::record_models_dev_sync_result(&state.db, synced_at, error)
 }
 
 /// 删除模型定价

@@ -30,6 +30,7 @@ const summary: UsageSummary = {
   totalCacheCreationTokens: 0,
   totalCacheReadTokens: 100,
   successRate: 100,
+  avgLatencyMs: 1200,
   realTotalTokens: 250,
   cacheHitRate: 0.5,
 };

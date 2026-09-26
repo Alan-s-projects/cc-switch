@@ -19,10 +19,6 @@ fn file_lock() -> &'static Mutex<()> {
     MODEL_PRICING_FILE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn default_true() -> bool {
-    true
-}
-
 fn default_file_version() -> u32 {
     MODEL_PRICING_FILE_VERSION
 }
@@ -40,41 +36,12 @@ pub struct ModelPricingInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModelsDevSyncConfig {
-    #[serde(default)]
-    pub auto_sync_enabled: bool,
-    #[serde(default = "default_true")]
-    pub include_common_models: bool,
-    #[serde(default)]
-    pub selected_model_keys: Vec<String>,
-    #[serde(default)]
-    pub excluded_common_model_keys: Vec<String>,
-    #[serde(default)]
-    pub last_sync_at: Option<i64>,
-    #[serde(default)]
-    pub last_sync_error: Option<String>,
-}
-
-impl Default for ModelsDevSyncConfig {
-    fn default() -> Self {
-        Self {
-            auto_sync_enabled: false,
-            include_common_models: true,
-            selected_model_keys: Vec::new(),
-            excluded_common_model_keys: Vec::new(),
-            last_sync_at: None,
-            last_sync_error: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ModelPricingFile {
     #[serde(default = "default_file_version")]
     version: u32,
-    #[serde(default)]
-    models_dev_sync: ModelsDevSyncConfig,
+    // Retired settings remain opaque and never enable network activity.
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     models: Vec<ModelPricingInfo>,
     #[serde(default)]
@@ -85,18 +52,11 @@ impl Default for ModelPricingFile {
     fn default() -> Self {
         Self {
             version: MODEL_PRICING_FILE_VERSION,
-            models_dev_sync: ModelsDevSyncConfig::default(),
+            extra: BTreeMap::new(),
             models: Vec::new(),
             deleted_model_ids: Vec::new(),
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelsDevSyncState {
-    pub config: ModelsDevSyncConfig,
-    pub config_path: String,
 }
 
 pub fn model_pricing_file_path() -> PathBuf {
@@ -166,20 +126,6 @@ fn normalize_key_list(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn normalize_sync_config(mut config: ModelsDevSyncConfig) -> ModelsDevSyncConfig {
-    config.selected_model_keys = normalize_key_list(config.selected_model_keys);
-    config.excluded_common_model_keys = normalize_key_list(config.excluded_common_model_keys);
-    config.last_sync_error = config.last_sync_error.and_then(|error| {
-        let trimmed = error.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.chars().take(1000).collect())
-        }
-    });
-    config
-}
-
 fn normalize_file(mut file: ModelPricingFile) -> Result<ModelPricingFile, AppError> {
     if file.version > MODEL_PRICING_FILE_VERSION {
         return Err(AppError::Config(format!(
@@ -200,7 +146,6 @@ fn normalize_file(mut file: ModelPricingFile) -> Result<ModelPricingFile, AppErr
     }
 
     file.version = MODEL_PRICING_FILE_VERSION;
-    file.models_dev_sync = normalize_sync_config(file.models_dev_sync);
     file.models = models.into_values().collect();
     file.deleted_model_ids = deleted.into_iter().collect();
     Ok(file)
@@ -229,7 +174,7 @@ fn load_or_create_file_unlocked() -> Result<ModelPricingFile, AppError> {
         return Ok(file);
     }
 
-    // Store explicit user/models.dev overrides; leave seeded prices in SQLite.
+    // Store explicit user overrides; leave seeded prices in SQLite.
     let file = ModelPricingFile::default();
     write_file_unlocked(&file)?;
     Ok(file)
@@ -319,72 +264,10 @@ pub fn sync_local_model_pricing(db: &Database) -> Result<usize, AppError> {
     Ok(upserted + deleted)
 }
 
-pub fn get_models_dev_sync_state(db: &Database) -> Result<ModelsDevSyncState, AppError> {
-    sync_local_model_pricing(db)?;
-    let _file_guard = file_lock()
-        .lock()
-        .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
-    let file = load_or_create_file_unlocked()?;
-    Ok(ModelsDevSyncState {
-        config: file.models_dev_sync,
-        config_path: model_pricing_file_path().display().to_string(),
-    })
-}
-
-pub fn save_models_dev_sync_config(
-    db: &Database,
-    config: ModelsDevSyncConfig,
-) -> Result<(), AppError> {
-    sync_local_model_pricing(db)?;
-    let _file_guard = file_lock()
-        .lock()
-        .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
-    let mut file = load_or_create_file_unlocked()?;
-    file.models_dev_sync = normalize_sync_config(config);
-    write_file_unlocked(&file)
-}
-
-/// Persist only the outcome of a models.dev sync. Keeping this separate from
-/// `save_models_dev_sync_config` prevents a slow startup fetch from restoring
-/// stale switches or model selections that the user changed in the meantime.
-pub fn record_models_dev_sync_result(
-    db: &Database,
-    synced_at: Option<i64>,
-    error: Option<String>,
-) -> Result<(), AppError> {
-    sync_local_model_pricing(db)?;
-    let _file_guard = file_lock()
-        .lock()
-        .map_err(|lock_error| AppError::Config(format!("模型定价文件锁失败: {lock_error}")))?;
-    let mut file = load_or_create_file_unlocked()?;
-    if let Some(synced_at) = synced_at {
-        file.models_dev_sync.last_sync_at = Some(synced_at);
-    }
-    file.models_dev_sync.last_sync_error = error;
-    file.models_dev_sync = normalize_sync_config(file.models_dev_sync);
-    write_file_unlocked(&file)
-}
-
-fn update_model_pricing_batch_inner(
-    db: &Database,
-    entries: Vec<ModelPricingInfo>,
-    backfill_all: bool,
-) -> Result<usize, AppError> {
-    if entries.is_empty() {
-        return Ok(0);
-    }
-    let mut normalized = BTreeMap::new();
-    for entry in entries {
-        let mut entry = normalize_pricing(entry)?;
-        require_gpt_pricing(&entry.model_id)?;
-        entry.model_id.make_ascii_lowercase();
-        normalized.insert(entry.model_id.clone(), entry);
-    }
-    let entries = normalized.into_values().collect::<Vec<_>>();
-    let model_ids = entries
-        .iter()
-        .map(|entry| entry.model_id.clone())
-        .collect::<Vec<_>>();
+pub fn update_model_pricing(db: &Database, entry: ModelPricingInfo) -> Result<usize, AppError> {
+    let mut entry = normalize_pricing(entry)?;
+    require_gpt_pricing(&entry.model_id)?;
+    entry.model_id.make_ascii_lowercase();
 
     sync_local_model_pricing(db)?;
     let changed = {
@@ -397,53 +280,28 @@ fn update_model_pricing_batch_inner(
             .into_iter()
             .map(|entry| (entry.model_id.clone(), entry))
             .collect::<BTreeMap<_, _>>();
-        let updated_ids = entries
-            .iter()
-            .map(|entry| entry.model_id.clone())
-            .collect::<BTreeSet<_>>();
-        for entry in &entries {
-            file_models.insert(entry.model_id.clone(), entry.clone());
-        }
+        file_models.insert(entry.model_id.clone(), entry.clone());
         file.models = file_models.into_values().collect();
         file.deleted_model_ids
-            .retain(|model_id| !updated_ids.contains(model_id));
+            .retain(|model_id| model_id != &entry.model_id);
 
         let mut conn = lock_conn!(db.conn);
         let transaction = conn.transaction()?;
-        let mut changed = 0;
-        for entry in &entries {
-            changed += upsert_pricing(&transaction, entry)?;
-        }
+        let changed = upsert_pricing(&transaction, &entry)?;
         write_file_unlocked(&file)?;
         transaction.commit()?;
         changed
     };
 
     if changed > 0 {
-        if backfill_all {
-            if let Err(error) = db.backfill_missing_usage_costs() {
-                log::warn!("批量更新模型定价后回填历史用量成本失败: {error}");
-            }
-        } else {
-            for model_id in model_ids {
-                if let Err(error) = db.backfill_missing_usage_costs_for_model(&model_id) {
-                    log::warn!("模型定价更新后回填历史用量成本失败 (model_id={model_id}): {error}");
-                }
-            }
+        if let Err(error) = db.backfill_missing_usage_costs_for_model(&entry.model_id) {
+            log::warn!(
+                "Could not backfill usage costs after updating pricing for {}: {error}",
+                entry.model_id
+            );
         }
     }
     Ok(changed)
-}
-
-pub fn update_model_pricing(db: &Database, entry: ModelPricingInfo) -> Result<usize, AppError> {
-    update_model_pricing_batch_inner(db, vec![entry], false)
-}
-
-pub fn update_model_pricing_batch(
-    db: &Database,
-    entries: Vec<ModelPricingInfo>,
-) -> Result<usize, AppError> {
-    update_model_pricing_batch_inner(db, entries, true)
 }
 
 pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppError> {
@@ -513,17 +371,15 @@ mod tests {
 
     #[test]
     #[serial]
-    fn creates_local_file_with_auto_sync_disabled_by_default() {
+    fn creates_local_file_without_sync_settings() {
         with_test_home(|db, path| {
-            let state = get_models_dev_sync_state(db).expect("sync state");
+            sync_local_model_pricing(db).expect("load local pricing");
             assert!(path.exists());
-            assert!(!state.config.auto_sync_enabled);
-            assert!(state.config.include_common_models);
-            assert_eq!(state.config_path, path.display().to_string());
 
             let content = fs::read_to_string(path).expect("read pricing file");
             let file: ModelPricingFile = serde_json::from_str(&content).expect("parse file");
             assert!(file.models.is_empty());
+            assert!(file.extra.is_empty());
         });
     }
 
@@ -531,7 +387,7 @@ mod tests {
     #[serial]
     fn empty_override_file_preserves_existing_database_prices() {
         with_test_home(|db, path| {
-            get_models_dev_sync_state(db).expect("create override file");
+            sync_local_model_pricing(db).expect("create override file");
             {
                 let conn = db.conn.lock().expect("lock test database");
                 assert_eq!(
@@ -568,15 +424,15 @@ mod tests {
 
     #[test]
     #[serial]
-    fn models_dev_batch_sync_overwrites_existing_manual_pricing() {
+    fn manual_edit_updates_existing_price_without_duplicate_rows() {
         with_test_home(|db, path| {
             let mut manual = sample_pricing();
             manual.input_cost_per_million = "9".to_string();
             manual.output_cost_per_million = "18".to_string();
             update_model_pricing(db, manual).expect("save manual pricing");
 
-            let synced = sample_pricing();
-            update_model_pricing_batch(db, vec![synced.clone()]).expect("sync models.dev pricing");
+            let edited = sample_pricing();
+            update_model_pricing(db, edited.clone()).expect("edit pricing");
 
             let conn = db.conn.lock().expect("lock test database");
             let input: String = conn
@@ -585,9 +441,9 @@ mod tests {
                     params!["gpt-custom-model"],
                     |row| row.get(0),
                 )
-                .expect("query synced pricing");
+                .expect("query edited pricing");
             drop(conn);
-            assert_eq!(input, synced.input_cost_per_million);
+            assert_eq!(input, edited.input_cost_per_million);
 
             let content = fs::read_to_string(path).expect("read pricing file");
             let file: ModelPricingFile = serde_json::from_str(&content).expect("parse file");
@@ -595,17 +451,18 @@ mod tests {
                 .models
                 .iter()
                 .find(|entry| entry.model_id == "gpt-custom-model")
-                .expect("saved synced pricing");
-            assert_eq!(saved, &synced);
+                .expect("saved edited pricing");
+            assert_eq!(saved, &edited);
+            assert_eq!(file.models.len(), 1);
         });
     }
 
     #[test]
     #[serial]
-    fn batch_update_and_delete_are_persisted_to_local_file() {
+    fn manual_update_and_delete_are_persisted_to_local_file() {
         with_test_home(|db, path| {
             assert_eq!(
-                update_model_pricing_batch(db, vec![sample_pricing()]).expect("batch update"),
+                update_model_pricing(db, sample_pricing()).expect("manual update"),
                 1
             );
             let content = fs::read_to_string(path).expect("read pricing file");
@@ -634,7 +491,7 @@ mod tests {
     #[serial]
     fn reloads_manual_file_edits_and_deletion_tombstones() {
         with_test_home(|db, path| {
-            get_models_dev_sync_state(db).expect("create pricing file");
+            sync_local_model_pricing(db).expect("create pricing file");
             let content = fs::read_to_string(path).expect("read pricing file");
             let mut file: ModelPricingFile =
                 serde_json::from_str(&content).expect("parse pricing file");
@@ -685,7 +542,7 @@ mod tests {
     #[serial]
     fn repeated_seeded_tombstone_deletion_does_not_backfill_unrelated_usage() {
         with_test_home(|db, _path| {
-            get_models_dev_sync_state(db).expect("create override file");
+            sync_local_model_pricing(db).expect("create override file");
             {
                 let conn = db.conn.lock().expect("lock test database");
                 conn.execute(
@@ -733,38 +590,38 @@ mod tests {
 
     #[test]
     #[serial]
-    fn recording_sync_result_preserves_user_selection_and_switches() {
-        with_test_home(|db, _path| {
-            let config = ModelsDevSyncConfig {
-                auto_sync_enabled: false,
-                include_common_models: false,
-                selected_model_keys: vec!["relay/gpt-custom-model".to_string()],
-                excluded_common_model_keys: vec!["openai/gpt-5".to_string()],
-                last_sync_at: Some(123),
-                last_sync_error: Some("old error".to_string()),
-            };
-            save_models_dev_sync_config(db, config.clone()).expect("save sync config");
+    fn retired_sync_metadata_is_opaque_and_survives_manual_price_changes() {
+        with_test_home(|db, path| {
+            let legacy = serde_json::json!({
+                "autoSyncEnabled": true,
+                "selectedModelKeys": ["openai/gpt-custom-model"],
+                "lastSyncAt": 123,
+                "lastSyncError": "  historical error  "
+            });
+            let file = serde_json::json!({
+                "version": 1,
+                "modelsDevSync": legacy,
+                "models": [sample_pricing()],
+                "deletedModelIds": []
+            });
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, serde_json::to_vec_pretty(&file).unwrap()).unwrap();
+            let before = fs::read(path).unwrap();
+            assert_eq!(sync_local_model_pricing(db).unwrap(), 1);
+            assert_eq!(fs::read(path).unwrap(), before);
 
-            record_models_dev_sync_result(db, Some(456), None).expect("record success");
-            let state = get_models_dev_sync_state(db).expect("read sync state");
-            assert_eq!(state.config.auto_sync_enabled, config.auto_sync_enabled);
-            assert_eq!(
-                state.config.include_common_models,
-                config.include_common_models
-            );
-            assert_eq!(state.config.selected_model_keys, config.selected_model_keys);
-            assert_eq!(
-                state.config.excluded_common_model_keys,
-                config.excluded_common_model_keys
-            );
-            assert_eq!(state.config.last_sync_at, Some(456));
-            assert_eq!(state.config.last_sync_error, None);
+            let mut edited = sample_pricing();
+            edited.input_cost_per_million = "8.5".into();
+            update_model_pricing(db, edited.clone()).unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(saved["modelsDevSync"], legacy);
+            assert_eq!(saved["models"][0], serde_json::to_value(edited).unwrap());
 
-            record_models_dev_sync_result(db, None, Some("offline".to_string()))
-                .expect("record failure");
-            let state = get_models_dev_sync_state(db).expect("read failure state");
-            assert_eq!(state.config.last_sync_at, Some(456));
-            assert_eq!(state.config.last_sync_error.as_deref(), Some("offline"));
+            delete_model_pricing(db, "gpt-custom-model").unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(saved["modelsDevSync"], legacy);
         });
     }
 
@@ -774,7 +631,7 @@ mod tests {
         with_test_home(|db, path| {
             let mut retired = sample_pricing();
             retired.model_id = "retired-model".into();
-            assert!(update_model_pricing_batch(db, vec![sample_pricing(), retired]).is_err());
+            assert!(update_model_pricing(db, retired).is_err());
             assert!(delete_model_pricing(db, "retired-model").is_err());
             assert!(!path.exists());
             assert_eq!(db.conn.lock().unwrap().query_row(

@@ -54,8 +54,7 @@ export function RequestLogTable({
 }: RequestLogTableProps) {
   const { t } = useTranslation();
 
-  // 应用/Provider/模型筛选已上移到 Dashboard 顶栏（全局生效）；
-  // 这里只保留日志特有的状态码筛选。
+  // Model selection is shared with the dashboard; status filtering is local.
   const [statusCode, setStatusCode] = useState<number | undefined>(undefined);
   const [page, setPage] = useState(0);
   const [pageInput, setPageInput] = useState("");
@@ -157,9 +156,6 @@ export function RequestLogTable({
                     {t("usage.time")}
                   </TableHead>
                   <TableHead className="text-center whitespace-nowrap">
-                    {t("usage.provider")}
-                  </TableHead>
-                  <TableHead className="text-center whitespace-nowrap">
                     {t("usage.billingModel")}
                   </TableHead>
                   <TableHead className="text-center whitespace-nowrap">
@@ -177,16 +173,13 @@ export function RequestLogTable({
                   <TableHead className="text-center whitespace-nowrap">
                     {t("usage.status")}
                   </TableHead>
-                  <TableHead className="text-center whitespace-nowrap">
-                    {t("usage.source", { defaultValue: "Source" })}
-                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {logs.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={9}
+                      colSpan={7}
                       className="text-center text-muted-foreground"
                     >
                       {t("usage.noData")}
@@ -207,9 +200,6 @@ export function RequestLogTable({
                               minute: "2-digit",
                             },
                           )}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {log.providerName || t("usage.unknownProvider")}
                         </TableCell>
                         <TableCell className="text-center font-mono text-xs max-w-[200px]">
                           <div
@@ -318,9 +308,6 @@ export function RequestLogTable({
                           >
                             {log.statusCode}
                           </span>
-                        </TableCell>
-                        <TableCell className="text-center text-xs text-muted-foreground">
-                          {log.dataSource || "proxy"}
                         </TableCell>
                       </TableRow>
                     );

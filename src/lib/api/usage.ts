@@ -2,12 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   UsageSummary,
   DailyStats,
-  ProviderStats,
   ModelStats,
   LogFilters,
   ModelPricing,
-  ModelsDevSyncConfig,
-  ModelsDevSyncState,
   PaginatedLogs,
 } from "@/types/usage";
 
@@ -37,22 +34,6 @@ export const usageApi = {
     model?: string,
   ): Promise<DailyStats[]> => {
     return invoke("get_usage_trends", {
-      startDate,
-      endDate,
-      appType,
-      providerName,
-      model,
-    });
-  },
-
-  getProviderStats: async (
-    startDate?: number,
-    endDate?: number,
-    appType?: string,
-    providerName?: string,
-    model?: string,
-  ): Promise<ProviderStats[]> => {
-    return invoke("get_provider_stats", {
       startDate,
       endDate,
       appType,
@@ -109,27 +90,6 @@ export const usageApi = {
       cacheReadCost,
       cacheCreationCost,
     });
-  },
-
-  updateModelPricingBatch: async (entries: ModelPricing[]): Promise<number> => {
-    return invoke("update_model_pricing_batch", { entries });
-  },
-
-  getModelsDevSyncConfig: async (): Promise<ModelsDevSyncState> => {
-    return invoke("get_models_dev_sync_config");
-  },
-
-  saveModelsDevSyncConfig: async (
-    config: ModelsDevSyncConfig,
-  ): Promise<void> => {
-    return invoke("save_models_dev_sync_config", { config });
-  },
-
-  recordModelsDevSyncResult: async (
-    syncedAt: number | null,
-    error: string | null,
-  ): Promise<void> => {
-    return invoke("record_models_dev_sync_result", { syncedAt, error });
   },
 
   deleteModelPricing: async (modelId: string): Promise<void> => {

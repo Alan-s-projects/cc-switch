@@ -90,5 +90,8 @@ describe("PricingEditModal", () => {
 
     fireEvent.change(cacheReadInput, { target: { value: "0.0015" } });
     expect(cacheReadInput.value).toBe("0.0015");
+    expect(
+      screen.queryByRole("button", { name: /models\.dev/i }),
+    ).not.toBeInTheDocument();
   });
 });

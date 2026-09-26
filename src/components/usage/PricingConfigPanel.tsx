@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Table,
@@ -18,32 +18,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useModelPricing, useDeleteModelPricing } from "@/lib/query/usage";
 import { PricingEditModal } from "./PricingEditModal";
-import { isNonNegativeDecimalString, type ModelPricing } from "@/types/usage";
+import type { ModelPricing } from "@/types/usage";
 import { Plus, Pencil, Trash2, Loader2 } from "lucide-react";
-import { toast } from "sonner";
-import { proxyApi } from "@/lib/api/proxy";
-import { ModelsDevAutoSyncPanel } from "./ModelsDevAutoSyncPanel";
-
-const PRICING_APPS = ["codex"] as const;
-type PricingApp = (typeof PRICING_APPS)[number];
-type PricingModelSource = "request" | "response";
-
-interface AppConfig {
-  multiplier: string;
-  source: PricingModelSource;
-}
-
-type AppConfigState = Record<PricingApp, AppConfig>;
 
 export function PricingConfigPanel() {
   const { t } = useTranslation();
@@ -52,129 +30,6 @@ export function PricingConfigPanel() {
   const [editingModel, setEditingModel] = useState<ModelPricing | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-
-  // Global accounting defaults for the Codex proxy.
-  const [appConfigs, setAppConfigs] = useState<AppConfigState>({
-    codex: { multiplier: "1", source: "response" },
-  });
-  const [originalConfigs, setOriginalConfigs] = useState<AppConfigState | null>(
-    null,
-  );
-  const [isConfigLoading, setIsConfigLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-
-  // 检查是否有改动
-  const isDirty =
-    originalConfigs !== null &&
-    PRICING_APPS.some(
-      (app) =>
-        appConfigs[app].multiplier !== originalConfigs[app].multiplier ||
-        appConfigs[app].source !== originalConfigs[app].source,
-    );
-
-  // 加载所有应用的配置
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadAllConfigs = async () => {
-      setIsConfigLoading(true);
-      try {
-        const results = await Promise.all(
-          PRICING_APPS.map(async (app) => {
-            const [multiplier, source] = await Promise.all([
-              proxyApi.getDefaultCostMultiplier(app),
-              proxyApi.getPricingModelSource(app),
-            ]);
-            return {
-              app,
-              multiplier,
-              source: (source === "request"
-                ? "request"
-                : "response") as PricingModelSource,
-            };
-          }),
-        );
-
-        if (!isMounted) return;
-
-        const newState: AppConfigState = {
-          codex: { multiplier: "1", source: "response" },
-        };
-        for (const result of results) {
-          newState[result.app] = {
-            multiplier: result.multiplier,
-            source: result.source,
-          };
-        }
-        setAppConfigs(newState);
-        setOriginalConfigs(newState);
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : typeof error === "string"
-              ? error
-              : "Unknown error";
-        toast.error(
-          t("settings.globalProxy.pricingLoadFailed", { error: message }),
-        );
-      } finally {
-        if (isMounted) setIsConfigLoading(false);
-      }
-    };
-
-    loadAllConfigs();
-    return () => {
-      isMounted = false;
-    };
-  }, [t]);
-
-  // 保存所有配置
-  const handleSaveAll = async () => {
-    // 验证所有倍率
-    for (const app of PRICING_APPS) {
-      const trimmed = appConfigs[app].multiplier.trim();
-      if (!trimmed) {
-        toast.error(
-          `${t(`apps.${app}`)}: ${t("settings.globalProxy.defaultCostMultiplierRequired")}`,
-        );
-        return;
-      }
-      if (!isNonNegativeDecimalString(trimmed)) {
-        toast.error(
-          `${t(`apps.${app}`)}: ${t("settings.globalProxy.defaultCostMultiplierInvalid")}`,
-        );
-        return;
-      }
-    }
-
-    setIsSaving(true);
-    try {
-      await Promise.all(
-        PRICING_APPS.flatMap((app) => [
-          proxyApi.setDefaultCostMultiplier(
-            app,
-            appConfigs[app].multiplier.trim(),
-          ),
-          proxyApi.setPricingModelSource(app, appConfigs[app].source),
-        ]),
-      );
-      toast.success(t("settings.globalProxy.pricingSaved"));
-      setOriginalConfigs({ ...appConfigs });
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : "Unknown error";
-      toast.error(
-        t("settings.globalProxy.pricingSaveFailed", { error: message }),
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  };
 
   const handleDelete = (modelId: string) => {
     deleteMutation.mutate(modelId, {
@@ -214,130 +69,8 @@ export function PricingConfigPanel() {
 
   return (
     <div className="space-y-6">
-      {/* 全局计费默认配置 - 紧凑表格布局 */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <div>
-            <h4 className="text-sm font-medium">
-              {t("settings.globalProxy.pricingDefaultsTitle")}
-            </h4>
-            <p className="text-xs text-muted-foreground">
-              {t("settings.globalProxy.pricingDefaultsDescription")}
-            </p>
-          </div>
-          <Button
-            onClick={handleSaveAll}
-            disabled={isConfigLoading || isSaving || !isDirty}
-            size="sm"
-          >
-            {isSaving ? (
-              <>
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                {t("common.saving")}
-              </>
-            ) : (
-              t("common.save")
-            )}
-          </Button>
-        </div>
-
-        {isConfigLoading ? (
-          <div className="flex items-center justify-center py-4">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-          </div>
-        ) : (
-          <div className="rounded-md border border-border/50 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border/50 bg-muted/30">
-                  <th className="px-3 py-2 text-left font-medium text-muted-foreground w-24">
-                    {t("settings.globalProxy.pricingAppLabel")}
-                  </th>
-                  <th className="px-3 py-2 text-left font-medium text-muted-foreground">
-                    {t("settings.globalProxy.defaultCostMultiplierLabel")}
-                  </th>
-                  <th className="px-3 py-2 text-left font-medium text-muted-foreground">
-                    {t("settings.globalProxy.pricingModelSourceLabel")}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {PRICING_APPS.map((app, idx) => (
-                  <tr
-                    key={app}
-                    className={
-                      idx < PRICING_APPS.length - 1
-                        ? "border-b border-border/30"
-                        : ""
-                    }
-                  >
-                    <td className="px-3 py-1.5 font-medium">
-                      {t(`apps.${app}`)}
-                    </td>
-                    <td className="px-3 py-1.5">
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        inputMode="decimal"
-                        value={appConfigs[app].multiplier}
-                        onChange={(e) =>
-                          setAppConfigs((prev) => ({
-                            ...prev,
-                            [app]: { ...prev[app], multiplier: e.target.value },
-                          }))
-                        }
-                        disabled={isSaving}
-                        placeholder="1"
-                        className="w-24"
-                      />
-                    </td>
-                    <td className="px-3 py-1.5">
-                      <Select
-                        value={appConfigs[app].source}
-                        onValueChange={(value) =>
-                          setAppConfigs((prev) => ({
-                            ...prev,
-                            [app]: {
-                              ...prev[app],
-                              source: value as PricingModelSource,
-                            },
-                          }))
-                        }
-                        disabled={isSaving}
-                      >
-                        <SelectTrigger className="w-40">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="response">
-                            {t(
-                              "settings.globalProxy.pricingModelSourceResponse",
-                            )}
-                          </SelectItem>
-                          <SelectItem value="request">
-                            {t(
-                              "settings.globalProxy.pricingModelSourceRequest",
-                            )}
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* 分隔线 */}
-      <div className="border-t border-border/50" />
-
       {/* 模型定价配置 */}
       <div className="space-y-4">
-        <ModelsDevAutoSyncPanel />
-
         <div className="flex items-center justify-between">
           <h4 className="text-sm font-medium text-muted-foreground">
             {t("usage.modelPricingDesc")} {t("usage.perMillion")}
