@@ -12,7 +12,7 @@ it("refreshes Copilot, quota and the connection preview after editing", async ()
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  const { result } = renderHook(() => useUpdateProviderMutation("codex"), {
+  const { result } = renderHook(() => useUpdateProviderMutation(), {
     wrapper,
   });
   const provider = {
@@ -21,7 +21,7 @@ it("refreshes Copilot, quota and the connection preview after editing", async ()
     settingsConfig: {},
   };
   await act(() => result.current.mutateAsync({ provider }));
-  expect(update).toHaveBeenCalledWith(provider, "codex");
+  expect(update).toHaveBeenCalledWith(provider);
   for (const queryKey of [
     ["providers", "codex"],
     ["copilot", "quota"],

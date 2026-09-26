@@ -7,7 +7,6 @@
 use super::codex_chat_common::{
     append_reasoning_content, extract_reasoning_field_text, extract_reasoning_summary_text,
     response_function_call_item, response_function_call_item_with_namespace,
-    split_leading_think_block,
 };
 use crate::proxy::{
     error::ProxyError,
@@ -1328,12 +1327,6 @@ fn responses_tool_choice_to_chat(tool_choice: &Value, tool_context: &CodexToolCo
     }
 }
 
-/// Convert a non-streaming Chat Completions response into a Responses response.
-#[allow(dead_code)]
-pub fn chat_completion_to_response(body: Value) -> Result<Value, ProxyError> {
-    chat_completion_to_response_with_context(body, &CodexToolContext::default())
-}
-
 /// Convert a non-streaming Chat Completions response into a Responses response,
 /// restoring Codex-specific tool names using the original Responses request.
 pub(crate) fn chat_completion_to_response_with_context(
@@ -1356,7 +1349,7 @@ pub(crate) fn chat_completion_to_response_with_context(
     let created_at = body.get("created").and_then(|v| v.as_u64()).unwrap_or(0);
     let finish_reason = choice.get("finish_reason").and_then(|v| v.as_str());
 
-    let reasoning = chat_reasoning_text(message);
+    let reasoning = extract_reasoning_field_text(message);
     let mut output = Vec::new();
     if let Some(reasoning_item) =
         chat_reasoning_to_response_output_item(reasoning.as_deref(), &response_id)
@@ -1425,29 +1418,10 @@ fn chat_reasoning_to_response_output_item(
     }))
 }
 
-fn chat_reasoning_text(message: &Value) -> Option<String> {
-    if let Some(reasoning) = extract_reasoning_field_text(message) {
-        return Some(reasoning);
-    }
-
-    if let Some(content) = message.get("content").and_then(|v| v.as_str()) {
-        if let Some((reasoning, _answer)) = split_leading_think_block(content) {
-            if !reasoning.is_empty() {
-                return Some(reasoning);
-            }
-        }
-    }
-
-    None
-}
-
 fn chat_message_to_response_output_item(message: &Value, response_id: &str) -> Option<Value> {
     let mut content = Vec::new();
 
     if let Some(text) = message.get("content").and_then(|v| v.as_str()) {
-        let text = split_leading_think_block(text)
-            .map(|(_reasoning, answer)| answer)
-            .unwrap_or_else(|| text.to_string());
         if !text.is_empty() {
             content.push(json!({
                 "type": "output_text",
@@ -2589,7 +2563,8 @@ mod tests {
             }]
         });
 
-        let result = chat_completion_to_response(input).unwrap();
+        let result =
+            chat_completion_to_response_with_context(input, &CodexToolContext::default()).unwrap();
 
         assert_eq!(result["output"][0]["type"], "reasoning");
         assert_eq!(
@@ -4229,7 +4204,8 @@ mod tests {
             }
         });
 
-        let result = chat_completion_to_response(input).unwrap();
+        let result =
+            chat_completion_to_response_with_context(input, &CodexToolContext::default()).unwrap();
 
         assert_eq!(result["id"], "resp_chatcmpl_1");
         assert_eq!(result["status"], "completed");
@@ -4583,47 +4559,11 @@ mod tests {
             }]
         });
 
-        let result = chat_completion_to_response(input).unwrap();
+        let result =
+            chat_completion_to_response_with_context(input, &CodexToolContext::default()).unwrap();
 
         assert_eq!(result["output"][0]["type"], "function_call");
         assert_eq!(result["output"][0]["arguments"], r#"{"a":1,"b":2}"#);
-    }
-
-    #[test]
-    fn chat_response_to_responses_splits_inline_think_content() {
-        let input = json!({
-            "id": "chatcmpl_think",
-            "object": "chat.completion",
-            "created": 123,
-            "model": "gpt-5.4",
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "<think>\nI should answer with pong.\n</think>\n\npong"
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 20,
-                "total_tokens": 30,
-                "completion_tokens_details": {"reasoning_tokens": 18}
-            }
-        });
-
-        let result = chat_completion_to_response(input).unwrap();
-
-        assert_eq!(result["output"][0]["type"], "reasoning");
-        assert_eq!(
-            result["output"][0]["summary"][0]["text"],
-            "I should answer with pong."
-        );
-        assert_eq!(result["output"][1]["type"], "message");
-        assert_eq!(result["output"][1]["content"][0]["text"], "pong");
-        assert_eq!(
-            result["usage"]["output_tokens_details"]["reasoning_tokens"],
-            18
-        );
     }
 
     #[test]
@@ -4637,7 +4577,8 @@ mod tests {
             }]
         });
 
-        let result = chat_completion_to_response(input).unwrap();
+        let result =
+            chat_completion_to_response_with_context(input, &CodexToolContext::default()).unwrap();
 
         assert_eq!(result["status"], "incomplete");
         assert_eq!(result["incomplete_details"]["reason"], "max_output_tokens");

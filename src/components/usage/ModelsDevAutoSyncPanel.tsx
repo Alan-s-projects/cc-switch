@@ -618,7 +618,6 @@ export function ModelsDevAutoSyncPanel() {
         title={t("usage.modelsDevAutoSync.enableConfirmTitle")}
         message={t("usage.modelsDevAutoSync.enableConfirmMessage")}
         confirmText={t("usage.modelsDevAutoSync.enableConfirmAction")}
-        variant="destructive"
         onConfirm={() => {
           setShowEnableConfirm(false);
           void saveConfig({ ...data.config, autoSyncEnabled: true });

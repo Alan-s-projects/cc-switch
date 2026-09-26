@@ -25,7 +25,7 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         ProxyError::UpstreamError { status, .. } => *status,
 
         // 超时错误：504 Gateway Timeout
-        ProxyError::Timeout(_) | ProxyError::StreamIdleTimeout(_) => 504,
+        ProxyError::Timeout(_) => 504,
 
         // 转发失败/连接失败：502 Bad Gateway
         ProxyError::ForwardFailed(_) => 502,
@@ -119,10 +119,6 @@ mod tests {
         assert_eq!(
             map_proxy_error_to_status(&ProxyError::TransformError("bad transform".to_string())),
             422
-        );
-        assert_eq!(
-            map_proxy_error_to_status(&ProxyError::StreamIdleTimeout(30)),
-            504
         );
     }
 

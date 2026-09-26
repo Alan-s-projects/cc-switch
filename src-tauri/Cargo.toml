@@ -1,6 +1,6 @@
 [package]
 name = "copilot-bridge-atlas"
-version = "4.2.1"
+version = "4.2.2"
 description = "Codex GitHub Copilot bridge with usage dashboard"
 authors = ["Alan's Projects"]
 license = "MIT"
@@ -14,10 +14,6 @@ rust-version = "1.85.0"
 name = "copilot_bridge_atlas_lib"
 crate-type = ["rlib"]
 doctest = false
-
-[features]
-default = []
-test-hooks = []
 
 [build-dependencies]
 tauri-build = { version = "2.4.0", features = [] }
@@ -49,18 +45,16 @@ async-stream = "0.3"
 bytes = "1.5"
 axum = "0.7"
 tower = "0.4"
-hyper = { version = "1.0", features = ["full"] }
-hyper-util = { version = "0.1", features = ["tokio", "http1", "client-legacy"] }
+hyper = { version = "1.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 http = "1"
 http-body-util = "0.1"
 rustls = "0.23"
 thiserror = "2.0"
-anyhow = "1.0"
 tempfile = "3"
 url = "2.5"
 auto-launch = "0.5"
 once_cell = "1.21.3"
-base64 = "0.22"
 rusqlite = { version = "0.31", features = ["bundled", "backup", "hooks"] }
 indexmap = { version = "2", features = ["serde"] }
 rust_decimal = "1.33"
@@ -69,7 +63,6 @@ sha2 = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-single-instance = "2"
-winreg = "0.52"
 windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_UI_Shell",
@@ -86,4 +79,4 @@ strip = "symbols"
 
 [dev-dependencies]
 serial_test = "3"
-tempfile = "3"
+base64 = "0.22"

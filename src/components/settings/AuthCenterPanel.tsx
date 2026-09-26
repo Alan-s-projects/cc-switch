@@ -1,11 +1,7 @@
 import { Github } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CopilotAuthSection } from "@/components/providers/forms/CopilotAuthSection";
-import type { ManagedAuthProvider } from "@/lib/api";
-
-export function AuthCenterPanel(_props: {
-  authScrollTarget?: ManagedAuthProvider | null;
-}) {
+export function AuthCenterPanel() {
   const { t } = useTranslation();
   return (
     <section className="rounded-xl border border-border/60 bg-card/60 p-6">

@@ -27,6 +27,5 @@ export function useProxyStatus() {
     isLoading: query.isLoading,
     isPending: toggle.isPending,
     toggleProxy: toggle.mutate,
-    toggleProxyAsync: toggle.mutateAsync,
   };
 }

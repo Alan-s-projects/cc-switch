@@ -44,8 +44,6 @@ pub enum AppError {
     Message(String),
     #[error("HTTP {status}: {body}")]
     HttpStatus { status: u16, body: String },
-    #[error("{en}")]
-    Localized { key: &'static str, en: String },
     #[error("Database error: {0}")]
     Database(String),
     #[error("No provider is configured")]
@@ -72,10 +70,6 @@ impl AppError {
             path: path.as_ref().display().to_string(),
             source,
         }
-    }
-
-    pub fn localized(key: &'static str, en: impl Into<String>) -> Self {
-        Self::Localized { key, en: en.into() }
     }
 }
 

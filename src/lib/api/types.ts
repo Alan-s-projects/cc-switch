@@ -1,1 +1,0 @@
-export type AppId = "codex";

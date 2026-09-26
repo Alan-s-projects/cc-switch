@@ -54,17 +54,15 @@ import { useImportExport } from "@/hooks/useImportExport";
 import { useTranslation } from "react-i18next";
 import type { SettingsFormState } from "@/hooks/useSettings";
 
-interface SettingsDialogProps {
-  open: boolean;
+interface SettingsPageProps {
   onOpenChange: (open: boolean) => void;
   onImportSuccess?: () => void | Promise<void>;
 }
 
 export function SettingsPage({
-  open,
   onOpenChange,
   onImportSuccess,
-}: SettingsDialogProps) {
+}: SettingsPageProps) {
   const { t } = useTranslation();
   const {
     settings,
@@ -92,19 +90,11 @@ export function SettingsPage({
     importConfig,
     exportConfig,
     clearSelection,
-    resetStatus,
   } = useImportExport({ onImportSuccess });
 
   const [activeTab, setActiveTab] = useState<string>("general");
   const [showRestartPrompt, setShowRestartPrompt] = useState(false);
   const tabScrollContainerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (open) {
-      setActiveTab("general");
-      resetStatus();
-    }
-  }, [open, resetStatus]);
 
   useEffect(() => {
     if (requiresRestart) {
@@ -119,16 +109,14 @@ export function SettingsPage({
   }, [activeTab]);
 
   const closeAfterSave = useCallback(() => {
-    // 保存成功后关闭：不再重置语言，避免需要“保存两次”才生效
     acknowledgeRestart();
     clearSelection();
-    resetStatus();
     onOpenChange(false);
-  }, [acknowledgeRestart, clearSelection, onOpenChange, resetStatus]);
+  }, [acknowledgeRestart, clearSelection, onOpenChange]);
 
   const handleSave = useCallback(async () => {
     try {
-      const result = await saveSettings(undefined, { silent: false });
+      const result = await saveSettings();
       if (!result) return;
       if (result.requiresRestart) {
         setShowRestartPrompt(true);
@@ -462,7 +450,7 @@ export function SettingsPage({
                 style={{ backgroundColor: "hsl(var(--background))" }}
               >
                 <div className="px-6 flex items-center justify-end gap-3">
-                  <Button onClick={handleSave} disabled={isSaving}>
+                  <Button onClick={handleSave} disabled={isLoading || isSaving}>
                     {isSaving ? (
                       <span className="inline-flex items-center gap-2">
                         <Loader2 className="h-4 w-4 animate-spin" />

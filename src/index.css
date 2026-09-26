@@ -89,15 +89,6 @@
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
 }
 
-[data-tauri-drag-region] {
-  -webkit-app-region: drag;
-}
-
-[data-tauri-no-drag],
-[data-tauri-drag-region] .no-drag {
-  -webkit-app-region: no-drag;
-}
-
 * {
   box-sizing: border-box;
   scrollbar-width: none;
@@ -137,11 +128,6 @@ html.dark {
     overflow-x: hidden;
   }
 
-  .border-default {
-    border-width: 1px;
-    border-color: hsl(var(--border));
-  }
-
   .border-border-default {
     border-color: hsl(var(--border));
   }
@@ -153,11 +139,6 @@ html.dark {
   .border-border-hover {
     border-color: hsl(var(--primary) / 0.4);
   }
-}
-
-input[type="password"]::-ms-reveal,
-input[type="password"]::-ms-clear {
-  display: none;
 }
 
 /*

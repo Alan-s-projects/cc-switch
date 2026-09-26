@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
-use crate::{AppError, AppType, Database};
+use crate::{AppError, Database};
 
 /// Device preferences live alongside Atlas's database. Unknown imported
 /// preferences remain opaque, so editing current settings does not erase them.
@@ -139,11 +139,11 @@ pub fn get_codex_override_dir() -> Option<PathBuf> {
         .map(resolve_override_path)
 }
 
-pub fn get_current_provider(_app_type: &AppType) -> Option<String> {
+pub fn get_current_provider() -> Option<String> {
     get_settings().current_provider_codex
 }
 
-pub fn set_current_provider(_app_type: &AppType, id: Option<&str>) -> Result<(), AppError> {
+pub fn set_current_provider(id: Option<&str>) -> Result<(), AppError> {
     let mut guard = settings_store()
         .write()
         .unwrap_or_else(|error| error.into_inner());
@@ -155,17 +155,14 @@ pub fn set_current_provider(_app_type: &AppType, id: Option<&str>) -> Result<(),
     Ok(())
 }
 
-pub fn get_effective_current_provider(
-    db: &Database,
-    app_type: &AppType,
-) -> Result<Option<String>, AppError> {
-    if let Some(id) = get_current_provider(app_type) {
-        if db.get_provider_by_id(&id, app_type.as_str())?.is_some() {
+pub fn get_effective_current_provider(db: &Database) -> Result<Option<String>, AppError> {
+    if let Some(id) = get_current_provider() {
+        if db.get_provider_by_id(&id, "codex")?.is_some() {
             return Ok(Some(id));
         }
-        set_current_provider(app_type, None)?;
+        set_current_provider(None)?;
     }
-    db.get_current_provider(app_type.as_str())
+    db.get_current_provider("codex")
 }
 
 pub fn effective_backup_interval_hours() -> u32 {

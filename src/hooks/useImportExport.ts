@@ -25,7 +25,6 @@ export interface UseImportExportResult {
   clearSelection: () => void;
   importConfig: () => Promise<void>;
   exportConfig: () => Promise<void>;
-  resetStatus: () => void;
 }
 
 export function useImportExport(
@@ -182,12 +181,6 @@ export function useImportExport(
     }
   }, [t]);
 
-  const resetStatus = useCallback(() => {
-    setStatus("idle");
-    setErrorMessage(null);
-    setBackupId(null);
-  }, []);
-
   return {
     selectedFile,
     status,
@@ -198,6 +191,5 @@ export function useImportExport(
     clearSelection,
     importConfig,
     exportConfig,
-    resetStatus,
   };
 }

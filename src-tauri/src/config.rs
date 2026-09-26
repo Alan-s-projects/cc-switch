@@ -237,16 +237,6 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
         }
     }
 
-    #[cfg(not(windows))]
-    {
-        if let Err(source) = fs::rename(&tmp, path) {
-            let _ = fs::remove_file(&tmp);
-            return Err(AppError::IoContext {
-                context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
-                source,
-            });
-        }
-    }
     Ok(())
 }
 
@@ -384,12 +374,12 @@ mod tests {
         // 核心保证：同一逻辑配置无论键的插入顺序如何，写出的字节序列必须一致。
         let mut a = Map::new();
         a.insert("env".to_string(), serde_json::json!({"PATH": "/usr/bin"}));
-        a.insert("model".to_string(), serde_json::json!("claude-sonnet-4-5"));
+        a.insert("model".to_string(), serde_json::json!("gpt-6-astra"));
         a.insert("permissions".to_string(), serde_json::json!({"allow": []}));
 
         let mut b = Map::new();
         b.insert("permissions".to_string(), serde_json::json!({"allow": []}));
-        b.insert("model".to_string(), serde_json::json!("claude-sonnet-4-5"));
+        b.insert("model".to_string(), serde_json::json!("gpt-6-astra"));
         b.insert("env".to_string(), serde_json::json!({"PATH": "/usr/bin"}));
 
         let sorted_a = sort_json_keys(&Value::Object(a));

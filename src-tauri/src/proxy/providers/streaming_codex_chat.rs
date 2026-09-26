@@ -2,9 +2,7 @@
 
 use super::codex_responses_sse as sse;
 use super::{
-    codex_chat_common::{
-        extract_reasoning_field_text, split_leading_think_block, strip_leading_think_open_tag,
-    },
+    codex_chat_common::extract_reasoning_field_text,
     transform_codex_chat::{
         chat_usage_to_responses_usage, custom_tool_input_from_chat_arguments,
         response_id_from_chat_id, response_status_from_finish_reason,
@@ -37,20 +35,6 @@ struct ReasoningItemState {
     done: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum InlineThinkMode {
-    #[default]
-    Detecting,
-    Reasoning,
-    Text,
-}
-
-#[derive(Debug, Default)]
-struct InlineThinkState {
-    mode: InlineThinkMode,
-    buffer: String,
-}
-
 #[derive(Debug, Default)]
 struct ToolCallState {
     output_index: Option<u32>,
@@ -73,7 +57,6 @@ struct ChatToResponsesState {
     next_output_index: u32,
     text: TextItemState,
     reasoning: ReasoningItemState,
-    inline_think: InlineThinkState,
     tools: BTreeMap<usize, ToolCallState>,
     next_tool_index_to_add: usize,
     output_items: Vec<(u32, Value)>,
@@ -95,7 +78,6 @@ impl Default for ChatToResponsesState {
             next_output_index: 0,
             text: TextItemState::default(),
             reasoning: ReasoningItemState::default(),
-            inline_think: InlineThinkState::default(),
             tools: BTreeMap::new(),
             next_tool_index_to_add: 0,
             output_items: Vec::new(),
@@ -145,19 +127,19 @@ impl ChatToResponsesState {
         };
 
         if let Some(delta) = choice.get("delta") {
-            if let Some(reasoning) = chat_delta_reasoning_text(delta) {
+            if let Some(reasoning) = extract_reasoning_field_text(delta) {
                 events.extend(self.push_reasoning_delta(&reasoning));
                 self.append_reasoning_to_active_tools(&reasoning);
             }
 
             if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
                 if !content.is_empty() {
-                    events.extend(self.push_content_delta(content));
+                    events.extend(self.finalize_reasoning());
+                    events.extend(self.push_text_delta(content));
                 }
             }
 
             if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-                events.extend(self.flush_inline_think_at_boundary());
                 let reasoning_for_tool_call = self.current_reasoning_text();
                 events.extend(self.finalize_reasoning());
                 for tool_call in tool_calls {
@@ -173,98 +155,6 @@ impl ChatToResponsesState {
         }
 
         events
-    }
-
-    fn push_content_delta(&mut self, delta: &str) -> Vec<Bytes> {
-        match self.inline_think.mode {
-            InlineThinkMode::Text => {
-                let mut events = self.finalize_reasoning();
-                events.extend(self.push_text_delta(delta));
-                events
-            }
-            InlineThinkMode::Detecting => {
-                self.inline_think.buffer.push_str(delta);
-                match leading_think_prefix_decision(&self.inline_think.buffer) {
-                    ThinkPrefixDecision::NeedMore => Vec::new(),
-                    ThinkPrefixDecision::Reasoning => {
-                        self.inline_think.mode = InlineThinkMode::Reasoning;
-                        self.drain_complete_inline_think()
-                    }
-                    ThinkPrefixDecision::Text => {
-                        self.inline_think.mode = InlineThinkMode::Text;
-                        let text = std::mem::take(&mut self.inline_think.buffer);
-                        let mut events = self.finalize_reasoning();
-                        events.extend(self.push_text_delta(&text));
-                        events
-                    }
-                }
-            }
-            InlineThinkMode::Reasoning => {
-                self.inline_think.buffer.push_str(delta);
-                self.drain_complete_inline_think()
-            }
-        }
-    }
-
-    fn drain_complete_inline_think(&mut self) -> Vec<Bytes> {
-        let Some((reasoning, answer)) = split_leading_think_block(&self.inline_think.buffer) else {
-            return Vec::new();
-        };
-
-        self.inline_think.mode = InlineThinkMode::Text;
-        self.inline_think.buffer.clear();
-
-        let mut events = Vec::new();
-        if !reasoning.is_empty() {
-            events.extend(self.push_reasoning_delta(&reasoning));
-            events.extend(self.finalize_reasoning());
-        }
-        if !answer.is_empty() {
-            events.extend(self.push_text_delta(&answer));
-        }
-
-        events
-    }
-
-    fn flush_inline_think_at_boundary(&mut self) -> Vec<Bytes> {
-        match self.inline_think.mode {
-            InlineThinkMode::Text => Vec::new(),
-            InlineThinkMode::Detecting => {
-                self.inline_think.mode = InlineThinkMode::Text;
-                let text = std::mem::take(&mut self.inline_think.buffer);
-                if text.is_empty() {
-                    Vec::new()
-                } else {
-                    let mut events = self.finalize_reasoning();
-                    events.extend(self.push_text_delta(&text));
-                    events
-                }
-            }
-            InlineThinkMode::Reasoning => {
-                let buffered = std::mem::take(&mut self.inline_think.buffer);
-                self.inline_think.mode = InlineThinkMode::Text;
-                if let Some((reasoning, answer)) = split_leading_think_block(&buffered) {
-                    let mut events = Vec::new();
-                    if !reasoning.is_empty() {
-                        events.extend(self.push_reasoning_delta(&reasoning));
-                        events.extend(self.finalize_reasoning());
-                    }
-                    if !answer.is_empty() {
-                        events.extend(self.push_text_delta(&answer));
-                    }
-                    return events;
-                }
-
-                let reasoning = strip_leading_think_open_tag(&buffered).unwrap_or(buffered);
-                if reasoning.is_empty() {
-                    Vec::new()
-                } else {
-                    let mut events = self.push_reasoning_delta(&reasoning);
-                    events.extend(self.finalize_reasoning());
-                    events
-                }
-            }
-        }
     }
 
     fn ensure_response_started(&mut self) -> Vec<Bytes> {
@@ -510,7 +400,6 @@ impl ChatToResponsesState {
     fn has_substantive_output(&self) -> bool {
         !self.text.text.trim().is_empty()
             || !self.reasoning.text.trim().is_empty()
-            || !self.inline_think.buffer.trim().is_empty()
             || !self.output_items.is_empty()
             || self.tools.values().any(|state| {
                 state.added
@@ -537,7 +426,6 @@ impl ChatToResponsesState {
         }
 
         let mut events = self.ensure_response_started();
-        events.extend(self.flush_inline_think_at_boundary());
         events.extend(self.finalize_reasoning());
         events.extend(self.finalize_text());
         events.extend(self.finalize_tools());
@@ -771,41 +659,6 @@ impl ChatToResponsesState {
     }
 }
 
-fn chat_delta_reasoning_text(delta: &Value) -> Option<String> {
-    extract_reasoning_field_text(delta)
-}
-
-enum ThinkPrefixDecision {
-    NeedMore,
-    Reasoning,
-    Text,
-}
-
-fn leading_think_prefix_decision(buffer: &str) -> ThinkPrefixDecision {
-    let trimmed = buffer.trim_start();
-    if trimmed.is_empty() {
-        return ThinkPrefixDecision::NeedMore;
-    }
-
-    if trimmed.starts_with("<think>") {
-        return ThinkPrefixDecision::Reasoning;
-    }
-
-    if "<think>".starts_with(trimmed) {
-        return ThinkPrefixDecision::NeedMore;
-    }
-
-    ThinkPrefixDecision::Text
-}
-
-/// Create a stream that converts Chat Completions SSE chunks into Responses SSE events.
-#[allow(dead_code)]
-pub fn create_responses_sse_stream_from_chat<E: std::error::Error + Send + 'static>(
-    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
-) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
-    create_responses_sse_stream_from_chat_with_context(stream, CodexToolContext::default())
-}
-
 /// Create a stream that converts Chat Completions SSE chunks into Responses SSE
 /// events while restoring Codex tool namespace/custom/tool_search metadata.
 pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error + Send + 'static>(
@@ -986,9 +839,9 @@ mod tests {
     #[tokio::test]
     async fn converts_reasoning_content_chat_sse_to_responses_reasoning_events() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_reason\",\"created\":123,\"model\":\"deepseek-reasoner\",\"choices\":[{\"delta\":{\"reasoning_content\":\"Need context. \"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_reason\",\"created\":123,\"model\":\"deepseek-reasoner\",\"choices\":[{\"delta\":{\"reasoning\":\"Now answer. \"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_reason\",\"created\":123,\"model\":\"deepseek-reasoner\",\"choices\":[{\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":6,\"total_tokens\":10,\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\n\n",
+            "data: {\"id\":\"chatcmpl_reason\",\"created\":123,\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"reasoning_content\":\"Need context. \"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_reason\",\"created\":123,\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"reasoning\":\"Now answer. \"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_reason\",\"created\":123,\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":6,\"total_tokens\":10,\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1007,21 +860,91 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn converts_inline_think_chat_sse_to_reasoning_without_leaking_tags() {
-        let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_minimax\",\"created\":123,\"model\":\"MiniMax-M2.7\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"<think>\\nNeed\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_minimax\",\"created\":123,\"model\":\"MiniMax-M2.7\",\"choices\":[{\"delta\":{\"content\":\" context.</think>\\n\\npong\"},\"finish_reason\":\"stop\"}]}\n\n",
-            "data: {\"id\":\"chatcmpl_minimax\",\"created\":123,\"model\":\"MiniMax-M2.7\",\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":6,\"total_tokens\":10,\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\n\n",
-        ])
-        .await;
+    async fn preserves_literal_think_tags_without_changing_structured_reasoning() {
+        let fragments = [" \n<thi", "nk>\nAn example.</th", "ink>\n\nVisible answer."];
+        let text = fragments.concat();
+        let usage = json!({
+            "prompt_tokens": 4,
+            "completion_tokens": 6,
+            "total_tokens": 10,
+            "completion_tokens_details": {"reasoning_tokens": 3}
+        });
 
-        assert!(output.contains("event: response.reasoning_summary_text.delta"));
-        assert!(output.contains("Need context."));
-        assert!(output.contains("\"text\":\"pong\""));
-        assert!(output.contains("\"reasoning_tokens\":3"));
-        assert!(!output.contains("<think>"));
-        assert!(!output.contains("</think>"));
-        assert!(output.contains("event: response.completed"));
+        for reasoning in [None, Some("Preserve the supplied example verbatim.")] {
+            let mut deltas = Vec::new();
+            if let Some(reasoning) = reasoning {
+                deltas.push(json!({"reasoning_content": reasoning}));
+            }
+            deltas.extend(fragments.iter().map(|text| json!({"content": text})));
+            let mut chunks = deltas
+                .into_iter()
+                .map(|delta| {
+                    format!(
+                        "data: {}\n\n",
+                        json!({
+                            "id": "chatcmpl_literal", "created": 123, "model": "gpt-6-astra",
+                            "choices": [{"delta": delta}]
+                        })
+                    )
+                })
+                .collect::<Vec<_>>();
+            chunks.push(format!(
+                "data: {}\n\n",
+                json!({
+                    "id": "chatcmpl_literal", "model": "gpt-6-astra",
+                    "choices": [{"delta": {}, "finish_reason": "stop"}], "usage": usage
+                })
+            ));
+            let output = collect(chunks.iter().map(String::as_str).collect()).await;
+            let events = parse_sse_events(&output);
+            let streamed = &events
+                .iter()
+                .find(|event| event["type"] == "response.completed")
+                .unwrap()["response"];
+            let response =
+                super::super::transform_codex_chat::chat_completion_to_response_with_context(
+                    json!({
+                        "id": "chatcmpl_literal", "created": 123, "model": "gpt-6-astra",
+                        "choices": [{
+                            "message": {
+                                "role": "assistant", "content": text,
+                                "reasoning_content": reasoning
+                            },
+                            "finish_reason": "stop"
+                        }],
+                        "usage": usage
+                    }),
+                    &CodexToolContext::default(),
+                )
+                .unwrap();
+
+            for response in [streamed, &response] {
+                assert_eq!(response["model"], "gpt-6-astra");
+                let items = response["output"].as_array().unwrap();
+                let message = items.iter().find(|item| item["type"] == "message").unwrap();
+                assert_eq!(message["content"][0]["text"], text);
+                let summary = items.iter().find(|item| item["type"] == "reasoning");
+                assert_eq!(
+                    summary.and_then(|item| item["summary"][0]["text"].as_str()),
+                    reasoning
+                );
+                assert_eq!(response["usage"]["output_tokens"], 6);
+                assert_eq!(
+                    response["usage"]["output_tokens_details"]["reasoning_tokens"],
+                    3
+                );
+            }
+            let streamed_text = events
+                .iter()
+                .filter(|event| event["type"] == "response.output_text.delta")
+                .filter_map(|event| event["delta"].as_str())
+                .collect::<String>();
+            assert_eq!(streamed_text, text);
+            assert_eq!(
+                output.contains("event: response.reasoning_summary_text.delta"),
+                reasoning.is_some()
+            );
+        }
     }
 
     #[tokio::test]
@@ -1042,8 +965,8 @@ mod tests {
     #[tokio::test]
     async fn preserves_tool_identity_across_empty_continuation_deltas() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_dashscope\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_dashscope\",\"type\":\"function\",\"function\":{\"name\":\"exec_command\",\"arguments\":\"{\"}}]}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_dashscope\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"\",\"type\":\"function\",\"function\":{\"name\":\"\",\"arguments\":\"\\\"cmd\\\":\\\"date\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_empty_continuation\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_empty_continuation\",\"type\":\"function\",\"function\":{\"name\":\"exec_command\",\"arguments\":\"{\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_empty_continuation\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"\",\"type\":\"function\",\"function\":{\"name\":\"\",\"arguments\":\"\\\"cmd\\\":\\\"date\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1065,7 +988,7 @@ mod tests {
         for item in [&done["item"], &completed["response"]["output"][0]] {
             assert_eq!(item["type"], "function_call");
             assert_eq!(item["name"], "exec_command");
-            assert_eq!(item["call_id"], "call_dashscope");
+            assert_eq!(item["call_id"], "call_empty_continuation");
             assert_eq!(item["arguments"], r#"{"cmd":"date"}"#);
         }
         assert!(!output.contains(r#""name":"""#));
@@ -1075,9 +998,9 @@ mod tests {
     #[tokio::test]
     async fn preserves_parallel_tool_order_when_earlier_name_arrives_late() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_parallel\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_first\",\"type\":\"function\",\"function\":{\"name\":\"\",\"arguments\":\"{\"}}]}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_parallel\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_second\",\"type\":\"function\",\"function\":{\"name\":\"second_tool\",\"arguments\":\"{\\\"value\\\":2}\"}}]}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_parallel\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"first_tool\",\"arguments\":\"\\\"value\\\":1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_parallel\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_first\",\"type\":\"function\",\"function\":{\"name\":\"\",\"arguments\":\"{\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_parallel\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_second\",\"type\":\"function\",\"function\":{\"name\":\"second_tool\",\"arguments\":\"{\\\"value\\\":2}\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_parallel\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"first_tool\",\"arguments\":\"\\\"value\\\":1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1108,8 +1031,8 @@ mod tests {
     #[tokio::test]
     async fn finalization_keeps_valid_call_after_unnamed_earlier_call() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_parallel_missing\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_missing\",\"type\":\"function\",\"function\":{\"arguments\":\"{}\"}}]}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_parallel_missing\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_valid\",\"type\":\"function\",\"function\":{\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"date\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_parallel_missing\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_missing\",\"type\":\"function\",\"function\":{\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_parallel_missing\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_valid\",\"type\":\"function\",\"function\":{\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"date\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1132,8 +1055,8 @@ mod tests {
     #[tokio::test]
     async fn dropped_only_tool_call_emits_failed_without_completed() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_drop\",\"model\":\"kimi-k3\",\"choices\":[{\"delta\":{\"content\":\"让我继续处理这个文件\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_drop\",\"model\":\"kimi-k3\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_bad\",\"type\":\"function\",\"function\":{\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_drop\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"content\":\"让我继续处理这个文件\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_drop\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_bad\",\"type\":\"function\",\"function\":{\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1151,8 +1074,8 @@ mod tests {
     #[tokio::test]
     async fn truncated_turn_stays_incomplete_instead_of_failed() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_trunc\",\"model\":\"kimi-k3\",\"choices\":[{\"delta\":{\"content\":\"我来看看\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_trunc\",\"model\":\"kimi-k3\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_cut\",\"type\":\"function\",\"function\":{\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":\"length\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_trunc\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"content\":\"我来看看\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_trunc\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_cut\",\"type\":\"function\",\"function\":{\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":\"length\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1167,7 +1090,7 @@ mod tests {
     #[tokio::test]
     async fn whitespace_only_tool_name_is_dropped() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_ws\",\"model\":\"kimi-k3\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_ws\",\"type\":\"function\",\"function\":{\"name\":\"   \",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_ws\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_ws\",\"type\":\"function\",\"function\":{\"name\":\"   \",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1181,7 +1104,7 @@ mod tests {
     #[tokio::test]
     async fn text_only_turn_still_completes() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_text\",\"model\":\"kimi-k3\",\"choices\":[{\"delta\":{\"content\":\"完成了\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_text\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"content\":\"完成了\"},\"finish_reason\":\"stop\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1205,8 +1128,8 @@ mod tests {
     #[tokio::test]
     async fn missing_index_with_distinct_ids_keeps_calls_separate() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_noidx\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}]}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_noidx\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_b\",\"type\":\"function\",\"function\":{\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_noidx\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_noidx\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_b\",\"type\":\"function\",\"function\":{\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1231,8 +1154,8 @@ mod tests {
     #[tokio::test]
     async fn missing_index_argument_fragments_stay_in_one_call() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_frag\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_frag\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"type\":\"function\",\"function\":{\"arguments\":\"\\\"a.txt\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_frag\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_frag\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"type\":\"function\",\"function\":{\"arguments\":\"\\\"a.txt\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1253,8 +1176,8 @@ mod tests {
     #[tokio::test]
     async fn missing_index_repeated_same_id_stays_in_one_call() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_rep\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_rep\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"\\\"a.txt\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_rep\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_rep\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"\\\"a.txt\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1273,7 +1196,7 @@ mod tests {
     #[tokio::test]
     async fn finalization_keeps_non_contiguous_tool_index() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_sparse\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":2,\"id\":\"call_sparse\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_sparse\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":2,\"id\":\"call_sparse\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1335,9 +1258,9 @@ mod tests {
     #[tokio::test]
     async fn preserves_reasoning_content_on_streamed_tool_call_items() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_tool_reasoning\",\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"reasoning_content\":\"Need file.\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_tool_reasoning\",\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\"}}]}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_tool_reasoning\",\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_tool_reasoning\",\"model\":\"gpt-6-luna\",\"choices\":[{\"delta\":{\"reasoning_content\":\"Need file.\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_tool_reasoning\",\"model\":\"gpt-6-luna\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_tool_reasoning\",\"model\":\"gpt-6-luna\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1350,10 +1273,10 @@ mod tests {
     #[tokio::test]
     async fn preserves_late_reasoning_content_on_streamed_tool_call_items() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_tool_late_reasoning\",\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\"}}]}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_tool_late_reasoning\",\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_tool_late_reasoning\",\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"reasoning_content\":\"Need file.\"}}]}\n\n",
-            "data: {\"id\":\"chatcmpl_tool_late_reasoning\",\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_tool_late_reasoning\",\"model\":\"gpt-6-luna\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_tool_late_reasoning\",\"model\":\"gpt-6-luna\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_tool_late_reasoning\",\"model\":\"gpt-6-luna\",\"choices\":[{\"delta\":{\"reasoning_content\":\"Need file.\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_tool_late_reasoning\",\"model\":\"gpt-6-luna\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1430,7 +1353,10 @@ mod tests {
         let upstream = stream::iter(vec![Err::<Bytes, std::io::Error>(std::io::Error::other(
             "boom",
         ))]);
-        let converted = create_responses_sse_stream_from_chat(upstream);
+        let converted = create_responses_sse_stream_from_chat_with_context(
+            upstream,
+            CodexToolContext::default(),
+        );
         let bytes: Vec<Bytes> = converted.map(|item| item.unwrap()).collect().await;
         let output = String::from_utf8(bytes.concat()).unwrap();
 

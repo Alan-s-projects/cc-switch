@@ -1,4 +1,5 @@
-mod app_config;
+#![warn(unused_crate_dependencies)]
+
 mod app_store;
 mod auto_launch;
 mod codex_config;
@@ -19,15 +20,10 @@ mod store;
 mod tray;
 mod usage_events;
 
-pub use app_config::AppType;
-pub use commands::*;
-pub use database::Database;
-pub use error::AppError;
-
-pub use provider::{Provider, ProviderMeta};
-pub use services::ProxyService;
-pub use settings::{update_settings, AppSettings};
-pub use store::AppState;
+pub(crate) use database::Database;
+pub(crate) use error::AppError;
+pub(crate) use provider::{Provider, ProviderMeta};
+pub(crate) use store::AppState;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -531,7 +527,7 @@ pub fn run() {
 // ============================================================
 
 /// Stop the listener without changing its saved switch or any client files.
-pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
+pub(crate) async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
     if let Some(state) = app_handle.try_state::<store::AppState>() {
         if let Err(error) = state.proxy_service.shutdown().await {
             log::warn!("Stopping Copilot bridge failed: {error}");
@@ -634,26 +630,12 @@ fn window_state_flags() -> StateFlags {
 
 /// 当前应用的退出路径会拦截 `ExitRequested` 并最终直接 `std::process::exit(0)`，
 /// 这里需要在真正结束进程前手动落盘，避免 window-state 插件的默认退出钩子被绕过。
-pub fn save_window_state_before_exit(app_handle: &tauri::AppHandle) {
+pub(crate) fn save_window_state_before_exit(app_handle: &tauri::AppHandle) {
     if let Err(err) = app_handle.save_window_state(window_state_flags()) {
         log::error!("Failed to save window state before exit: {err}");
     } else {
         log::info!("Saved window state before exit");
     }
-}
-
-/// Release the single-instance lock before spawning the replacement process.
-pub fn destroy_single_instance_lock(app_handle: &tauri::AppHandle) {
-    tauri_plugin_single_instance::destroy(app_handle);
-}
-
-/// Restart directly after removing the tray icon and releasing the instance lock.
-/// The caller saves window state and stops the server because process::restart
-/// bypasses the event loop's Exit hooks.
-pub fn restart_process(app_handle: &tauri::AppHandle) -> ! {
-    remove_tray_icon_before_exit(app_handle);
-    destroy_single_instance_lock(app_handle);
-    tauri::process::restart(&app_handle.env());
 }
 
 #[cfg(test)]

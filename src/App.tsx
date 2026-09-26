@@ -33,7 +33,7 @@ export default function App() {
   const queryClient = useQueryClient();
   const [view, setView] = useState<View>("provider");
   const { status } = useProxyStatus();
-  const { data, isLoading, refetch } = useProvidersQuery("codex");
+  const { data, isLoading, refetch } = useProvidersQuery();
   const provider =
     data?.providers[data.currentProviderId] ??
     Object.values(data?.providers ?? {})[0];
@@ -106,7 +106,6 @@ export default function App() {
       >
         {view === "settings" ? (
           <SettingsPage
-            open
             onOpenChange={() => setView("provider")}
             onImportSuccess={refreshData}
           />

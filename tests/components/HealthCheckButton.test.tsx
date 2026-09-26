@@ -72,7 +72,7 @@ describe("Copilot connectivity health check", () => {
     fireEvent.click(healthCheck());
     await waitFor(() => expect(healthCheck()).toBeDisabled());
     expect(healthCheck()).toHaveAttribute("aria-busy", "true");
-    expect(mocks.probe).toHaveBeenCalledWith("codex", providerId);
+    expect(mocks.probe.mock.calls[0][0]).toBe(providerId);
     fireEvent.click(healthCheck());
     expect(mocks.probe).toHaveBeenCalledTimes(1);
 
@@ -160,7 +160,7 @@ describe("Copilot connectivity health check", () => {
       fireEvent.click(healthCheck());
       await waitFor(() => expect(mocks.success).toHaveBeenCalledTimes(1));
       expect(mocks.probe).toHaveBeenCalledTimes(2);
-      expect(mocks.probe).toHaveBeenLastCalledWith("codex", providerId);
+      expect(mocks.probe.mock.lastCall?.[0]).toBe(providerId);
       await waitFor(() => expect(healthCheck()).toBeEnabled());
     },
   );

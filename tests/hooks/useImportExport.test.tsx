@@ -224,7 +224,7 @@ describe("useImportExport Hook", () => {
     expect(toastErrorMock).toHaveBeenCalledTimes(1);
   });
 
-  it("should restore initial values when clearing selection and resetting status", async () => {
+  it("should restore initial values when clearing selection", async () => {
     openFileDialogMock.mockResolvedValue("/config.json");
     const { result } = renderHook(() => useImportExport());
 
@@ -238,10 +238,6 @@ describe("useImportExport Hook", () => {
 
     expect(result.current.selectedFile).toBe("");
     expect(result.current.status).toBe("idle");
-
-    act(() => {
-      result.current.resetStatus();
-    });
 
     expect(result.current.errorMessage).toBeNull();
     expect(result.current.backupId).toBeNull();

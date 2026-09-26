@@ -94,7 +94,7 @@ describe("Copilot account card", () => {
     expect(mocks.probe).not.toHaveBeenCalled();
     fireEvent.click(within(card).getByRole("button", { name: "Health check" }));
     await waitFor(() =>
-      expect(mocks.probe).toHaveBeenCalledWith("codex", provider.id),
+      expect(mocks.probe.mock.calls[0]?.[0]).toBe(provider.id),
     );
   });
 });

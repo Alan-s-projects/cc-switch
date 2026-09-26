@@ -253,47 +253,7 @@ impl<'a> UsageLogger<'a> {
         .map_err(|error| AppError::Database(format!("查询 usage request_id 失败: {error}")))
     }
 
-    /// 记录失败的请求
-    ///
-    /// 用于记录无法从上游获取 usage 信息的失败请求
-    #[allow(dead_code, clippy::too_many_arguments)]
-    pub fn log_error(
-        &self,
-        request_id: String,
-        provider_id: String,
-        app_type: String,
-        model: String,
-        status_code: u16,
-        error_message: String,
-        latency_ms: u64,
-    ) -> Result<(), AppError> {
-        let request_model = model.clone();
-        let log = RequestLog {
-            request_id,
-            provider_id,
-            app_type,
-            model,
-            request_model,
-            // 错误行未经过计价，留空（回填的 has_usage 闸门也不会碰全 0 行）
-            pricing_model: String::new(),
-            usage: TokenUsage::default(),
-            cost: None,
-            latency_ms,
-            first_token_ms: None,
-            status_code,
-            error_message: Some(error_message),
-            session_id: None,
-            provider_type: None,
-            is_streaming: false,
-            cost_multiplier: "1.0".to_string(),
-        };
-
-        self.log_request(&log)
-    }
-
     /// 记录失败的请求（带更多上下文信息）
-    ///
-    /// 相比 log_error，这个方法接受更多参数以提供完整的请求上下文
     #[allow(clippy::too_many_arguments)]
     pub fn log_error_with_context(
         &self,
@@ -633,31 +593,52 @@ mod tests {
     }
 
     #[test]
-    fn test_log_error() -> Result<(), AppError> {
+    fn test_log_error_with_context() -> Result<(), AppError> {
         let db = Database::memory()?;
         let logger = UsageLogger::new(&db);
 
-        logger.log_error(
+        logger.log_error_with_context(
             "req-error".to_string(),
             "provider-1".to_string(),
-            "claude".to_string(),
+            "codex".to_string(),
             "unknown-model".to_string(),
             500,
             "Internal Server Error".to_string(),
             50,
+            true,
+            Some("session-error".to_string()),
+            Some("github_copilot".to_string()),
         )?;
 
         // 验证错误记录已插入
         let conn = crate::database::lock_conn!(db.conn);
-        let (status, error): (i64, Option<String>) = conn
+        let (status, error, streaming, session, provider_type): (
+            i64,
+            Option<String>,
+            bool,
+            Option<String>,
+            Option<String>,
+        ) = conn
             .query_row(
-                "SELECT status_code, error_message FROM proxy_request_logs WHERE request_id = 'req-error'",
+                "SELECT status_code, error_message, is_streaming, session_id, provider_type
+                 FROM proxy_request_logs WHERE request_id = 'req-error'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .unwrap();
         assert_eq!(status, 500);
         assert_eq!(error, Some("Internal Server Error".to_string()));
+        assert!(streaming);
+        assert_eq!(session.as_deref(), Some("session-error"));
+        assert_eq!(provider_type.as_deref(), Some("github_copilot"));
         Ok(())
     }
 }

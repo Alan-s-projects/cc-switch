@@ -21,17 +21,6 @@ fn openai_cache_write_tokens(usage: &Value) -> u32 {
         .unwrap_or(0) as u32
 }
 
-/// Session 日志 request_id 前缀，与 `session_usage.rs` 中的格式保持一致
-pub const SESSION_REQUEST_ID_PREFIX: &str = "session:";
-
-/// Scope response identities to the client/provider to avoid collisions.
-pub fn dedup_scope_for_app<'a>(
-    app_type: &'a str,
-    provider_id: &'a str,
-) -> Option<(&'a str, &'a str)> {
-    Some((app_type, provider_id))
-}
-
 fn response_id(body: &Value, field: &str) -> Option<String> {
     body.get(field)
         .and_then(Value::as_str)
@@ -55,18 +44,11 @@ pub struct TokenUsage {
 }
 
 impl TokenUsage {
-    /// Generate a stable request ID. Existing unscoped IDs remain compatible with
-    /// `session:{message_id}` 主键收敛；其他协议加入 app/provider 作用域，避免
-    /// 不同上游复用 envelope id 时互相覆盖。
-    pub fn dedup_request_id(&self, scope: Option<(&str, &str)>) -> String {
+    /// Scope upstream response identities to the client and provider.
+    pub fn dedup_request_id(&self, app_type: &str, provider_id: &str) -> String {
         self.message_id
             .as_ref()
-            .map(|message_id| match scope {
-                Some((app_type, provider_id)) => {
-                    format!("{SESSION_REQUEST_ID_PREFIX}{app_type}:{provider_id}:{message_id}")
-                }
-                None => format!("{SESSION_REQUEST_ID_PREFIX}{message_id}"),
-            })
+            .map(|message_id| format!("session:{app_type}:{provider_id}:{message_id}"))
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
     }
 
@@ -247,7 +229,7 @@ mod tests {
         let usage = TokenUsage::from_codex_response(&response).unwrap();
         assert_eq!(usage.message_id.as_deref(), Some("resp_123"));
         assert_eq!(
-            usage.dedup_request_id(Some(("codex", "provider-a"))),
+            usage.dedup_request_id("codex", "provider-a"),
             "session:codex:provider-a:resp_123"
         );
 
@@ -258,7 +240,7 @@ mod tests {
         let empty_usage = TokenUsage::from_codex_response(&empty).unwrap();
         assert!(empty_usage.message_id.is_none());
         assert!(!empty_usage
-            .dedup_request_id(Some(("codex", "provider-a")))
+            .dedup_request_id("codex", "provider-a")
             .starts_with("session:"));
     }
 

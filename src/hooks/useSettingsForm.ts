@@ -24,9 +24,5 @@ export function useSettingsForm() {
     );
   }, []);
 
-  const resetSettings = useCallback((saved: Settings | null) => {
-    if (saved) setSettings(normalizeSettings(saved));
-  }, []);
-
-  return { settings, isLoading, updateSettings, resetSettings };
+  return { settings, isLoading, updateSettings };
 }

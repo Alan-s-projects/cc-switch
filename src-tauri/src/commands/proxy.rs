@@ -2,7 +2,6 @@
 //!
 //! 提供前端调用的 API 接口
 
-use crate::error::AppError;
 use crate::proxy::types::*;
 use crate::store::AppState;
 
@@ -64,49 +63,17 @@ pub async fn update_global_proxy_config(
     state.proxy_service.update_config(&current).await
 }
 
-async fn get_default_cost_multiplier_internal(
-    state: &AppState,
-    app_type: &str,
-) -> Result<String, AppError> {
-    let db = &state.db;
-    db.get_default_cost_multiplier(app_type).await
-}
-
-#[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
-pub async fn get_default_cost_multiplier_test_hook(
-    state: &AppState,
-    app_type: &str,
-) -> Result<String, AppError> {
-    get_default_cost_multiplier_internal(state, app_type).await
-}
-
 /// 获取默认成本倍率
 #[tauri::command]
 pub async fn get_default_cost_multiplier(
     state: tauri::State<'_, AppState>,
     app_type: String,
 ) -> Result<String, String> {
-    get_default_cost_multiplier_internal(&state, &app_type)
+    state
+        .db
+        .get_default_cost_multiplier(&app_type)
         .await
         .map_err(|e| e.to_string())
-}
-
-async fn set_default_cost_multiplier_internal(
-    state: &AppState,
-    app_type: &str,
-    value: &str,
-) -> Result<(), AppError> {
-    let db = &state.db;
-    db.set_default_cost_multiplier(app_type, value).await
-}
-
-#[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
-pub async fn set_default_cost_multiplier_test_hook(
-    state: &AppState,
-    app_type: &str,
-    value: &str,
-) -> Result<(), AppError> {
-    set_default_cost_multiplier_internal(state, app_type, value).await
 }
 
 /// 设置默认成本倍率
@@ -116,25 +83,11 @@ pub async fn set_default_cost_multiplier(
     app_type: String,
     value: String,
 ) -> Result<(), String> {
-    set_default_cost_multiplier_internal(&state, &app_type, &value)
+    state
+        .db
+        .set_default_cost_multiplier(&app_type, &value)
         .await
         .map_err(|e| e.to_string())
-}
-
-async fn get_pricing_model_source_internal(
-    state: &AppState,
-    app_type: &str,
-) -> Result<String, AppError> {
-    let db = &state.db;
-    db.get_pricing_model_source(app_type).await
-}
-
-#[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
-pub async fn get_pricing_model_source_test_hook(
-    state: &AppState,
-    app_type: &str,
-) -> Result<String, AppError> {
-    get_pricing_model_source_internal(state, app_type).await
 }
 
 /// 获取计费模式来源
@@ -143,27 +96,11 @@ pub async fn get_pricing_model_source(
     state: tauri::State<'_, AppState>,
     app_type: String,
 ) -> Result<String, String> {
-    get_pricing_model_source_internal(&state, &app_type)
+    state
+        .db
+        .get_pricing_model_source(&app_type)
         .await
         .map_err(|e| e.to_string())
-}
-
-async fn set_pricing_model_source_internal(
-    state: &AppState,
-    app_type: &str,
-    value: &str,
-) -> Result<(), AppError> {
-    let db = &state.db;
-    db.set_pricing_model_source(app_type, value).await
-}
-
-#[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
-pub async fn set_pricing_model_source_test_hook(
-    state: &AppState,
-    app_type: &str,
-    value: &str,
-) -> Result<(), AppError> {
-    set_pricing_model_source_internal(state, app_type, value).await
 }
 
 /// 设置计费模式来源
@@ -173,7 +110,9 @@ pub async fn set_pricing_model_source(
     app_type: String,
     value: String,
 ) -> Result<(), String> {
-    set_pricing_model_source_internal(&state, &app_type, &value)
+    state
+        .db
+        .set_pricing_model_source(&app_type, &value)
         .await
         .map_err(|e| e.to_string())
 }

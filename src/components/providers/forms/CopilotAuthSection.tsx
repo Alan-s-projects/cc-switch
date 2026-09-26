@@ -537,5 +537,3 @@ const CopilotAccountAvatar: React.FC<{ account: GitHubAccount }> = ({
     />
   );
 };
-
-export default CopilotAuthSection;

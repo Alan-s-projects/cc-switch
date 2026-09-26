@@ -6,7 +6,7 @@ use super::{
     content_encoding::{decompress_body_with_limit, get_content_encoding, DecompressError},
     forwarder::ActiveConnectionGuard,
     handler_config::{StreamUsageEventFilter, UsageParserConfig},
-    handler_context::{RequestContext, StreamingTimeoutConfig},
+    handler_context::RequestContext,
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
     upstream_response::{ProxyResponse, MAX_RESPONSE_BODY_BYTES},
@@ -19,12 +19,9 @@ use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures::stream::{Stream, StreamExt};
 use serde_json::Value;
-use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use tokio::sync::Mutex;
 
@@ -76,29 +73,14 @@ pub(crate) fn strip_entity_headers_for_rebuilt_body(headers: &mut HeaderMap) {
 
 /// 读取响应体并在需要时解压，确保 headers 与返回 body 一致。
 ///
-/// `body_timeout`: 整包超时。当非零时用 `tokio::time::timeout` 包住 `.bytes()` 调用，
-/// 防止上游发完响应头后卡住 body 导致请求永远挂住。
-/// `Duration::ZERO` leaves body reads without a local deadline.
+/// Allow long Codex responses to finish without an additional local body deadline.
 pub(crate) async fn read_decoded_body(
     response: ProxyResponse,
     tag: &str,
-    body_timeout: Duration,
 ) -> Result<(HeaderMap, http::StatusCode, Bytes), ProxyError> {
     let mut headers = response.headers().clone();
     let status = response.status();
-    let bytes_future = response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES);
-    let raw_bytes = if body_timeout.is_zero() {
-        bytes_future.await?
-    } else {
-        tokio::time::timeout(body_timeout, bytes_future)
-            .await
-            .map_err(|_| {
-                ProxyError::Timeout(format!(
-                    "响应体读取超时: {}s（上游发完响应头后 body 未到达）",
-                    body_timeout.as_secs()
-                ))
-            })??
-    };
+    let raw_bytes = response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await?;
 
     log::debug!(
         "[{tag}] 已接收上游响应体: status={}, bytes={}, headers={}",
@@ -187,17 +169,9 @@ pub async fn handle_streaming(
     // 创建使用量收集器；关闭 usage logging 时不要在流式热路径上解析每个 SSE event。
     let usage_collector = create_usage_collector(ctx, state, status.as_u16(), parser_config);
 
-    // 获取流式超时配置
-    let timeout_config = ctx.streaming_timeout_config();
-
-    // 创建带日志和超时的透传流
-    let logged_stream = create_logged_passthrough_stream(
-        stream,
-        ctx.tag,
-        usage_collector,
-        timeout_config,
-        connection_guard,
-    );
+    // 创建带日志的透传流
+    let logged_stream =
+        create_logged_passthrough_stream(stream, ctx.tag, usage_collector, connection_guard);
 
     let body = axum::body::Body::from_stream(logged_stream);
     match builder.body(body) {
@@ -218,10 +192,7 @@ pub async fn handle_non_streaming(
     // guard 在函数 scope 内持有，整包响应读取完成后随函数返回一并 drop
     _connection_guard: Option<ActiveConnectionGuard>,
 ) -> Result<Response, ProxyError> {
-    // Allow long Codex responses to finish without a local body deadline.
-    let body_timeout = Duration::ZERO;
-    let (mut response_headers, status, body_bytes) =
-        read_decoded_body(response, ctx.tag, body_timeout).await?;
+    let (mut response_headers, status, body_bytes) = read_decoded_body(response, ctx.tag).await?;
     strip_hop_by_hop_response_headers(&mut response_headers);
 
     log::debug!(
@@ -639,8 +610,7 @@ async fn log_usage_internal(
         model
     };
 
-    let dedup_scope = super::usage::parser::dedup_scope_for_app(app_type, provider_id);
-    let request_id = usage.dedup_request_id(dedup_scope);
+    let request_id = usage.dedup_request_id(app_type, provider_id);
 
     log::debug!(
         "[{app_type}] 记录请求日志: id={request_id}, provider={provider_id}, model={model}, streaming={is_streaming}, status={status_code}, latency_ms={latency_ms}, first_token_ms={first_token_ms:?}, session={}, input={}, output={}, cache_read={}, cache_creation={}",
@@ -671,12 +641,11 @@ async fn log_usage_internal(
     }
 }
 
-/// 创建带日志记录和超时控制的透传流
+/// Forward a stream with usage logging and no local idle deadline.
 pub fn create_logged_passthrough_stream(
     stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
     tag: &'static str,
     usage_collector: Option<SseUsageCollector>,
-    timeout_config: StreamingTimeoutConfig,
     connection_guard: Option<ActiveConnectionGuard>,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     async_stream::stream! {
@@ -689,46 +658,10 @@ pub fn create_logged_passthrough_stream(
             collector.is_some() || log::log_enabled!(log::Level::Debug);
         let mut is_first_chunk = true;
 
-        // 超时配置
-        let first_byte_timeout = if timeout_config.first_byte_timeout > 0 {
-            Some(Duration::from_secs(timeout_config.first_byte_timeout))
-        } else {
-            None
-        };
-        let idle_timeout = if timeout_config.idle_timeout > 0 {
-            Some(Duration::from_secs(timeout_config.idle_timeout))
-        } else {
-            None
-        };
-
         tokio::pin!(stream);
 
         loop {
-            // 选择超时时间：首字节超时或静默期超时
-            let timeout_duration = if is_first_chunk {
-                first_byte_timeout
-            } else {
-                idle_timeout
-            };
-
-            let chunk_result = match timeout_duration {
-                Some(duration) => {
-                    match tokio::time::timeout(duration, stream.next()).await {
-                        Ok(Some(chunk)) => Some(chunk),
-                        Ok(None) => None, // 流结束
-                        Err(_) => {
-                            // 超时
-                            let timeout_type = if is_first_chunk { "首字节" } else { "静默期" };
-                            log::error!("[{tag}] 流式响应{}超时 ({}秒)", timeout_type, duration.as_secs());
-                            yield Err(std::io::Error::other(format!("流式响应{timeout_type}超时")));
-                            break;
-                        }
-                    }
-                }
-                None => stream.next().await, // 无超时限制
-            };
-
-            match chunk_result {
+            match stream.next().await {
                 Some(Ok(bytes)) => {
                     if is_first_chunk {
                         log::debug!(
@@ -893,7 +826,7 @@ mod tests {
         let response =
             ProxyResponse::buffered(http::StatusCode::OK, headers, Bytes::from(compressed));
 
-        let result = read_decoded_body(response, "test", Duration::ZERO).await;
+        let result = read_decoded_body(response, "test").await;
         assert!(
             matches!(result, Err(ProxyError::ResponseBodyTooLarge(_))),
             "压缩炸弹应被拒绝而不是完整展开: {:?}",

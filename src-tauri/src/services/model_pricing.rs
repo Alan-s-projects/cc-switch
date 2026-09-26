@@ -106,16 +106,12 @@ pub fn model_pricing_file_path() -> PathBuf {
 fn normalize_decimal(label: &str, value: &str) -> Result<String, AppError> {
     let value = value.trim();
     let parsed = Decimal::from_str(value).map_err(|error| {
-        AppError::localized(
-            "usage.invalidPrice",
-            format!("{label} price is invalid: {value} - {error}"),
-        )
+        AppError::Message(format!("{label} price is invalid: {value} - {error}"))
     })?;
     if parsed < Decimal::ZERO {
-        return Err(AppError::localized(
-            "usage.invalidPrice",
-            format!("{label} price must be non-negative: {value}"),
-        ));
+        return Err(AppError::Message(format!(
+            "{label} price must be non-negative: {value}"
+        )));
     }
     Ok(value.to_string())
 }
@@ -124,16 +120,10 @@ fn normalize_pricing(entry: ModelPricingInfo) -> Result<ModelPricingInfo, AppErr
     let model_id = entry.model_id.trim().to_string();
     let display_name = entry.display_name.trim().to_string();
     if model_id.is_empty() {
-        return Err(AppError::localized(
-            "usage.modelIdRequired",
-            "Model ID is required",
-        ));
+        return Err(AppError::Message("Model ID is required".into()));
     }
     if display_name.is_empty() {
-        return Err(AppError::localized(
-            "usage.displayNameRequired",
-            "Display name is required",
-        ));
+        return Err(AppError::Message("Display name is required".into()));
     }
 
     Ok(ModelPricingInfo {
@@ -459,10 +449,7 @@ pub fn update_model_pricing_batch(
 pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppError> {
     let model_id = model_id.trim();
     if model_id.is_empty() {
-        return Err(AppError::localized(
-            "usage.modelIdRequired",
-            "Model ID is required",
-        ));
+        return Err(AppError::Message("Model ID is required".into()));
     }
     require_gpt_pricing(model_id)?;
 

@@ -20,16 +20,6 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: tMock }),
 }));
 
-vi.mock("@/hooks/useProxyStatus", () => ({
-  useProxyStatus: () => ({
-    isRunning: false,
-    takeoverStatus: null,
-    startProxyServer: vi.fn(),
-    stopWithRestore: vi.fn(),
-    isPending: false,
-  }),
-}));
-
 interface SettingsMock {
   settings: any;
   isLoading: boolean;
@@ -43,7 +33,6 @@ interface SettingsMock {
   resetAppConfigDir: ReturnType<typeof vi.fn>;
   saveSettings: ReturnType<typeof vi.fn>;
   autoSaveSettings: ReturnType<typeof vi.fn>;
-  resetSettings: ReturnType<typeof vi.fn>;
   acknowledgeRestart: ReturnType<typeof vi.fn>;
 }
 
@@ -67,7 +56,6 @@ const createSettingsMock = (overrides: Partial<SettingsMock> = {}) => {
     resetAppConfigDir: vi.fn(),
     saveSettings: vi.fn().mockResolvedValue({ requiresRestart: false }),
     autoSaveSettings: vi.fn().mockResolvedValue({ requiresRestart: false }),
-    resetSettings: vi.fn(),
     acknowledgeRestart: vi.fn(),
   };
 
@@ -84,7 +72,6 @@ interface ImportExportMock {
   importConfig: ReturnType<typeof vi.fn>;
   exportConfig: ReturnType<typeof vi.fn>;
   clearSelection: ReturnType<typeof vi.fn>;
-  resetStatus: ReturnType<typeof vi.fn>;
 }
 
 const createImportExportMock = (overrides: Partial<ImportExportMock> = {}) => {
@@ -98,7 +85,6 @@ const createImportExportMock = (overrides: Partial<ImportExportMock> = {}) => {
     importConfig: vi.fn(),
     exportConfig: vi.fn(),
     clearSelection: vi.fn(),
-    resetStatus: vi.fn(),
   };
 
   return { ...base, ...overrides };
@@ -217,7 +203,7 @@ const renderSettingsPage = (
   });
   return render(
     <QueryClientProvider client={client}>
-      <SettingsPage open={true} onOpenChange={vi.fn()} {...props} />
+      <SettingsPage onOpenChange={vi.fn()} {...props} />
     </QueryClientProvider>,
   );
 };
@@ -255,27 +241,14 @@ describe("SettingsPage Component", () => {
     expect(document.querySelector(".animate-spin")).toBeInTheDocument();
   });
 
-  it("should reset import/export status when dialog transitions to open", () => {
-    const client = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
-    const { rerender } = render(
-      <QueryClientProvider client={client}>
-        <SettingsPage open={false} onOpenChange={vi.fn()} />
-      </QueryClientProvider>,
-    );
-
-    importExportMock.resetStatus.mockClear();
-
-    rerender(
-      <QueryClientProvider client={client}>
-        <SettingsPage open={true} onOpenChange={vi.fn()} />
-      </QueryClientProvider>,
-    );
-
-    expect(importExportMock.resetStatus).toHaveBeenCalledTimes(1);
+  it("disables Advanced Save while directory discovery is still loading", () => {
+    settingsMock = createSettingsMock({ isLoading: true });
+    renderSettingsPage();
+    fireEvent.click(screen.getByText("settings.tabAdvanced"));
+    const save = screen.getByRole("button", { name: /common\.save/ });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(settingsMock.saveSettings).not.toHaveBeenCalled();
   });
 
   it("should render general and advanced tabs and trigger child callbacks", async () => {
@@ -379,7 +352,6 @@ describe("SettingsPage Component", () => {
     await waitFor(() => {
       expect(settingsMock.saveSettings).toHaveBeenCalledTimes(1);
       expect(importExportMock.clearSelection).toHaveBeenCalledTimes(1);
-      expect(importExportMock.resetStatus).toHaveBeenCalledTimes(2);
       expect(settingsMock.acknowledgeRestart).toHaveBeenCalledTimes(1);
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
