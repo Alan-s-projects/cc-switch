@@ -179,9 +179,9 @@ export function UsageDashboard({
     >
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-2">
         <div className="flex flex-col gap-1">
-          <h2 className="text-2xl font-bold tracking-tight">
+          <h1 className="text-2xl font-bold tracking-tight">
             {t("usage.title")}
-          </h2>
+          </h1>
           <p className="text-sm text-muted-foreground">{t("usage.subtitle")}</p>
         </div>
 

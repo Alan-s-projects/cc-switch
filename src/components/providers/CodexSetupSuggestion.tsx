@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Copy, FolderSearch, RefreshCw } from "lucide-react";
+import { Copy, Eye, FolderSearch, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -177,96 +177,150 @@ export function CodexSetupSuggestion() {
     }
   };
   return (
-    <section className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden px-6 pb-4">
-      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
-        <div className="flex shrink-0 gap-2">
-          <Button
-            size="sm"
-            variant={target === "copilot" ? "default" : "outline"}
-            aria-pressed={target === "copilot"}
-            onClick={() => setTarget("copilot")}
-          >
-            Connect through Copilot
-          </Button>
-          <Button
-            size="sm"
-            variant={target === "openai" ? "default" : "outline"}
-            aria-pressed={target === "openai"}
-            onClick={() => setTarget("openai")}
-          >
-            Return to OpenAI sign-in
-          </Button>
+    <section className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-6 pb-4 pt-4">
+      <div className="flex shrink-0 items-start justify-between gap-6">
+        <div className="min-w-0 space-y-1">
+          <h1 className="text-2xl font-bold tracking-tight">Connect</h1>
+          <p className="text-sm text-muted-foreground">
+            Preview Codex configuration for Copilot or OpenAI sign-in
+          </p>
         </div>
-        <p className="min-w-40 flex-1 text-xs text-muted-foreground">
-          Preview only. Atlas reads your configuration and never writes it.
-          Apply changes yourself after reviewing them.
-        </p>
+        <div className="flex max-w-sm flex-1 items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs leading-4 text-muted-foreground">
+          <Eye aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            Preview only. Atlas reads your configuration and never writes it.
+            Apply changes yourself after reviewing them.
+          </p>
+        </div>
       </div>
-      <form
-        className="flex shrink-0 flex-wrap items-center gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          refresh();
-        }}
-      >
-        <Label htmlFor="codex-toml-path" className="shrink-0 text-xs">
-          Codex TOML file
-        </Label>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          <Input
-            id="codex-toml-path"
-            className="min-w-48 flex-1 font-mono text-sm"
-            value={pathText}
-            placeholder="Automatically detect config.toml"
-            onChange={(event) => setDraftPath(event.target.value)}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            title="Browse for TOML file"
-            aria-label="Browse for TOML file"
-            onClick={() => void browse()}
+      <div className="shrink-0 rounded-xl border border-border bg-card p-3 shadow-sm">
+        <div className="flex items-center gap-4">
+          <div
+            role="group"
+            aria-label="Connection destination"
+            className="flex shrink-0 gap-2"
           >
-            <FolderSearch className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => choosePath(null)}
-          >
-            Auto-detect
-          </Button>
-          <Button
-            type="submit"
-            variant="outline"
-            disabled={
-              (isFetching && !isPathEdited) ||
-              (isPathEdited && !normalizePath(pathText))
-            }
-          >
-            <RefreshCw
-              className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`}
-            />
-            Refresh
-          </Button>
+            <Button
+              size="sm"
+              variant={target === "copilot" ? "default" : "outline"}
+              aria-pressed={target === "copilot"}
+              onClick={() => setTarget("copilot")}
+            >
+              Connect through Copilot
+            </Button>
+            <Button
+              size="sm"
+              variant={target === "openai" ? "default" : "outline"}
+              aria-pressed={target === "openai"}
+              onClick={() => setTarget("openai")}
+            >
+              Return to OpenAI sign-in
+            </Button>
+          </div>
+          {data && !error && !isPathEdited && (
+            <div className="min-w-0 flex-1 border-l border-border pl-4 text-xs leading-4 text-muted-foreground">
+              <p
+                className="truncate"
+                title={`Current provider: ${data.currentProvider}`}
+              >
+                Current provider:{" "}
+                <span className="font-medium text-foreground">
+                  {data.currentProvider}
+                </span>
+              </p>
+              {target === "copilot" ? (
+                <p className="truncate" title={data.endpoint}>
+                  Proposed endpoint:{" "}
+                  <span className="font-mono text-foreground">
+                    {data.endpoint}
+                  </span>
+                </p>
+              ) : (
+                <p>
+                  Use Codex&apos;s built-in OpenAI provider and catalog. After
+                  applying, sign in and choose a model in Codex. Authentication
+                  files stay untouched.
+                </p>
+              )}
+            </div>
+          )}
         </div>
-      </form>
-      {isPathEdited && (
-        <p role="status" className="shrink-0 text-sm text-muted-foreground">
-          Refresh to preview the file at this location.
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="shrink-0 text-destructive">
-          {String(error)}
-        </p>
-      )}
-      <fieldset className="shrink-0 space-y-1 rounded-xl border border-border px-3 pb-2">
+        <form
+          className="mt-3 flex items-center gap-3 border-t border-border pt-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            refresh();
+          }}
+        >
+          <Label htmlFor="codex-toml-path" className="shrink-0 text-xs">
+            Codex TOML file
+          </Label>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Input
+              id="codex-toml-path"
+              className="min-w-0 flex-1 font-mono text-sm"
+              value={pathText}
+              placeholder="Automatically detect config.toml"
+              onChange={(event) => setDraftPath(event.target.value)}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="shrink-0"
+              title="Browse for TOML file"
+              aria-label="Browse for TOML file"
+              onClick={() => void browse()}
+            >
+              <FolderSearch aria-hidden className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0"
+              onClick={() => choosePath(null)}
+            >
+              Auto-detect
+            </Button>
+            <Button
+              type="submit"
+              variant="outline"
+              className="shrink-0"
+              disabled={
+                (isFetching && !isPathEdited) ||
+                (isPathEdited && !normalizePath(pathText))
+              }
+            >
+              <RefreshCw
+                aria-hidden
+                className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`}
+              />
+              Refresh
+            </Button>
+          </div>
+        </form>
+        {isPathEdited && (
+          <p role="status" className="mt-2 text-xs text-muted-foreground">
+            Refresh to preview the file at this location.
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="mt-2 break-words text-sm text-destructive">
+            {String(error)}
+          </p>
+        )}
+        {data && !error && !isPathEdited && !data.configExists && (
+          <p role="status" className="mt-2 text-xs text-muted-foreground">
+            No config.toml was found at this location. Browse for your file or
+            review the proposed new file below. Atlas will not create it.
+          </p>
+        )}
+      </div>
+      <fieldset className="shrink-0 rounded-xl border border-border bg-muted/20 px-3 pb-3">
         <legend className="px-1 text-xs font-medium">
           Optional TOML changes
         </legend>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <div className="flex items-start gap-4 pt-1">
           <div className="flex shrink-0 items-center gap-2">
             <Checkbox
               id="recommend-context1m"
@@ -284,7 +338,7 @@ export function CodexSetupSuggestion() {
           </div>
           <p
             id="context-preset-description"
-            className="min-w-48 flex-1 text-[11px] leading-4 text-muted-foreground"
+            className="min-w-0 flex-1 text-[11px] leading-4 text-muted-foreground"
           >
             {contextWindow != null && compactionLimit != null
               ? `Context ${formatTokens(contextWindow)} · Compact at ${formatTokens(compactionLimit)} tokens.`
@@ -304,7 +358,7 @@ export function CodexSetupSuggestion() {
             )}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="mt-2 flex items-center gap-4">
           {!!source?.settingDefaults.length && (
             <Popover>
               <PopoverTrigger asChild>
@@ -312,7 +366,7 @@ export function CodexSetupSuggestion() {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-6 px-0 text-xs"
+                  className="h-6 shrink-0 px-0 text-xs"
                   disabled={isPathEdited || Boolean(error)}
                 >
                   Compare with Codex defaults
@@ -320,21 +374,21 @@ export function CodexSetupSuggestion() {
               </PopoverTrigger>
               <PopoverContent
                 align="start"
-                className="max-h-64 w-[min(52rem,calc(100vw-3rem))] overflow-auto p-3 text-xs"
+                className="max-h-64 w-[min(52rem,calc(100vw-3rem))] overflow-auto p-4 text-xs"
               >
                 <table className="w-full text-left">
                   <thead className="text-muted-foreground">
                     <tr>
-                      <th scope="col" className="pb-1 font-normal">
+                      <th scope="col" className="pb-2 font-normal">
                         Setting
                       </th>
-                      <th scope="col" className="pb-1 font-normal">
+                      <th scope="col" className="pb-2 font-normal">
                         Current value
                       </th>
-                      <th scope="col" className="pb-1 font-normal">
+                      <th scope="col" className="pb-2 font-normal">
                         Codex default
                       </th>
-                      <th scope="col" className="pb-1 font-normal">
+                      <th scope="col" className="pb-2 font-normal">
                         Use default
                       </th>
                     </tr>
@@ -344,17 +398,17 @@ export function CodexSetupSuggestion() {
                       <tr key={setting.option}>
                         <th
                           scope="row"
-                          className="py-1 pr-3 font-mono font-normal"
+                          className="border-t border-border py-2 pr-4 font-mono font-normal"
                         >
                           {setting.key}
                         </th>
-                        <td className="py-1 pr-3 font-mono">
+                        <td className="border-t border-border py-2 pr-4 font-mono">
                           {setting.currentValue}
                         </td>
-                        <td className="py-1 pr-3 font-mono">
+                        <td className="border-t border-border py-2 pr-4 font-mono">
                           {setting.defaultValue}
                         </td>
-                        <td className="py-1">
+                        <td className="border-t border-border py-2">
                           <Checkbox
                             aria-label={`Use default for ${setting.key}`}
                             checked={recommendations[setting.option]}
@@ -374,7 +428,7 @@ export function CodexSetupSuggestion() {
               </PopoverContent>
             </Popover>
           )}
-          <p className="min-w-64 flex-1 text-[11px] leading-4 text-muted-foreground">
+          <p className="min-w-0 flex-1 text-[11px] leading-4 text-muted-foreground">
             File values only; profiles or Codex app choices can override them.
             Proposal only.{" "}
             <a
@@ -394,20 +448,6 @@ export function CodexSetupSuggestion() {
       </fieldset>
       {data && !error && !isPathEdited && (
         <>
-          {!data.configExists && (
-            <p role="status" className="shrink-0 text-sm text-muted-foreground">
-              No config.toml was found at this location. Browse for your file or
-              review the proposed new file below. Atlas will not create it.
-            </p>
-          )}
-          <p className="shrink-0 text-xs text-muted-foreground">
-            <span className="font-medium">
-              Current provider: {data.currentProvider}.
-            </span>{" "}
-            {target === "copilot"
-              ? `Proposed endpoint: ${data.endpoint}. Review the connection changes and selected options below.`
-              : "Use Codex's built-in OpenAI provider and model catalog. After applying, sign in and choose a model in Codex if needed. Your authentication files remain untouched."}
-          </p>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border">
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-muted/40 p-2">
               <div

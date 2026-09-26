@@ -6,7 +6,7 @@ read-only Codex configuration previews.
 
 ## Install and connect
 
-Download `Copilot-Bridge-Atlas-4.2.0-Windows-x64.msi` from
+Download `Copilot-Bridge-Atlas-4.2.1-Windows-x64.msi` from
 [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 The installer is per-user and unsigned.
 
