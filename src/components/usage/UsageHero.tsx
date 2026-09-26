@@ -50,7 +50,7 @@ export function UsageHero({
       <div
         role="status"
         aria-label="Loading usage"
-        className="flex min-h-80 items-center justify-center"
+        className="flex min-h-24 items-center justify-center"
       >
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/50" />
       </div>
@@ -59,93 +59,101 @@ export function UsageHero({
 
   const hitPercent = Math.max(0, Math.min(100, hitRate * 100));
   const hitPercentLabel = hitPercent.toFixed(hitPercent >= 99.95 ? 0 : 1);
+  const primaryMetrics: { label: string; value: string; title?: string }[] = [
+    {
+      label: t("usage.totalCost", "Total Cost"),
+      value: fmtUsd(totalCost, 0),
+    },
+    {
+      label: t("usage.realTotal", "Tokens Processed"),
+      value: formatTokensShort(realTotal, 2),
+      title: realTotal.toLocaleString("en-US"),
+    },
+    {
+      label: t("usage.requests", "Requests"),
+      value: requests.toLocaleString("en-US"),
+    },
+  ];
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 5 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      className="grid grid-cols-1 gap-3.5"
+      className="min-w-0"
     >
       <Card
         role="region"
-        aria-label={t("usage.totalCost", "Total Cost")}
+        aria-label={t("usage.summary", "Usage summary")}
         className="min-w-0"
       >
-        <CardContent className="flex min-h-[106px] items-center p-4 sm:px-5">
-          <div>
-            <h2 className="mb-1 text-sm font-medium">
-              {t("usage.totalCost", "Total Cost")}
-            </h2>
-            <p className="text-2xl font-medium leading-8 tabular-nums">
-              {fmtUsd(totalCost, 0)}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-      <Card
-        role="region"
-        aria-label={t("usage.realTotal", "Tokens Processed")}
-        className="min-w-0"
-      >
-        <CardContent className="grid min-h-[142px] gap-4 p-4 sm:grid-cols-[minmax(190px,0.8fr)_minmax(0,2fr)] sm:items-center sm:gap-6 sm:p-5">
-          <div className="min-w-0">
-            <h2 className="mb-2 text-sm font-medium">
-              {t("usage.realTotal", "Tokens Processed")}
-            </h2>
-            <p
-              className="text-[28px] font-medium leading-9 tabular-nums"
-              title={realTotal.toLocaleString("en-US")}
+        <CardContent className="p-0">
+          <h2 className="sr-only">{t("usage.summary", "Usage summary")}</h2>
+          <dl className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.2fr)_minmax(0,0.9fr)] divide-x divide-border border-b border-border px-1.5 py-3 sm:px-3 sm:py-4">
+            {primaryMetrics.map(({ label, value, title }) => (
+              <div key={label} className="min-w-0 px-1.5 sm:px-3">
+                <dt className="mb-1 break-words text-xs leading-4 text-muted-foreground">
+                  {label}
+                </dt>
+                <dd
+                  title={title}
+                  className="whitespace-nowrap text-lg font-medium leading-6 tabular-nums sm:text-2xl sm:leading-8"
+                >
+                  {value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <div className="grid min-w-0 grid-cols-1 gap-3 p-3 sm:p-4 md:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] md:gap-4">
+            <div
+              role="group"
+              aria-label={t("usage.tokenDetails", "Token details")}
+              className="min-w-0"
             >
-              {formatTokensShort(realTotal, 2)}
-            </p>
+              <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+                {t("usage.tokenDetails", "Token details")}
+              </h3>
+              <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 md:grid-cols-4 md:gap-x-4">
+                <SummaryRow
+                  label={t("usage.freshInput", "Fresh Input")}
+                  value={formatTokensShort(input)}
+                />
+                <SummaryRow
+                  label={t("usage.output", "Output")}
+                  value={formatTokensShort(output)}
+                />
+                <SummaryRow
+                  label={t("usage.cacheRead", "Hit")}
+                  value={formatTokensShort(cacheRead)}
+                />
+                <SummaryRow
+                  label={t("usage.cacheHitRate", "Cache Hit Rate")}
+                  value={`${hitPercentLabel}%`}
+                  percentage
+                />
+              </dl>
+            </div>
+            <div
+              role="group"
+              aria-label={t("usage.requestDetails", "Request details")}
+              className="min-w-0 border-t border-border pt-3 md:border-l md:border-t-0 md:pl-4 md:pt-0"
+            >
+              <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+                {t("usage.requestDetails", "Request details")}
+              </h3>
+              <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2">
+                <SummaryRow
+                  label={t("usage.avgLatency", "Average Latency")}
+                  value={averageLatency}
+                />
+                <SummaryRow
+                  label={t("usage.successRate", "Success Rate")}
+                  value={successRate}
+                  percentage
+                />
+              </dl>
+            </div>
           </div>
-          <dl className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-            <SummaryRow
-              label={t("usage.freshInput", "Fresh Input")}
-              value={formatTokensShort(input)}
-            />
-            <SummaryRow
-              label={t("usage.output", "Output")}
-              value={formatTokensShort(output)}
-            />
-            <SummaryRow
-              label={t("usage.cacheRead", "Hit")}
-              value={formatTokensShort(cacheRead)}
-            />
-            <SummaryRow
-              label={t("usage.cacheHitRate", "Cache Hit Rate")}
-              value={`${hitPercentLabel}%`}
-              percentage
-            />
-          </dl>
-        </CardContent>
-      </Card>
-      <Card
-        role="region"
-        aria-label={t("usage.requests", "Requests")}
-        className="min-w-0"
-      >
-        <CardContent className="grid min-h-[142px] gap-4 p-4 sm:grid-cols-[minmax(190px,0.8fr)_minmax(0,2fr)] sm:items-center sm:gap-6 sm:p-5">
-          <div className="min-w-0">
-            <h2 className="mb-3 text-sm font-medium">
-              {t("usage.requests", "Requests")}
-            </h2>
-            <p className="text-[28px] font-medium leading-9 tabular-nums">
-              {requests.toLocaleString("en-US")}
-            </p>
-          </div>
-          <dl className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
-            <SummaryRow
-              label={t("usage.avgLatency", "Average Latency")}
-              value={averageLatency}
-            />
-            <SummaryRow
-              label={t("usage.successRate", "Success Rate")}
-              value={successRate}
-              percentage
-            />
-          </dl>
         </CardContent>
       </Card>
     </motion.div>
