@@ -227,7 +227,7 @@ export function BackupListSection({
         <div className="space-y-2">
           <Label className="text-sm">
             {t("settings.backupManager.retainLabel", {
-              defaultValue: "Backup Retention",
+              defaultValue: "Backups to Keep",
             })}
           </Label>
           <Select
@@ -242,7 +242,10 @@ export function BackupListSection({
             <SelectContent>
               {[3, 5, 10, 15, 20, 30, 50].map((n) => (
                 <SelectItem key={n} value={String(n)}>
-                  {n}
+                  {t("settings.backupManager.retainOption", {
+                    count: n,
+                    defaultValue: "{{count}} backups",
+                  })}
                 </SelectItem>
               ))}
             </SelectContent>
