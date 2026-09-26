@@ -107,11 +107,8 @@ const preview = {
   contextPreset: {
     model: null as string | null,
     currentContextWindow: null as string | null,
-    currentAutoCompactTokenLimit: "900000",
     contextWindow: 1_000_000,
-    autoCompactTokenLimit: 900_000,
     copilotContextWindow: 1_000_000,
-    copilotAutoCompactTokenLimit: 900_000,
     copilotModelLimit: null as number | null,
   },
   settingDefaults: [] as Array<{
@@ -160,10 +157,6 @@ const recommendedPreview = {
 const profilePreview = {
   ...preview,
   configPath: profilePath,
-  contextPreset: {
-    ...preview.contextPreset,
-    currentAutoCompactTokenLimit: "150000",
-  },
   copilotConfig: preview.copilotConfig.replace("900000", "150000"),
   copilotDiff: preview.copilotDiff.replace("900000", "150000"),
   copilotLines: copilotLines.map((line) => ({
@@ -656,7 +649,7 @@ describe("read-only Codex connection suggestions", () => {
     );
   });
 
-  it("uses the explicit 1M preset for both targets and copies the matching proposal and diff", async () => {
+  it("uses the 1M context-only preset for both targets and preserves existing compaction settings", async () => {
     mocks.invoke.mockImplementation((_command, { recommendations }) =>
       Promise.resolve(
         recommendations?.context1m ? recommendedPreview : preview,
@@ -677,6 +670,13 @@ describe("read-only Codex connection suggestions", () => {
     );
     expect(contextCells[0]).toHaveTextContent(/^$/);
     expect(contextCells[1]).toHaveTextContent("model_context_window = 1000000");
+    expect(
+      screen.getByText(/Context window 1,000,000 tokens/),
+    ).toHaveTextContent("Auto-compaction is unchanged.");
+    const compactLine = within(comparison()).getAllByText(currentLines[1])[0];
+    const compactCells = within(compactLine.closest("tr")!).getAllByRole("cell");
+    expect(compactCells[0]).toHaveTextContent(currentLines[1]);
+    expect(compactCells[1]).toHaveTextContent(currentLines[1]);
 
     for (const [target, config, diff] of [
       [
@@ -737,7 +737,6 @@ describe("read-only Codex connection suggestions", () => {
         model: "small-model",
         currentContextWindow: "500000",
         copilotContextWindow: 128000,
-        copilotAutoCompactTokenLimit: 115200,
         copilotModelLimit: 128000,
       },
       settingDefaults: [
@@ -765,7 +764,7 @@ describe("read-only Codex connection suggestions", () => {
     renderPanel();
     await screen.findByRole("region", { name: "Configuration diff" });
     expect(
-      screen.getByText(/Context 128,000 · Compact at 115,200 tokens/),
+      screen.getByText(/Context window 128,000 tokens/),
     ).toHaveTextContent(
       "Capped to the 128,000-token saved Copilot catalog limit for small-model.",
     );
@@ -794,7 +793,7 @@ describe("read-only Codex connection suggestions", () => {
       screen.getByRole("button", { name: "Return to OpenAI sign-in" }),
     );
     expect(
-      screen.getByText(/Context 1,000,000 · Compact at 900,000 tokens/),
+      screen.getByText(/Context window 1,000,000 tokens/),
     ).not.toHaveTextContent("Capped");
     expect(
       screen.getByRole("link", { name: "Official Codex defaults" }),

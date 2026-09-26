@@ -6,7 +6,7 @@ read-only Codex configuration previews.
 
 ## Install and connect
 
-Download `Copilot-Bridge-Atlas-4.2.2-Windows-x64.msi` from
+Download `Copilot-Bridge-Atlas-4.2.3-Windows-x64.msi` from
 [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 The installer is per-user and unsigned.
 
@@ -26,8 +26,9 @@ declarations continue to refresh, and saved context sizes are capped to the repo
 input budget. Atlas forwards unsupported-image errors without retrying with images
 removed.
 
-The optional 1M preset proposes a 1,000,000-token context and compaction at 900,000,
-capped for models with a smaller saved limit. Changes affect the proposal only.
+The optional 1M preset proposes a 1,000,000-token context, capped for models with a
+smaller saved limit. It leaves auto-compaction settings unchanged. Changes affect
+the proposal only.
 
 ## Pages
 

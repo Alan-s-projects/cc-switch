@@ -31,11 +31,8 @@ interface SourceSettings {
   contextPreset: {
     model: string | null;
     currentContextWindow: string | null;
-    currentAutoCompactTokenLimit: string | null;
     contextWindow: number;
-    autoCompactTokenLimit: number;
     copilotContextWindow: number;
-    copilotAutoCompactTokenLimit: number;
     copilotModelLimit: number | null;
   };
   settingDefaults: Array<{
@@ -163,10 +160,6 @@ export function CodexSetupSuggestion() {
   const preset = source?.contextPreset;
   const contextWindow =
     target === "copilot" ? preset?.copilotContextWindow : preset?.contextWindow;
-  const compactionLimit =
-    target === "copilot"
-      ? preset?.copilotAutoCompactTokenLimit
-      : preset?.autoCompactTokenLimit;
   const formatTokens = (value: number) => value.toLocaleString("en-US");
   const copy = async (text: string) => {
     try {
@@ -340,9 +333,10 @@ export function CodexSetupSuggestion() {
             id="context-preset-description"
             className="min-w-0 flex-1 text-[11px] leading-4 text-muted-foreground"
           >
-            {contextWindow != null && compactionLimit != null
-              ? `Context ${formatTokens(contextWindow)} · Compact at ${formatTokens(compactionLimit)} tokens.`
-              : "Up to 1,000,000 context and 900,000 compaction tokens."}
+            {contextWindow != null
+              ? `Context window ${formatTokens(contextWindow)} tokens.`
+              : "Context window up to 1,000,000 tokens."}
+            {" Auto-compaction is unchanged."}
             {target === "copilot" &&
               preset?.copilotModelLimit != null &&
               preset.copilotModelLimit < 1_000_000 &&
@@ -352,8 +346,7 @@ export function CodexSetupSuggestion() {
             {preset && (
               <span className="ml-3">
                 Current file: context{" "}
-                {preset.currentContextWindow ?? "model default"} · compaction{" "}
-                {preset.currentAutoCompactTokenLimit ?? "automatic"}.
+                {preset.currentContextWindow ?? "model default"}.
               </span>
             )}
           </p>
