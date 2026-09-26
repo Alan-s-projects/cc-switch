@@ -63,16 +63,23 @@ impl Database {
         let cutoff = compute_local_midnight_cutoff(Local::now(), retain_days)?;
         let conn = lock_conn!(self.conn);
 
-        // Check if there are any rows to process
-        let count: i64 = conn
+        // Imported history is retained indefinitely and must not trigger a
+        // full cost backfill or aggregation on every retention check.
+        let effective_filter = effective_usage_log_filter("l");
+        let has_old_proxy_logs: bool = conn
             .query_row(
-                "SELECT COUNT(*) FROM proxy_request_logs WHERE created_at < ?1",
+                &format!(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM proxy_request_logs l
+                        WHERE l.created_at < ?1 AND {effective_filter}
+                    )"
+                ),
                 [cutoff],
                 |row| row.get(0),
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
 
-        if count == 0 {
+        if !has_old_proxy_logs {
             return Ok(0);
         }
 
@@ -523,6 +530,55 @@ mod tests {
     fn test_rollup_noop_when_no_old_data() -> Result<(), AppError> {
         let db = Database::memory()?;
         assert_eq!(db.rollup_and_prune(30)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn retained_imports_do_not_trigger_backfill_or_rollup_work() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let now = chrono::Utc::now().timestamp();
+        {
+            let conn = crate::database::lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO proxy_request_logs (
+                    request_id, provider_id, app_type, model, input_tokens,
+                    total_cost_usd, latency_ms, status_code, created_at, data_source
+                ) VALUES
+                    ('old-import', '_codex_session', 'codex', 'gpt-5.5', 1000000,
+                     '123.456789', 100, 200, ?1, 'codex_session'),
+                    ('old-other-app', 'p1', 'historical', 'gpt-5.5', 1000000,
+                     '98.765432', 100, 200, ?1, 'proxy'),
+                    ('recent-proxy', 'p1', 'codex', 'gpt-5.5', 1000000,
+                     '0', 100, 200, ?2, 'proxy')",
+                rusqlite::params![now - 40 * 86400, now],
+            )?;
+        }
+
+        // Startup and periodic retention should both be a no-op when there
+        // are no eligible old proxy requests, regardless of imported history.
+        for _ in 0..2 {
+            assert_eq!(db.rollup_and_prune(30)?, 0);
+            let conn = crate::database::lock_conn!(db.conn);
+            for (id, cost) in [
+                ("old-import", "123.456789"),
+                ("old-other-app", "98.765432"),
+                ("recent-proxy", "0"),
+            ] {
+                assert_eq!(
+                    conn.query_row(
+                        "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id = ?1",
+                        [id],
+                        |row| row.get::<_, String>(0)
+                    )?,
+                    cost
+                );
+            }
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM usage_daily_rollups", [], |row| row
+                    .get::<_, i64>(0))?,
+                0
+            );
+        }
         Ok(())
     }
 

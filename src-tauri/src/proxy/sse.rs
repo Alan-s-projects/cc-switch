@@ -1,7 +1,7 @@
 #[inline]
 pub(crate) fn strip_sse_field<'a>(line: &'a str, field: &str) -> Option<&'a str> {
-    line.strip_prefix(&format!("{field}: "))
-        .or_else(|| line.strip_prefix(&format!("{field}:")))
+    let value = line.strip_prefix(field)?.strip_prefix(':')?;
+    Some(value.strip_prefix(' ').unwrap_or(value))
 }
 
 #[inline]

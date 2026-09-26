@@ -18,7 +18,11 @@ pub fn get_app_config_dir_override() -> Option<PathBuf> {
 }
 
 pub fn read_override_from_store(app: &tauri::AppHandle) -> Option<PathBuf> {
-    let store = match app.store_builder("app_paths.json").build() {
+    let store = match app
+        .store_builder("app_paths.json")
+        .disable_auto_save()
+        .build()
+    {
         Ok(store) => store,
         Err(e) => {
             log::warn!("Could not open the app-path store: {e}");
@@ -35,9 +39,9 @@ pub fn read_override_from_store(app: &tauri::AppHandle) -> Option<PathBuf> {
 
             let path = resolve_path(path_str);
 
-            if !path.exists() {
+            if !path.is_dir() {
                 log::warn!(
-                    "The configured app-data directory does not exist: {path:?}\n\
+                    "The configured app-data path is not a directory: {path:?}\n\
                      Using the default directory."
                 );
                 return None;
@@ -70,33 +74,59 @@ pub fn set_app_config_dir_to_store(
     app: &tauri::AppHandle,
     path: Option<&str>,
 ) -> Result<(), AppError> {
+    let path = prepare_app_config_dir(path)?;
     let store = app
         .store_builder("app_paths.json")
+        .disable_auto_save()
         .build()
         .map_err(|e| AppError::Message(format!("Could not open the app-path store: {e}")))?;
 
-    match path {
-        Some(p) => {
-            let trimmed = p.trim();
-            if !trimmed.is_empty() {
-                store.set(STORE_KEY_APP_CONFIG_DIR, Value::String(trimmed.to_string()));
-                log::info!("Saved the app-data directory override: {trimmed}");
-            } else {
+    update_and_save_override(
+        store.get(STORE_KEY_APP_CONFIG_DIR),
+        path.map(Value::String),
+        |value| match value {
+            Some(value) => store.set(STORE_KEY_APP_CONFIG_DIR, value),
+            None => {
                 store.delete(STORE_KEY_APP_CONFIG_DIR);
-                log::info!("Removed the app-data directory override");
             }
-        }
-        None => {
-            store.delete(STORE_KEY_APP_CONFIG_DIR);
-            log::info!("Removed the app-data directory override");
-        }
+        },
+        || {
+            store
+                .save()
+                .map_err(|e| AppError::Message(format!("Could not save the app-path store: {e}")))
+        },
+    )
+}
+
+fn update_and_save_override(
+    previous: Option<Value>,
+    next: Option<Value>,
+    update: impl Fn(Option<Value>),
+    save: impl FnOnce() -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    update(next);
+    if let Err(error) = save() {
+        // The plugin shares its cache between readers. A rejected save must
+        // not become the apparent saved value on the next Settings visit.
+        update(previous);
+        return Err(error);
     }
-
-    store
-        .save()
-        .map_err(|e| AppError::Message(format!("Could not save the app-path store: {e}")))?;
-
     Ok(())
+}
+
+/// Prepare a chosen data folder before saving it for the next launch.
+fn prepare_app_config_dir(path: Option<&str>) -> Result<Option<String>, AppError> {
+    let Some(raw) = path.map(str::trim).filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    let resolved = resolve_path(raw);
+    if !resolved.is_absolute() {
+        return Err(AppError::Message(
+            "Choose an absolute path for the app-data directory.".into(),
+        ));
+    }
+    std::fs::create_dir_all(&resolved).map_err(|error| AppError::io(&resolved, error))?;
+    Ok(Some(raw.to_string()))
 }
 
 /// 解析路径，支持 ~ 开头的相对路径
@@ -121,6 +151,62 @@ fn resolve_path(raw: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_directory_save_restores_the_previous_cached_value() {
+        use std::cell::RefCell;
+
+        for (previous, next) in [
+            (None, Some(Value::String("new".into()))),
+            (Some(Value::String("old".into())), None),
+            (
+                Some(Value::String("old".into())),
+                Some(Value::String("new".into())),
+            ),
+        ] {
+            let cache = RefCell::new(previous.clone());
+            let result = update_and_save_override(
+                previous.clone(),
+                next.clone(),
+                |value| *cache.borrow_mut() = value,
+                || {
+                    assert_eq!(*cache.borrow(), next);
+                    Err(AppError::Message("Disk write failed".into()))
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(*cache.borrow(), previous);
+        }
+    }
+
+    #[test]
+    fn new_data_folder_is_ready_for_the_next_launch() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("new").join("data");
+        let raw = destination.to_string_lossy().into_owned();
+
+        let saved = prepare_app_config_dir(Some(&format!("  {raw}  "))).unwrap();
+        assert_eq!(saved.as_deref(), Some(raw.as_str()));
+        assert!(resolve_path(saved.as_deref().unwrap()).is_dir());
+        assert_eq!(std::fs::read_dir(&destination).unwrap().count(), 0);
+
+        let marker = destination.join("settings.json");
+        std::fs::write(&marker, b"existing preferences").unwrap();
+        assert_eq!(prepare_app_config_dir(Some(&raw)).unwrap(), saved);
+        assert_eq!(std::fs::read(&marker).unwrap(), b"existing preferences");
+    }
+
+    #[test]
+    fn invalid_data_folder_is_rejected_without_modifying_existing_files() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("existing.txt");
+        std::fs::write(&file, b"keep this file").unwrap();
+        assert!(prepare_app_config_dir(Some(&file.to_string_lossy())).is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), b"keep this file");
+        assert!(prepare_app_config_dir(Some("relative-data")).is_err());
+        assert_eq!(prepare_app_config_dir(None).unwrap(), None);
+        assert_eq!(prepare_app_config_dir(Some(" \t ")).unwrap(), None);
+    }
 
     #[test]
     fn pending_directory_changes_cannot_redirect_active_settings_or_backup_paths() {

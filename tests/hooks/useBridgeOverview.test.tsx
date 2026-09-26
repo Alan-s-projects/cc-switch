@@ -33,7 +33,7 @@ const summary: UsageSummary = {
   realTotalTokens: 250,
   cacheHitRate: 0.5,
 };
-const recent: PaginatedLogs = { data: [], total: 0, page: 0, pageSize: 10 };
+const recent: PaginatedLogs = { data: [], total: 0, page: 0, pageSize: 5 };
 const listeners = new Set<() => void>();
 const unlisteners: Array<ReturnType<typeof vi.fn>> = [];
 const clients: QueryClient[] = [];
@@ -97,7 +97,7 @@ describe("low-CPU bridge overview", () => {
     vi.useRealTimers();
   });
 
-  it("reads today's summary and the latest ten once, without idle SQL polling", async () => {
+  it("reads today's summary and the latest five once, without idle SQL polling", async () => {
     const now = Date.now();
     const { result } = mount();
     await advance(1);
@@ -107,7 +107,7 @@ describe("low-CPU bridge overview", () => {
       Math.floor(now / 1000),
       "codex",
     );
-    expect(mocks.logs).toHaveBeenCalledWith({ appType: "codex" }, 0, 10);
+    expect(mocks.logs).toHaveBeenCalledWith({ appType: "codex" }, 0, 5);
     expect(mocks.listen).toHaveBeenCalledWith(
       "usage-log-recorded",
       expect.any(Function),

@@ -577,9 +577,12 @@ impl Database {
 
             let effective_filter = effective_usage_log_filter("l");
             let fresh_input = fresh_input_sql("l");
+            // The range includes end_ts. On an exact hour boundary, fold that
+            // second into the last bucket before GROUP BY so it cannot replace
+            // the rest of that hour when the query results are collected.
             let sql = format!(
                 "SELECT
-                    CAST((l.created_at - ?1) / ?3 AS INTEGER) as bucket_idx,
+                    MIN(CAST((l.created_at - ?1) / ?3 AS INTEGER), ?4) as bucket_idx,
                     COUNT(*) as request_count,
                     COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost,
                     COALESCE(SUM({fresh_input} + l.output_tokens), 0) as total_tokens,
@@ -617,19 +620,14 @@ impl Database {
                 Box::new(start_ts),
                 Box::new(end_ts),
                 Box::new(bucket_seconds),
+                Box::new(bucket_count - 1),
             ];
             all_params.extend(extra_params);
             let param_refs: Vec<&dyn rusqlite::ToSql> =
                 all_params.iter().map(|p| p.as_ref()).collect();
             let rows = stmt.query_map(param_refs.as_slice(), row_mapper)?;
             for row in rows {
-                let (mut bucket_idx, stat) = row?;
-                if bucket_idx < 0 {
-                    continue;
-                }
-                if bucket_idx >= bucket_count {
-                    bucket_idx = bucket_count - 1;
-                }
+                let (bucket_idx, stat) = row?;
                 map.insert(bucket_idx, stat);
             }
 
@@ -2818,6 +2816,83 @@ mod tests {
         assert_eq!(stats.len(), 15);
         assert_eq!(stats[3].request_count, 1);
 
+        Ok(())
+    }
+
+    #[test]
+    fn hourly_trends_include_end_boundary_without_replacing_the_last_bucket() -> Result<(), AppError>
+    {
+        for duration in [3600, 3 * 3600, 24 * 3600, 3 * 3600 + 1800] {
+            let db = Database::memory()?;
+            let start = local_ts(2026, 4, 1, 12, 0, 0);
+            let end = start + duration;
+            {
+                let conn = lock_conn!(db.conn);
+                for (id, app, provider, model, source, timestamp) in [
+                    ("first", "codex", "p1", "gpt-6-astra", "proxy", start),
+                    ("last-hour", "codex", "p1", "gpt-6-astra", "proxy", end - 1),
+                    ("end", "codex", "p1", "gpt-6-astra", "proxy", end),
+                    ("outside", "codex", "p1", "gpt-6-astra", "proxy", end + 1),
+                    (
+                        "imported",
+                        "codex",
+                        "p1",
+                        "gpt-6-astra",
+                        "codex_session",
+                        end,
+                    ),
+                    ("other-model", "codex", "p1", "gpt-6-luna", "proxy", end),
+                    ("other-provider", "codex", "p2", "gpt-6-astra", "proxy", end),
+                    ("other-app", "historical", "p1", "gpt-6-astra", "proxy", end),
+                ] {
+                    insert_usage_log(
+                        &conn, id, app, provider, model, source, timestamp, 1000, 100, 600, 20,
+                        200, "0.012345",
+                    )?;
+                }
+            }
+
+            let stats = db.get_daily_trends(
+                Some(start),
+                Some(end),
+                Some("codex"),
+                Some("p1"),
+                Some("gpt-6-astra"),
+            )?;
+            assert_eq!(stats.len(), ((duration + 3599) / 3600) as usize);
+            assert_eq!(
+                stats.last().unwrap().request_count,
+                if duration == 3600 { 3 } else { 2 },
+                "inclusive end must be aggregated into the last bucket ({duration}s range)"
+            );
+            assert_eq!(stats.iter().map(|s| s.request_count).sum::<u64>(), 3);
+            assert_eq!(
+                stats.iter().map(|s| s.total_input_tokens).sum::<u64>(),
+                1200
+            );
+            assert_eq!(
+                stats.iter().map(|s| s.total_output_tokens).sum::<u64>(),
+                300
+            );
+            assert_eq!(
+                stats.iter().map(|s| s.total_cache_read_tokens).sum::<u64>(),
+                1800
+            );
+            assert_eq!(
+                stats
+                    .iter()
+                    .map(|s| s.total_cache_creation_tokens)
+                    .sum::<u64>(),
+                60
+            );
+            assert_eq!(
+                stats
+                    .iter()
+                    .map(|s| rust_decimal::Decimal::from_str(&s.total_cost).unwrap())
+                    .sum::<rust_decimal::Decimal>(),
+                rust_decimal::Decimal::from_str("0.037035").unwrap()
+            );
+        }
         Ok(())
     }
 

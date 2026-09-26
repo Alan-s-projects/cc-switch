@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BridgeOverview } from "@/components/overview/BridgeOverview";
+import { BridgeWarnings } from "@/components/overview/BridgeWarnings";
 import { OverviewRefreshButton } from "@/components/overview/OverviewRefreshButton";
 import type { ProxyStatus } from "@/types/proxy";
 import { createTestQueryClient } from "../utils/testQueryClient";
@@ -90,6 +91,7 @@ function renderOverview(proxyStatus = status) {
   const rendered = render(
     <QueryClientProvider client={client}>
       <OverviewRefreshButton />
+      <BridgeWarnings status={proxyStatus} />
       <BridgeOverview status={proxyStatus} />
     </QueryClientProvider>,
   );
@@ -121,7 +123,7 @@ describe("read-only bridge overview", () => {
     expect(usage.getByText("91.7%")).toBeVisible();
     expect(proxy.getByText("Active requests:").textContent).toContain("2");
     const table = requests.getByRole("table", {
-      name: "Latest 10 completed requests",
+      name: "Latest 5 completed requests",
     });
     expect(within(table).getByText("gpt-6-astra")).toBeVisible();
     expect(within(table).getByText("400")).toBeVisible();
@@ -143,6 +145,27 @@ describe("read-only bridge overview", () => {
       ),
     ).toBe(true);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Token costs are estimates, not your Copilot bill/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows at most five requests even when an older cached response has more", async () => {
+    mocks.logs.mockResolvedValue({
+      data: Array.from({ length: 8 }, (_, index) => ({
+        ...snapshot.recent.data[0],
+        requestId: `request-${index}`,
+        model: `model-${index}`,
+      })),
+    });
+    renderOverview();
+    const table = await screen.findByRole("table", {
+      name: "Latest 5 completed requests",
+    });
+    await within(table).findByText("model-0");
+    expect(within(table).getAllByRole("row")).toHaveLength(6);
+    expect(within(table).getByText("model-4")).toBeVisible();
+    expect(within(table).queryByText("model-5")).not.toBeInTheDocument();
   });
 
   it.each([true, false])(
@@ -155,12 +178,15 @@ describe("read-only bridge overview", () => {
       });
       renderOverview({ ...status, running: false, active_connections: 0 });
       const proxy = within(screen.getByRole("region", { name: "Proxy" }));
-      expect(proxy.getByText("Proxy is stopped")).toBeVisible();
+      const warnings = within(
+        screen.getByRole("region", { name: "Connection warnings" }),
+      );
+      expect(warnings.getByText("Proxy is stopped")).toBeVisible();
       expect(
-        proxy.getByText(/Turn on the proxy switch in the top bar/),
+        warnings.getByText(/Turn on the proxy switch in the top bar/),
       ).toBeVisible();
       expect(
-        await proxy.findByText("Codex is not connected to Atlas"),
+        await warnings.findByText("Codex is not connected to Atlas"),
       ).toBeVisible();
       expect(
         screen.getByText("C:/Users/test/.codex/config.toml"),
@@ -171,6 +197,7 @@ describe("read-only bridge overview", () => {
         ),
       ).toBeVisible();
       expect(screen.getAllByRole("alert")).toHaveLength(2);
+      expect(proxy.queryByRole("alert")).not.toBeInTheDocument();
     },
   );
 

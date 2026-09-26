@@ -6,7 +6,6 @@ use super::{
 };
 use crate::database::Database;
 use axum::{
-    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
@@ -296,8 +295,6 @@ impl ProxyServer {
                 "/codex/v1/images/edits",
                 post(handlers::handle_images_edits),
             )
-            // 提高默认请求体大小限制（避免 413 Payload Too Large）
-            .layer(DefaultBodyLimit::max(200 * 1024 * 1024))
             .with_state(self.state.clone())
     }
 
@@ -314,6 +311,37 @@ mod tests {
     use axum::http::StatusCode;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn codex_routes_reject_malformed_json_as_client_error() {
+        let proxy = ProxyServer::new(
+            ProxyConfig {
+                listen_port: 0,
+                ..Default::default()
+            },
+            Arc::new(Database::memory().unwrap()),
+            None,
+        );
+        let info = proxy.start().await.unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        for path in [
+            "/v1/responses",
+            "/v1/responses/compact",
+            "/v1/alpha/search",
+            "/v1/images/generations",
+            "/v1/images/edits",
+        ] {
+            let response = client
+                .post(format!("http://127.0.0.1:{}{path}", info.port))
+                .header("content-type", "application/json")
+                .body("{invalid json")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+        }
+        proxy.stop().await.unwrap();
+    }
 
     #[tokio::test]
     async fn codex_routes_reject_legacy_non_copilot_providers_before_forwarding() {

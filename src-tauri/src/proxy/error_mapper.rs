@@ -29,6 +29,8 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
 
         // 转发失败/连接失败：502 Bad Gateway
         ProxyError::ForwardFailed(_) => 502,
+        ProxyError::ResponseBodyTooLarge(_) => 502,
+        ProxyError::RequestBodyTooLarge(_) => 413,
 
         // 无可用 Provider：503 Service Unavailable
 
@@ -120,6 +122,14 @@ mod tests {
             map_proxy_error_to_status(&ProxyError::TransformError("bad transform".to_string())),
             422
         );
+        for error in [
+            ProxyError::RequestBodyTooLarge(1024),
+            ProxyError::ResponseBodyTooLarge(1024),
+        ] {
+            use axum::response::IntoResponse;
+            let mapped = map_proxy_error_to_status(&error);
+            assert_eq!(mapped, error.into_response().status().as_u16());
+        }
     }
 
     #[test]

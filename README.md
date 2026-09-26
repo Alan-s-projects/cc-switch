@@ -6,7 +6,7 @@ read-only Codex configuration previews.
 
 ## Install and connect
 
-Download `Copilot-Bridge-Atlas-4.2.3-Windows-x64.msi` from
+Download `Copilot-Bridge-Atlas-4.2.4-Windows-x64.msi` from
 [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 The installer is per-user and unsigned.
 
@@ -16,9 +16,11 @@ The installer is per-user and unsigned.
 4. Reload Codex so it loads the selected provider and generated model catalog.
 
 **Atlas never writes Codex configuration, authentication, MCP, skills,
-instructions, or conversation files.** Connect offers side-by-side, inline, and
-full-file previews for the bridge and for returning to OpenAI sign-in. A manual
-TOML location changes the preview only.
+instructions, or conversation files.** Connect offers a side-by-side comparison
+for the bridge and for returning to OpenAI sign-in, with scrolling inside the code
+pane and copying of the proposed TOML. File selection sits above aligned Connection
+and Context dropdowns, defaulting to Copilot Bridge and Unchanged. A manual TOML
+location changes the preview only.
 
 Saved reasoning levels and their default survive app restarts and model refresh.
 New models inherit Copilot's advertised reasoning defaults. Live image/parallel-tool
@@ -30,17 +32,23 @@ The optional 1M preset proposes a 1,000,000-token context, capped for models wit
 smaller saved limit. It leaves auto-compaction settings unchanged. Changes affect
 the proposal only.
 
+An upstream HTTP 408 is reported separately from Atlas's own timeout. For repeated
+request-body timeouts in a long conversation, reduce the context or continue in a
+new chat with a short handoff. Atlas does not silently remove conversation content
+or change Codex's compaction settings.
+
 ## Pages
 
 - **Overview:** Provider, Proxy, Today's usage, and Requests cards; endpoint, quota,
-  estimated cost, cache reuse, and the latest ten requests. Health check measures
+  estimated cost, cache reuse, and the latest five requests. Connection warnings
+  appear above Provider. Health check measures
   endpoint reachability, without an inference or authentication test.
 - **Usage:** history, trends, model/provider statistics, and global GPT pricing.
   Historical recorded costs are preserved. Imported conversation totals are excluded.
   Token costs are estimates, not a Copilot subscription bill.
-- **Connect:** configuration detection, comparison, copying, and optional settings.
+- **Connect:** configuration detection, comparison, copying, and a context-window option.
 - **Settings:** appearance/startup, outbound networking, GitHub authentication,
-  GPT catalog/protocol choices, logs, application-data location, and local backups.
+  GPT catalog/protocol choices, logs, application-data location, local backups, and About.
 
 Home usage updates are coalesced from request events instead of idle SQL polling.
 Status and quota polling pause while the window is inactive. Close the window to

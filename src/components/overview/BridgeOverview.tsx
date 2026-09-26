@@ -1,12 +1,12 @@
 import { memo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import { useBridgeOverview } from "@/hooks/useBridgeOverview";
+import {
+  OVERVIEW_REQUEST_LIMIT,
+  useBridgeOverview,
+} from "@/hooks/useBridgeOverview";
 import { useGlobalProxyConfig } from "@/lib/query/proxy";
 import type { ProxyStatus } from "@/types/proxy";
 import type { RequestLog } from "@/types/usage";
 import { fmtInt, fmtUsd, formatTokensShort } from "@/components/usage/format";
-import { useWindowActive } from "@/lib/windowActivity";
 
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 const clock = (timestamp: number) =>
@@ -20,7 +20,9 @@ const RecentRequests = memo(function RecentRequests({
   return (
     <div className="max-h-80 overflow-auto rounded-xl border">
       <table className="w-full text-left text-sm">
-        <caption className="sr-only">Latest 10 completed requests</caption>
+        <caption className="sr-only">
+          Latest {OVERVIEW_REQUEST_LIMIT} completed requests
+        </caption>
         <thead className="sticky top-0 bg-muted text-xs text-muted-foreground">
           <tr>
             {[
@@ -41,7 +43,7 @@ const RecentRequests = memo(function RecentRequests({
           </tr>
         </thead>
         <tbody>
-          {logs.map((log) => (
+          {logs.slice(0, OVERVIEW_REQUEST_LIMIT).map((log) => (
             <tr key={log.requestId} className="border-t">
               <td
                 className="whitespace-nowrap px-4 py-2 text-xs"
@@ -84,21 +86,7 @@ const RecentRequests = memo(function RecentRequests({
 });
 
 export function BridgeOverview({ status }: { status?: ProxyStatus }) {
-  const active = useWindowActive();
   const { data: config } = useGlobalProxyConfig();
-  const connection = useQuery({
-    queryKey: ["codex-setup-suggestion", "connection-check"],
-    queryFn: () =>
-      invoke<{
-        configured: boolean;
-        configExists: boolean;
-        configPath: string;
-      }>("get_codex_setup_suggestion", { configPath: null }),
-    enabled: active,
-    refetchInterval: false,
-    refetchOnWindowFocus: true,
-    retry: false,
-  });
   const overview = useBridgeOverview();
   const summary = overview.data?.summary;
   const address = status?.running ? status.address : config?.listenAddress;
@@ -154,46 +142,6 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
             </span>
           </p>
         </div>
-        {status && !status.running && (
-          <div
-            role="alert"
-            className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-sm"
-          >
-            <p className="font-medium">Proxy is stopped</p>
-            <p className="mt-1 text-muted-foreground">
-              Turn on the proxy switch in the top bar before using Codex through
-              this Copilot bridge.
-            </p>
-          </div>
-        )}
-        {connection.error ? (
-          <div
-            role="alert"
-            className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-sm"
-          >
-            <p className="font-medium">Could not check Codex configuration</p>
-            <p className="mt-1 text-muted-foreground">
-              Open Connect to check the TOML location and review its settings.
-            </p>
-          </div>
-        ) : connection.data && !connection.data.configured ? (
-          <div
-            role="alert"
-            className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-sm"
-          >
-            <p className="font-medium">Codex is not connected to Atlas</p>
-            <p className="mt-1 text-muted-foreground">
-              {connection.data.configExists
-                ? "The detected TOML points elsewhere. "
-                : "No TOML was found at the detected location. "}
-              Open Connect, review the proposed TOML, and apply the changes
-              yourself.
-            </p>
-            <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-              {connection.data.configPath}
-            </p>
-          </div>
-        ) : null}
       </section>
       <section
         className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
@@ -220,10 +168,6 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
             </div>
           ))}
         </dl>
-        <p className="text-xs text-muted-foreground">
-          Token costs are estimates, not your Copilot bill. Cache reuse is the
-          share of input tokens read from cache.
-        </p>
       </section>
       <section
         className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
@@ -235,7 +179,7 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
               Requests
             </h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              Latest 10 completed requests
+              Latest {OVERVIEW_REQUEST_LIMIT} completed requests
             </p>
           </div>
           <p className="text-xs text-muted-foreground">

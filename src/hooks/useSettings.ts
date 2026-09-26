@@ -21,7 +21,6 @@ export interface UseSettingsResult {
   appConfigDir?: string;
   resolvedDirs: ResolvedDirectories;
   requiresRestart: boolean;
-  updateSettings: (updates: Partial<SettingsFormState>) => void;
   updateAppConfigDir: (value?: string) => void;
   browseAppConfigDir: () => Promise<void>;
   resetAppConfigDir: () => Promise<void>;
@@ -40,25 +39,22 @@ const sanitizeDir = (value?: string | null): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-/**
- * useSettings - 组合层
- * 负责：
- * - 组合 useSettingsForm、useDirectorySettings
- * - 保存设置逻辑
- */
+// Settings and Usage can mount separate consumers while an earlier save is
+// pending. Keep all preference writes in order across page navigation.
+let settingsSaveQueue: Promise<void> = Promise.resolve();
+
 export function useSettings(): UseSettingsResult {
   const { t } = useTranslation();
   const { data } = useSettingsQuery();
   const saveMutation = useSaveSettingsMutation();
+  const [saveState, setSaveState] = useState({ pending: 0, completed: 0 });
 
-  // 1️⃣ 表单状态管理
   const {
     settings,
     isLoading: isFormLoading,
     updateSettings,
-  } = useSettingsForm();
+  } = useSettingsForm(saveState.pending > 0, saveState.completed);
 
-  // 2️⃣ 目录管理
   const {
     appConfigDir,
     resolvedDirs,
@@ -72,28 +68,44 @@ export function useSettings(): UseSettingsResult {
   const [requiresRestart, setRequiresRestart] = useState(false);
   const acknowledgeRestart = useCallback(() => setRequiresRestart(false), []);
 
-  // 即时保存设置（用于 General 标签页的实时更新）
-  // 保存基础配置 + 独立的系统 API 调用（开机自启）
-  const autoSaveSettings = useCallback(
-    async (updates: Partial<SettingsFormState>): Promise<SaveResult | null> => {
-      const mergedSettings = settings ? { ...settings, ...updates } : null;
-      if (!mergedSettings) return null;
+  const runSave = useCallback(async <T>(save: () => Promise<T>): Promise<T> => {
+    setSaveState((state) => ({ ...state, pending: state.pending + 1 }));
+    const result = settingsSaveQueue.then(save);
+    settingsSaveQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      return await result;
+    } finally {
+      setSaveState((state) => ({
+        pending: state.pending - 1,
+        completed: state.completed + 1,
+      }));
+    }
+  }, []);
 
+  const savePreferences = useCallback(
+    async (updates: Partial<SettingsFormState>) => {
+      // Read inside the queue: a render snapshot can omit an earlier save, or
+      // contain an optimistic change whose write failed.
+      const previous = await settingsApi.get();
+      const payload: Settings = { ...previous, ...updates };
+      const startupChanged =
+        payload.launchOnStartup !== undefined &&
+        payload.launchOnStartup !== previous.launchOnStartup;
+
+      if (startupChanged) {
+        await settingsApi.setAutoLaunch(payload.launchOnStartup!);
+      }
       try {
-        const payload: Settings = { ...mergedSettings };
-
-        // 保存到配置文件
         await saveMutation.mutateAsync(payload);
-
-        // 如果开机自启状态改变，调用系统 API
-        if (
-          payload.launchOnStartup !== undefined &&
-          payload.launchOnStartup !== data?.launchOnStartup
-        ) {
+      } catch (error) {
+        if (startupChanged) {
           try {
-            await settingsApi.setAutoLaunch(payload.launchOnStartup);
-          } catch (error) {
-            console.error("Failed to update auto-launch:", error);
+            await settingsApi.setAutoLaunch(previous.launchOnStartup ?? false);
+          } catch (rollbackError) {
+            console.error("Failed to restore auto-launch:", rollbackError);
             toast.error(
               t("settings.autoLaunchFailed", {
                 defaultValue: "Failed to set auto-launch",
@@ -101,14 +113,26 @@ export function useSettings(): UseSettingsResult {
             );
           }
         }
+        throw error;
+      }
 
-        // 更新托盘菜单
-        try {
-          await providersApi.updateTrayMenu();
-        } catch (error) {
-          console.warn("[useSettings] Failed to refresh tray menu", error);
-        }
+      try {
+        await providersApi.updateTrayMenu();
+      } catch (error) {
+        console.warn("[useSettings] Failed to refresh tray menu", error);
+      }
+    },
+    [saveMutation, t],
+  );
 
+  const autoSaveSettings = useCallback(
+    async (updates: Partial<SettingsFormState>): Promise<SaveResult | null> => {
+      if (!settings) return null;
+      const changes = { ...updates };
+      updateSettings(changes);
+
+      try {
+        await runSave(() => savePreferences(changes));
         return { requiresRestart: false };
       } catch (error) {
         console.error("[useSettings] Failed to auto-save settings", error);
@@ -121,47 +145,27 @@ export function useSettings(): UseSettingsResult {
         throw error;
       }
     },
-    [data, saveMutation, settings, t],
+    [runSave, savePreferences, settings, t, updateSettings],
   );
 
-  // 完整保存设置（用于 Advanced 标签页的手动保存）
-  // 包含所有系统 API 调用和完整的验证流程
   const saveSettings = useCallback(async (): Promise<SaveResult | null> => {
     if (!settings || isDirectoryLoading) return null;
     try {
       const sanitizedAppDir = sanitizeDir(appConfigDir);
       const appDirChanged = sanitizedAppDir !== initialAppConfigDir;
 
-      const payload: Settings = { ...settings };
+      const updates = Object.fromEntries(
+        Object.entries(settings).filter(
+          ([key, value]) => value !== data?.[key as keyof Settings],
+        ),
+      );
 
-      await saveMutation.mutateAsync(payload);
-
-      if (appDirChanged) {
-        await settingsApi.setAppConfigDirOverride(sanitizedAppDir ?? null);
-      }
-
-      // 只在开机自启状态真正改变时调用系统 API
-      if (
-        payload.launchOnStartup !== undefined &&
-        payload.launchOnStartup !== data?.launchOnStartup
-      ) {
-        try {
-          await settingsApi.setAutoLaunch(payload.launchOnStartup);
-        } catch (error) {
-          console.error("Failed to update auto-launch:", error);
-          toast.error(
-            t("settings.autoLaunchFailed", {
-              defaultValue: "Failed to set auto-launch",
-            }),
-          );
+      await runSave(async () => {
+        await savePreferences(updates);
+        if (appDirChanged) {
+          await settingsApi.setAppConfigDirOverride(sanitizedAppDir ?? null);
         }
-      }
-
-      try {
-        await providersApi.updateTrayMenu();
-      } catch (error) {
-        console.warn("[useSettings] Failed to refresh tray menu", error);
-      }
+      });
 
       setRequiresRestart(appDirChanged);
 
@@ -188,7 +192,8 @@ export function useSettings(): UseSettingsResult {
     data,
     initialAppConfigDir,
     isDirectoryLoading,
-    saveMutation,
+    runSave,
+    savePreferences,
     settings,
     setRequiresRestart,
     t,
@@ -202,11 +207,10 @@ export function useSettings(): UseSettingsResult {
   return {
     settings,
     isLoading,
-    isSaving: saveMutation.isPending,
+    isSaving: saveState.pending > 0,
     appConfigDir,
     resolvedDirs,
     requiresRestart,
-    updateSettings,
     updateAppConfigDir,
     browseAppConfigDir,
     resetAppConfigDir,

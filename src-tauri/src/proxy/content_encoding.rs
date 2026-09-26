@@ -54,17 +54,6 @@ impl From<std::io::Error> for DecompressError {
     }
 }
 
-impl From<DecompressError> for std::io::Error {
-    fn from(e: DecompressError) -> Self {
-        match e {
-            DecompressError::Io(e) => e,
-            DecompressError::TooLarge { limit } => {
-                std::io::Error::other(format!("decompressed body exceeds {limit} bytes"))
-            }
-        }
-    }
-}
-
 /// 从解码器读取解压输出，最多 `max_bytes`；一旦输出超过预算立即中止读取并返回
 /// [`DecompressError::TooLarge`] —— 压缩炸弹在预算耗尽处被截停，而不是先在内存里
 /// 完整展开再比较大小。
@@ -101,9 +90,10 @@ fn decompress_single(
             let zlib = flate2::read::ZlibDecoder::new(body);
             match read_with_output_limit(zlib, max_output_bytes) {
                 Ok(decompressed) => Ok(Some(decompressed)),
-                Err(zlib_err) => {
-                    // TooLarge 也要回退：raw 流被误判为 zlib 时可能在预算处截停，
-                    // 回退后若真是炸弹，raw 解码同样会触发 TooLarge。
+                // Exceeding the output budget is not an encoding failure.
+                // A raw fallback can hide this rejection behind a decode error.
+                Err(error @ DecompressError::TooLarge { .. }) => Err(error),
+                Err(DecompressError::Io(zlib_err)) => {
                     log::debug!("deflate 按 zlib 解压失败（{zlib_err}），回退 raw deflate");
                     let raw = flate2::read::DeflateDecoder::new(body);
                     Ok(Some(read_with_output_limit(raw, max_output_bytes)?))
@@ -158,15 +148,6 @@ pub(crate) fn decompress_body_with_limit(
     Ok(data)
 }
 
-/// 无输出上限的 [`decompress_body_with_limit`] 版本，供请求侧等已有自身
-/// 体积约束的调用方使用。
-pub(crate) fn decompress_body(
-    content_encoding: &str,
-    body: &[u8],
-) -> Result<Option<Vec<u8>>, std::io::Error> {
-    decompress_body_with_limit(content_encoding, body, usize::MAX).map_err(Into::into)
-}
-
 /// 该 content-encoding（含堆叠，如 `gzip, zstd`）是否全部可被解压。
 ///
 /// 请求侧用它做闸门：无法解压的压缩体不能透传给 JSON 解析，需直接拒绝。
@@ -178,7 +159,7 @@ pub(crate) fn is_supported_content_encoding(content_encoding: &str) -> bool {
 /// 从 header 提取 content-encoding（合并重复头，忽略 identity 与空值）。
 ///
 /// HTTP 允许重复 content-encoding 头，语义等同逗号拼接，故用 `get_all` 合并；
-/// 返回值可能含多个逗号分隔的 coding，交由 [`decompress_body`] 反向解码。
+/// 返回值可能含多个逗号分隔的 coding，交由 [`decompress_body_with_limit`] 反向解码。
 pub(crate) fn get_content_encoding(headers: &HeaderMap) -> Option<String> {
     let combined = headers
         .get_all("content-encoding")
@@ -209,7 +190,9 @@ mod tests {
         std::io::Write::write_all(&mut encoder, payload).unwrap();
         let compressed = encoder.finish().unwrap();
 
-        let decompressed = decompress_body("deflate", &compressed).unwrap().unwrap();
+        let decompressed = decompress_body_with_limit("deflate", &compressed, 1024)
+            .unwrap()
+            .unwrap();
         assert_eq!(decompressed, payload);
     }
 
@@ -222,7 +205,9 @@ mod tests {
         std::io::Write::write_all(&mut encoder, payload).unwrap();
         let compressed = encoder.finish().unwrap();
 
-        let decompressed = decompress_body("deflate", &compressed).unwrap().unwrap();
+        let decompressed = decompress_body_with_limit("deflate", &compressed, 1024)
+            .unwrap()
+            .unwrap();
         assert_eq!(decompressed, payload);
     }
 
@@ -231,7 +216,9 @@ mod tests {
         // Codex 登录态发的就是 zstd 压缩请求体
         let payload = br#"{"hello":"world","n":42}"#;
         let compressed = zstd::stream::encode_all(std::io::Cursor::new(&payload[..]), 0).unwrap();
-        let decompressed = decompress_body("zstd", &compressed).unwrap().unwrap();
+        let decompressed = decompress_body_with_limit("zstd", &compressed, 1024)
+            .unwrap()
+            .unwrap();
         assert_eq!(decompressed, payload);
     }
 
@@ -244,14 +231,16 @@ mod tests {
         let gzipped = gz.finish().unwrap();
         let stacked = zstd::stream::encode_all(std::io::Cursor::new(&gzipped[..]), 0).unwrap();
 
-        let decompressed = decompress_body("gzip, zstd", &stacked).unwrap().unwrap();
+        let decompressed = decompress_body_with_limit("gzip, zstd", &stacked, 1024)
+            .unwrap()
+            .unwrap();
         assert_eq!(decompressed, payload);
     }
 
     #[test]
     fn decompress_body_stacked_with_unsupported_returns_none() {
         // 堆叠里只要有一个不支持，就整体保头透传
-        let result = decompress_body("snappy, zstd", b"\x00\x01\x02\x03").unwrap();
+        let result = decompress_body_with_limit("snappy, zstd", b"\x00\x01\x02\x03", 1024).unwrap();
         assert!(result.is_none());
     }
 
@@ -259,7 +248,7 @@ mod tests {
     fn decompress_body_unknown_encoding_returns_none_to_keep_headers() {
         // 未知编码必须返回 None（而非伪装成"已解码"），否则 content-encoding
         // 头被剥掉，下游诊断会把压缩字节误报成明文
-        let result = decompress_body("snappy", b"\x00\x01\x02\x03").unwrap();
+        let result = decompress_body_with_limit("snappy", b"\x00\x01\x02\x03", 1024).unwrap();
         assert!(result.is_none());
     }
 

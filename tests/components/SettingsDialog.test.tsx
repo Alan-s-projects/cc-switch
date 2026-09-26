@@ -27,7 +27,6 @@ interface SettingsMock {
   appConfigDir?: string;
   resolvedDirs: Record<string, string>;
   requiresRestart: boolean;
-  updateSettings: ReturnType<typeof vi.fn>;
   updateAppConfigDir: ReturnType<typeof vi.fn>;
   browseAppConfigDir: ReturnType<typeof vi.fn>;
   resetAppConfigDir: ReturnType<typeof vi.fn>;
@@ -50,7 +49,6 @@ const createSettingsMock = (overrides: Partial<SettingsMock> = {}) => {
       appConfig: "/app-config",
     },
     requiresRestart: false,
-    updateSettings: vi.fn(),
     updateAppConfigDir: vi.fn(),
     browseAppConfigDir: vi.fn(),
     resetAppConfigDir: vi.fn(),
@@ -267,6 +265,7 @@ describe("SettingsPage Component", () => {
       "settings.tabAuth",
       "Copilot",
       "settings.tabAdvanced",
+      "About",
     ]) {
       expect(screen.getByRole("button", { name })).toBeVisible();
     }
@@ -277,6 +276,14 @@ describe("SettingsPage Component", () => {
       screen.getByRole("button", { name: "settings.tabAuth" })
         .nextElementSibling,
     ).toBe(screen.getByRole("button", { name: "Copilot" }));
+    expect(
+      screen.getByRole("button", { name: "settings.tabAdvanced" })
+        .nextElementSibling,
+    ).toBe(screen.getByRole("button", { name: "About" }));
+    expect(screen.queryByText("about")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "About" }));
+    expect(screen.getByText("about")).toBeVisible();
+    expect(screen.queryByText("theme-settings")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Copilot" }));
     expect(screen.getByText("copilot-settings")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "cancel-copilot" }));
@@ -285,7 +292,7 @@ describe("SettingsPage Component", () => {
     );
 
     fireEvent.click(screen.getByText("window-settings"));
-    expect(settingsMock.updateSettings).toHaveBeenCalledWith({
+    expect(settingsMock.autoSaveSettings).toHaveBeenCalledWith({
       launchOnStartup: false,
     });
 

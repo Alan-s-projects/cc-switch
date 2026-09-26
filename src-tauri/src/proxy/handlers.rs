@@ -7,7 +7,10 @@
 //! - 各 handler 只保留独特的业务逻辑
 
 use super::{
-    content_encoding::{decompress_body, get_content_encoding, is_supported_content_encoding},
+    content_encoding::{
+        decompress_body_with_limit, get_content_encoding, is_supported_content_encoding,
+        DecompressError,
+    },
     error_mapper::{get_error_message, map_proxy_error_to_status},
     forwarder::ActiveConnectionGuard,
     handler_config::{codex_stream_usage_event_filter, CODEX_PARSER_CONFIG},
@@ -32,8 +35,10 @@ use super::{
 use crate::database::PRICING_SOURCE_REQUEST;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use bytes::Bytes;
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, LengthLimitError, Limited};
 use serde_json::{json, Value};
+
+const MAX_CODEX_REQUEST_BODY_BYTES: usize = 200 * 1024 * 1024;
 
 // ============================================================================
 // 健康检查和状态查询（简单端点）
@@ -98,6 +103,7 @@ fn endpoint_with_query(uri: &axum::http::Uri, endpoint: &str) -> String {
 fn decode_codex_request_body(
     headers: &mut axum::http::HeaderMap,
     body_bytes: Bytes,
+    max_bytes: usize,
 ) -> Result<Bytes, ProxyError> {
     let Some(encoding) = get_content_encoding(headers) else {
         return Ok(body_bytes);
@@ -110,7 +116,7 @@ fn decode_codex_request_body(
     }
 
     log::debug!("[Codex] 解压请求体: content-encoding={encoding}");
-    let decompressed = match decompress_body(&encoding, &body_bytes) {
+    let decompressed = match decompress_body_with_limit(&encoding, &body_bytes, max_bytes) {
         Ok(Some(decompressed)) => decompressed,
         // is_supported_content_encoding 已确保编码受支持，正常不会返回 None；
         // 防御性兜底：宁可报错，也不能把压缩字节当 JSON 透传下去。
@@ -119,7 +125,10 @@ fn decode_codex_request_body(
                 "Unsupported request content-encoding: {encoding}"
             )));
         }
-        Err(e) => {
+        Err(DecompressError::TooLarge { .. }) => {
+            return Err(ProxyError::RequestBodyTooLarge(max_bytes));
+        }
+        Err(DecompressError::Io(e)) => {
             log::warn!("[Codex] 请求体解压失败 ({encoding}): {e}");
             return Err(ProxyError::InvalidRequest(format!(
                 "Failed to decompress request body ({encoding}): {e}"
@@ -134,6 +143,30 @@ fn decode_codex_request_body(
     Ok(Bytes::from(decompressed))
 }
 
+/// Limit both wire bytes and decoded bytes, including chunked and compressed
+/// requests. Axum's DefaultBodyLimit does not cover direct Request body reads.
+async fn read_codex_request_body(
+    headers: &mut axum::http::HeaderMap,
+    body: axum::body::Body,
+    max_bytes: usize,
+) -> Result<Value, ProxyError> {
+    let body_bytes = Limited::new(body, max_bytes)
+        .collect()
+        .await
+        .map_err(|error| {
+            if error.is::<LengthLimitError>() {
+                ProxyError::RequestBodyTooLarge(max_bytes)
+            } else {
+                ProxyError::InvalidRequest(format!("Failed to read request body: {error}"))
+            }
+        })?
+        .to_bytes();
+    let body_bytes = decode_codex_request_body(headers, body_bytes, max_bytes)?;
+    serde_json::from_slice(&body_bytes).map_err(|error| {
+        ProxyError::InvalidRequest(format!("Failed to parse request body: {error}"))
+    })
+}
+
 pub async fn handle_responses(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
@@ -142,14 +175,8 @@ pub async fn handle_responses(
     let method = parts.method.clone();
     let uri = parts.uri;
     let mut headers = parts.headers;
-    let body_bytes = req_body
-        .collect()
-        .await
-        .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
-        .to_bytes();
-    let body_bytes = decode_codex_request_body(&mut headers, body_bytes)?;
-    let body: Value = serde_json::from_slice(&body_bytes)
-        .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
+    let body =
+        read_codex_request_body(&mut headers, req_body, MAX_CODEX_REQUEST_BODY_BYTES).await?;
 
     let mut ctx = RequestContext::new(&state, &body, &headers).await?;
     let endpoint = endpoint_with_query(&uri, "/responses");
@@ -260,14 +287,8 @@ async fn handle_codex_standalone_passthrough(
     let method = parts.method.clone();
     let uri = parts.uri;
     let mut headers = parts.headers;
-    let body_bytes = req_body
-        .collect()
-        .await
-        .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
-        .to_bytes();
-    let body_bytes = decode_codex_request_body(&mut headers, body_bytes)?;
-    let body: Value = serde_json::from_slice(&body_bytes)
-        .map_err(|e| ProxyError::InvalidRequest(format!("Failed to parse request body: {e}")))?;
+    let body =
+        read_codex_request_body(&mut headers, req_body, MAX_CODEX_REQUEST_BODY_BYTES).await?;
 
     let mut ctx = RequestContext::new(&state, &body, &headers).await?;
     let endpoint = endpoint_with_query(&uri, canonical_endpoint);
@@ -305,14 +326,8 @@ pub async fn handle_responses_compact(
     let method = parts.method.clone();
     let uri = parts.uri;
     let mut headers = parts.headers;
-    let body_bytes = req_body
-        .collect()
-        .await
-        .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
-        .to_bytes();
-    let body_bytes = decode_codex_request_body(&mut headers, body_bytes)?;
-    let body: Value = serde_json::from_slice(&body_bytes)
-        .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
+    let body =
+        read_codex_request_body(&mut headers, req_body, MAX_CODEX_REQUEST_BODY_BYTES).await?;
 
     let mut ctx = RequestContext::new(&state, &body, &headers).await?;
     let endpoint = endpoint_with_query(&uri, "/responses/compact");
@@ -768,9 +783,20 @@ fn codex_proxy_error_json(
         let status_fragment = upstream_status
             .map(|status| format!("; upstream_status: HTTP {status}"))
             .unwrap_or_default();
-        format!(
-            "Copilot Bridge Atlas local proxy failed while handling Codex endpoint {endpoint}. Provider: {provider_name}; model: {request_model}{status_fragment}; cause: {cause}"
-        )
+        if upstream_status == Some(408) {
+            format!(
+                "Upstream provider returned HTTP 408 (Request Timeout). \
+                 Atlas received this response from upstream; it is not Atlas's local timeout. \
+                 Provider: {provider_name}; model: {request_model}; endpoint: {endpoint}; cause: {cause}. \
+                 Retry once. If this repeats for a long conversation, reduce its context or \
+                 start a new chat with a short handoff. A shorter follow-up alone still includes \
+                 the existing conversation. This response does not establish a token-limit violation."
+            )
+        } else {
+            format!(
+                "Copilot Bridge Atlas local proxy failed while handling Codex endpoint {endpoint}. Provider: {provider_name}; model: {request_model}{status_fragment}; cause: {cause}"
+            )
+        }
     };
 
     error_obj.insert(
@@ -826,6 +852,7 @@ fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
         ProxyError::ConfigError(_) => "copilot_bridge_atlas_config_error",
         ProxyError::TransformError(_) => "copilot_bridge_atlas_transform_error",
         ProxyError::InvalidRequest(_) => "copilot_bridge_atlas_invalid_request",
+        ProxyError::RequestBodyTooLarge(_) => "copilot_bridge_atlas_request_body_too_large",
         ProxyError::AuthError(_) => "copilot_bridge_atlas_auth_error",
         ProxyError::UpstreamError { .. } => "copilot_bridge_atlas_upstream_error",
         ProxyError::DatabaseError(_) => "copilot_bridge_atlas_database_error",
@@ -1405,9 +1432,118 @@ async fn log_usage(
 mod tests {
     use super::{
         body_looks_like_sse, chat_sse_to_response_value, classify_body_for_diagnostics,
-        codex_proxy_error_json, upstream_body_parse_error,
+        codex_proxy_error_json, read_codex_request_body, upstream_body_parse_error,
     };
     use crate::proxy::ProxyError;
+
+    fn encode_request(encoding: &str, body: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        match encoding {
+            "identity" => body.to_vec(),
+            "gzip" => {
+                let mut encoder =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+                encoder.write_all(body).unwrap();
+                encoder.finish().unwrap()
+            }
+            "deflate" => {
+                let mut encoder =
+                    flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+                encoder.write_all(body).unwrap();
+                encoder.finish().unwrap()
+            }
+            "zstd" => zstd::stream::encode_all(body, 0).unwrap(),
+            "gzip, zstd" => {
+                zstd::stream::encode_all(encode_request("gzip", body).as_slice(), 0).unwrap()
+            }
+            _ => panic!("unknown fixture encoding"),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_body_limits_wire_bytes_before_collecting_the_rest() {
+        use axum::{body::Body, http::HeaderMap, response::IntoResponse};
+        use bytes::Bytes;
+        use futures::StreamExt;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let polls = Arc::new(AtomicUsize::new(0));
+        let count = polls.clone();
+        let stream = futures::stream::iter([
+            Ok::<_, std::io::Error>(Bytes::from_static(b"1234")),
+            Ok(Bytes::from_static(b"5678")),
+            Ok(Bytes::from_static(b"must not be read")),
+        ])
+        .inspect(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        let error = read_codex_request_body(&mut HeaderMap::new(), Body::from_stream(stream), 6)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProxyError::RequestBodyTooLarge(6)));
+        assert_eq!(
+            error.into_response().status(),
+            axum::http::StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn request_body_limits_decoded_bytes_for_each_encoding() {
+        use axum::{body::Body, http::HeaderMap};
+        let body = serde_json::to_vec(&serde_json::json!({
+            "model": "gpt-6-astra",
+            "input": "x".repeat(4096)
+        }))
+        .unwrap();
+        for encoding in ["gzip", "deflate", "zstd", "gzip, zstd"] {
+            let compressed = encode_request(encoding, &body);
+            assert!(compressed.len() < 1024);
+            let mut headers = HeaderMap::new();
+            headers.insert("content-encoding", encoding.parse().unwrap());
+            let result = read_codex_request_body(&mut headers, Body::from(compressed), 1024).await;
+            assert!(
+                matches!(result, Err(ProxyError::RequestBodyTooLarge(1024))),
+                "{encoding}: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn request_body_preserves_tools_images_and_headers_within_the_limit() {
+        use axum::{body::Body, http::HeaderMap};
+        let expected = serde_json::json!({
+            "model": "gpt-6-astra",
+            "input": [
+                {"type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "Keep this content exactly. ".repeat(64)},
+                    {"type": "input_image", "image_url": "data:image/png;base64,aGVsbG8="}
+                ]},
+                {"type": "function_call_output", "call_id": "call_fixture", "output": "你好"}
+            ],
+            "tools": [{"type": "function", "name": "check", "parameters": {"type": "object"}}]
+        });
+        let body = serde_json::to_vec(&expected).unwrap();
+        for encoding in ["identity", "gzip", "deflate", "zstd", "gzip, zstd"] {
+            let compressed = encode_request(encoding, &body);
+            let mut headers = HeaderMap::new();
+            headers.insert("content-encoding", encoding.parse().unwrap());
+            headers.insert("content-length", compressed.len().into());
+            headers.insert("x-client-request-id", "request_fixture".parse().unwrap());
+            let parsed = read_codex_request_body(&mut headers, Body::from(compressed), body.len())
+                .await
+                .unwrap();
+            assert_eq!(parsed, expected, "{encoding}");
+            assert_eq!(headers["x-client-request-id"], "request_fixture");
+            if encoding != "identity" {
+                assert!(!headers.contains_key("content-encoding"));
+                assert!(!headers.contains_key("content-length"));
+            }
+        }
+    }
 
     #[test]
     fn body_looks_like_sse_detects_unlabeled_sse_prefixes() {
@@ -1911,6 +2047,41 @@ data: {\"id\":\"chatcmpl-real\",\"model\":\"m\",\"created\":42,\"choices\":[{\"i
         assert!(message.contains("upstream gateway failed"));
         assert_eq!(body["error"]["code"], "copilot_bridge_atlas_upstream_error");
         assert_eq!(body["error"]["upstream_status"], 502);
+    }
+
+    #[test]
+    fn codex_proxy_408_preserves_upstream_cause_without_claiming_a_local_timeout() {
+        let error = ProxyError::UpstreamError {
+            status: 408,
+            body: Some(
+                r#"{"error":{"message":"Timed out reading request body","code":"request_timeout","type":"timeout_error"}}"#
+                    .to_string(),
+            ),
+        };
+        let body = codex_proxy_error_json("GitHub Copilot", "gpt-6-astra", "/responses", &error);
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(message.contains("Upstream provider returned HTTP 408"));
+        assert!(message.contains("Timed out reading request body"));
+        assert!(message.contains("short handoff"));
+        assert!(!message.contains("local proxy failed"));
+        assert_eq!(body["error"]["code"], "request_timeout");
+        assert_eq!(body["error"]["type"], "timeout_error");
+        assert_eq!(body["error"]["upstream_status"], 408);
+        assert_eq!(body["error"]["provider"], "GitHub Copilot");
+        assert_eq!(body["error"]["model"], "gpt-6-astra");
+        assert_eq!(body["error"]["endpoint"], "/responses");
+
+        let local = codex_proxy_error_json(
+            "GitHub Copilot",
+            "gpt-6-astra",
+            "/responses",
+            &ProxyError::Timeout("Timed out waiting for response headers".into()),
+        );
+        assert!(local["error"]["upstream_status"].is_null());
+        assert!(!local["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Upstream provider returned HTTP 408"));
     }
 
     #[test]
