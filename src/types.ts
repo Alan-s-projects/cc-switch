@@ -29,6 +29,7 @@ export interface CodexCatalogModel {
   available?: boolean;
   vendor?: string;
   contextWindow?: string | number;
+  maxContextWindow?: number;
   maxOutputTokens?: number;
   supportsToolCalls?: boolean;
   supportsParallelToolCalls?: boolean;

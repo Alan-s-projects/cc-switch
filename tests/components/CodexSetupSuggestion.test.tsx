@@ -103,30 +103,6 @@ const preview = {
   openaiConfig: proposedText(openaiLines),
   openaiLines,
 };
-const context1m = { context1m: true };
-const withContextPreset = (lines: ConfigDiffLine[]): ConfigDiffLine[] =>
-  lines.flatMap((line) =>
-    line.kind === "context" && line.oldLineNumber === 2
-      ? [line, added(3, "model_context_window = 1000000")]
-      : [
-          {
-            ...line,
-            newLineNumber:
-              line.newLineNumber === null
-                ? null
-                : line.newLineNumber + (line.newLineNumber > 2 ? 1 : 0),
-          },
-        ],
-  );
-const recommendedCopilotLines = withContextPreset(copilotLines);
-const recommendedOpenaiLines = withContextPreset(openaiLines);
-const recommendedPreview = {
-  ...preview,
-  copilotConfig: proposedText(recommendedCopilotLines),
-  copilotLines: recommendedCopilotLines,
-  openaiConfig: proposedText(recommendedOpenaiLines),
-  openaiLines: recommendedOpenaiLines,
-};
 const profilePreview = {
   ...preview,
   configPath: profilePath,
@@ -156,7 +132,6 @@ const copyProposal = () =>
   screen.getByRole("button", { name: "Copy proposed TOML" });
 const connectionControl = () =>
   screen.getByRole("combobox", { name: "Connection" });
-const contextControl = () => screen.getByRole("combobox", { name: "Context" });
 async function selectOption(control: HTMLElement, option: string) {
   fireEvent.keyDown(control, { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: option }));
@@ -231,13 +206,6 @@ describe("read-only Codex connection suggestions", () => {
     expect(
       screen.getAllByRole("option").map((option) => option.textContent),
     ).toEqual(["Copilot Bridge", "Official OpenAI sign-in"]);
-    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
-    fireEvent.keyDown(contextControl(), { key: "ArrowDown" });
-    await screen.findByRole("option", { name: "Unchanged" });
-    expect(
-      screen.getAllByRole("option").map((option) => option.textContent),
-    ).toEqual(["Unchanged", "Use 1M context"]);
-    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
   });
 
   it("shows current TOML on the left and proposed TOML on the right in a keyboard-scrollable pane", async () => {
@@ -245,7 +213,6 @@ describe("read-only Codex connection suggestions", () => {
     await screen.findByRole("region", { name: "Configuration diff" });
     comparison().focus();
     expect(comparison()).toHaveFocus();
-    expect(contextControl()).toHaveTextContent("Unchanged");
     expect(connectionControl()).toHaveTextContent("Copilot Bridge");
     const headings = within(comparison()).getAllByRole("columnheader");
     expect(headings[0]).toHaveTextContent("Current TOML");
@@ -604,147 +571,6 @@ describe("read-only Codex connection suggestions", () => {
     fireEvent.click(copyProposal());
     await waitFor(() =>
       expect(mocks.copy).toHaveBeenCalledWith(preview.copilotConfig),
-    );
-  });
-
-  it("uses the 1M context-only preset for both targets and preserves existing compaction settings", async () => {
-    mocks.invoke.mockImplementation((_command, { recommendations }) =>
-      Promise.resolve(
-        recommendations?.context1m ? recommendedPreview : preview,
-      ),
-    );
-    renderPanel();
-    await screen.findByRole("region", { name: "Configuration diff" });
-    await selectOption(contextControl(), "Use 1M context");
-    await waitFor(() =>
-      expect(mocks.invoke).toHaveBeenLastCalledWith(
-        "get_codex_setup_suggestion",
-        { configPath: null, recommendations: context1m },
-      ),
-    );
-    await waitFor(() => expect(copyProposal()).toBeEnabled());
-    const contextCells = rowFor("model_context_window = 1000000").getAllByRole(
-      "cell",
-    );
-    expect(contextCells[0]).toHaveTextContent(/^$/);
-    expect(contextCells[1]).toHaveTextContent("model_context_window = 1000000");
-    const compactLine = within(comparison()).getAllByText(currentLines[1])[0];
-    const compactCells = within(compactLine.closest("tr")!).getAllByRole(
-      "cell",
-    );
-    expect(compactCells[0]).toHaveTextContent(currentLines[1]);
-    expect(compactCells[1]).toHaveTextContent(currentLines[1]);
-
-    for (const [target, config] of [
-      ["Copilot Bridge", recommendedPreview.copilotConfig],
-      ["Official OpenAI sign-in", recommendedPreview.openaiConfig],
-    ]) {
-      await selectOption(connectionControl(), target);
-      expect(within(comparison()).getAllByText(currentLines[1])).toHaveLength(
-        2,
-      );
-      expect(contextControl()).toHaveTextContent("Use 1M context");
-      expect(comparison()).toHaveTextContent("model_context_window = 1000000");
-      fireEvent.click(copyProposal());
-      await waitFor(() => expect(mocks.copy).toHaveBeenLastCalledWith(config));
-    }
-
-    await selectOption(contextControl(), "Unchanged");
-    await waitFor(() =>
-      expect(mocks.invoke).toHaveBeenLastCalledWith(
-        "get_codex_setup_suggestion",
-        { configPath: null },
-      ),
-    );
-    await waitFor(() => expect(copyProposal()).toBeEnabled());
-    expect(comparison()).toHaveTextContent(currentLines[1]);
-    expect(comparison()).not.toHaveTextContent(
-      "model_context_window = 1000000",
-    );
-    fireEvent.click(copyProposal());
-    await waitFor(() =>
-      expect(mocks.copy).toHaveBeenLastCalledWith(preview.openaiConfig),
-    );
-  });
-
-  it("cannot copy a stale recommendation while pending or after a late response", async () => {
-    let resolve!: (value: typeof recommendedPreview) => void;
-    mocks.invoke.mockImplementation((_command, { recommendations }) =>
-      recommendations?.context1m
-        ? new Promise<typeof recommendedPreview>((done) => {
-            resolve = done;
-          })
-        : Promise.resolve(preview),
-    );
-    renderPanel();
-    await screen.findByRole("region", { name: "Configuration diff" });
-    await selectOption(contextControl(), "Use 1M context");
-    await waitFor(() =>
-      expect(mocks.invoke).toHaveBeenLastCalledWith(
-        "get_codex_setup_suggestion",
-        { configPath: null, recommendations: context1m },
-      ),
-    );
-    expectNoPreview();
-    expect(pathInput()).toHaveValue(preview.configPath);
-    expect(mocks.copy).not.toHaveBeenCalled();
-
-    await selectOption(contextControl(), "Unchanged");
-    await waitFor(() => expect(copyProposal()).toBeEnabled());
-    await act(async () => resolve(recommendedPreview));
-    expect(contextControl()).toHaveTextContent("Unchanged");
-    const compactLine = within(comparison()).getAllByText(currentLines[1])[0];
-    const cells = within(compactLine.closest("tr")!).getAllByRole("cell");
-    expect(cells[0]).toHaveTextContent(currentLines[1]);
-    expect(cells[1]).toHaveTextContent(currentLines[1]);
-    fireEvent.click(copyProposal());
-    await waitFor(() =>
-      expect(mocks.copy).toHaveBeenLastCalledWith(preview.copilotConfig),
-    );
-  });
-
-  it("keeps recommendation choices local to the open preview", async () => {
-    const first = renderPanel();
-    await screen.findByRole("region", { name: "Configuration diff" });
-    await selectOption(contextControl(), "Use 1M context");
-    await selectOption(connectionControl(), "Official OpenAI sign-in");
-    await waitFor(() => expect(copyProposal()).toBeEnabled());
-    first.unmount();
-
-    renderPanel();
-    await screen.findByRole("region", { name: "Configuration diff" });
-    expect(contextControl()).toHaveTextContent("Unchanged");
-    expect(connectionControl()).toHaveTextContent("Copilot Bridge");
-    expect(mocks.invoke).toHaveBeenLastCalledWith(
-      "get_codex_setup_suggestion",
-      { configPath: null },
-    );
-  });
-
-  it("does not carry a selected preset to another file", async () => {
-    mocks.open.mockResolvedValue(profilePath);
-    mocks.invoke.mockImplementation(
-      (_command, { configPath, recommendations }) =>
-        Promise.resolve(
-          configPath
-            ? profilePreview
-            : recommendations?.context1m
-              ? recommendedPreview
-              : preview,
-        ),
-    );
-    renderPanel();
-    await screen.findByRole("region", { name: "Configuration diff" });
-    await selectOption(contextControl(), "Use 1M context");
-    await waitFor(() => expect(copyProposal()).toBeEnabled());
-    await userEvent.click(
-      screen.getByRole("button", { name: "Browse for TOML file" }),
-    );
-    await waitFor(() => expect(pathInput()).toHaveValue(profilePath));
-    expect(contextControl()).toHaveTextContent("Unchanged");
-    expect(mocks.invoke).toHaveBeenLastCalledWith(
-      "get_codex_setup_suggestion",
-      { configPath: profilePath },
     );
   });
 });

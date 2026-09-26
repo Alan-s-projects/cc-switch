@@ -94,14 +94,18 @@ describe("Copilot model catalog import", () => {
     expect(displayNames()).toEqual(["Alpha", "Zulu", "Beta", "Charlie"]);
     expect(
       screen
-        .getAllByRole("switch")
+        .getAllByRole("switch", { name: /codexConfig.modelAvailableInCodex/ })
         .map((toggle) => toggle.getAttribute("data-state")),
     ).toEqual(["checked", "checked", "unchecked", "unchecked"]);
     expect(
       screen.queryByRole("button", { name: /Remove model/ }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("switch")[0]);
+    fireEvent.click(
+      screen.getAllByRole("switch", {
+        name: /codexConfig.modelAvailableInCodex/,
+      })[0],
+    );
     expect(input.onCatalogModelsChange).toHaveBeenLastCalledWith([
       { model: "gpt-zulu", displayName: "Zulu" },
       { model: "gpt-beta", displayName: "Beta", enabled: false },
@@ -339,14 +343,28 @@ describe("Copilot model catalog import", () => {
         reasoningLevels: ["high"],
       }),
     ]);
-    expect(screen.getAllByRole("switch")[1]).toBeDisabled();
+    expect(
+      screen.getAllByRole("switch", {
+        name: /codexConfig.modelAvailableInCodex/,
+      })[1],
+    ).toBeDisabled();
     vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
       model("gemini-new", "/chat/completions"),
       model("grok-returning"),
     ]);
     fireEvent.click(fetchButton());
-    await waitFor(() => expect(screen.getAllByRole("switch")[1]).toBeEnabled());
-    expect(screen.getAllByRole("switch")[1]).not.toBeChecked();
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("switch", {
+          name: /codexConfig.modelAvailableInCodex/,
+        })[1],
+      ).toBeEnabled(),
+    );
+    expect(
+      screen.getAllByRole("switch", {
+        name: /codexConfig.modelAvailableInCodex/,
+      })[1],
+    ).not.toBeChecked();
   });
 
   it("marks saved models unavailable when a successful refresh returns no eligible models", async () => {

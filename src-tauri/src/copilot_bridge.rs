@@ -170,6 +170,9 @@ fn merge_live_capabilities(
                     .filter(|limit| *limit > 0);
                 row["contextWindow"] = json!(current.map_or(limit, |current| current.min(limit)));
             }
+            if let Some(limit) = model.max_context_window_tokens {
+                row["maxContextWindow"] = json!(limit);
+            }
             // Editable reasoning choices take precedence over upstream defaults.
             // Normalize a usable legacy alias into the canonical key so an empty
             // or invalid camelCase value cannot mask it in the catalog parser.
@@ -226,6 +229,7 @@ fn merge_live_capabilities(
                 "available": true,
                 "vendor": model.vendor,
                 "contextWindow": model.context_window,
+                "maxContextWindow": model.max_context_window_tokens,
                 "maxOutputTokens": model.max_output_tokens,
                 "supportsToolCalls": model.supports_tool_calls,
                 "supportsParallelToolCalls": model.supports_parallel_tool_calls,
@@ -303,44 +307,6 @@ pub struct CodexSetupSuggestion {
     pub copilot_lines: Vec<ConfigDiffLine>,
     pub openai_config: String,
     pub openai_lines: Vec<ConfigDiffLine>,
-}
-
-const CONTEXT_WINDOW_1M: u64 = 1_000_000;
-
-fn copilot_context_window(current: &toml_edit::DocumentMut, catalog: Option<&Path>) -> u64 {
-    let model = current
-        .get("profile")
-        .and_then(toml_edit::Item::as_str)
-        .and_then(|profile| current.get("profiles")?.get(profile)?.get("model"))
-        .and_then(toml_edit::Item::as_str)
-        .or_else(|| current.get("model").and_then(toml_edit::Item::as_str))
-        .map(str::to_string);
-    // Only Atlas's own saved catalog is read. Never follow model_catalog_json
-    // from the user's file or infer a Copilot limit from a model's name.
-    let copilot_model_limit = catalog
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|catalog| {
-            catalog
-                .get("models")?
-                .as_array()?
-                .iter()
-                .filter(|entry| {
-                    entry
-                        .get("slug")
-                        .and_then(serde_json::Value::as_str)
-                        .zip(model.as_deref())
-                        .is_some_and(|(slug, model)| slug.eq_ignore_ascii_case(model.trim()))
-                })
-                .flat_map(|entry| {
-                    ["context_window", "max_context_window"]
-                        .into_iter()
-                        .filter_map(|key| entry.get(key)?.as_u64())
-                        .filter(|limit| *limit > 0)
-                })
-                .min()
-        });
-    copilot_model_limit.map_or(CONTEXT_WINDOW_1M, |limit| CONTEXT_WINDOW_1M.min(limit))
 }
 
 fn config_uses_endpoint(current: &toml_edit::DocumentMut, endpoint: &str) -> bool {
@@ -462,7 +428,7 @@ fn setup_suggestion(
     config_exists: bool,
     endpoint: &str,
     catalog: Option<&Path>,
-    recommendations: Option<&SetupRecommendations>,
+    _recommendations: Option<&SetupRecommendations>,
 ) -> Result<CodexSetupSuggestion, AppError> {
     let current = current_text
         .parse::<toml_edit::DocumentMut>()
@@ -594,18 +560,10 @@ fn setup_suggestion(
             openai.remove("model_providers");
         }
     }
-    if recommendations.is_some_and(|options| options.context_1m) {
-        for (doc, context_window) in [
-            (&mut copilot, copilot_context_window(&current, catalog)),
-            (&mut openai, CONTEXT_WINDOW_1M),
-        ] {
-            set_connection_value(
-                doc.as_table_mut(),
-                "model_context_window",
-                toml_edit::value(context_window as i64),
-            );
-        }
-    }
+    // Per-model context windows are defined in the catalog (model_catalog_json).
+    // Remove top-level model_context_window in both proposals so Codex relies on catalog definitions.
+    copilot.remove("model_context_window");
+    openai.remove("model_context_window");
     let copilot_config = copilot.to_string();
     let openai_config = openai.to_string();
     let copilot_lines = config_diff(current_text, &copilot_config);
@@ -875,22 +833,18 @@ model_reasoning_effort = "medium"
             ] {
                 assert_diff_snapshots(lines, text, config);
                 let proposed = config.parse::<toml_edit::DocumentMut>().unwrap();
+                assert!(proposed.get("model_context_window").is_none());
                 for key in [
-                    "model_context_window",
                     "model_auto_compact_token_limit",
                     "model_reasoning_effort",
                     "approval_policy",
                     "sandbox_mode",
                 ] {
-                    if recommendations.context_1m && key == "model_context_window" {
-                        assert_eq!(proposed[key].as_integer(), Some(1_000_000));
-                    } else {
-                        assert_eq!(
-                            proposed[key].to_string(),
-                            original[key].to_string(),
-                            "{key}"
-                        );
-                    }
+                    assert_eq!(
+                        proposed[key].to_string(),
+                        original[key].to_string(),
+                        "{key}"
+                    );
                 }
                 for key in [
                     "model",
@@ -911,76 +865,7 @@ model_reasoning_effort = "medium"
     }
 
     #[test]
-    fn context_preset_only_sets_window_and_respects_the_selected_copilot_model_limit() {
-        use serde_json::json;
-
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        let catalog = directory.path().join("atlas-models.json");
-        let catalog_text = json!({"models": [
-            {"slug": "gpt-6-astra", "context_window": 1_050_000, "max_context_window": 1_050_000},
-            {"slug": "gpt-6-luna", "context_window": 872_000, "max_context_window": 1_000_000},
-            {"slug": "invalid-limit", "context_window": 0},
-        ]})
-        .to_string();
-        std::fs::write(&catalog, &catalog_text).unwrap();
-        let recommendations = SetupRecommendations { context_1m: true };
-        for (model, window) in [
-            ("gpt-6-astra", 1_000_000),
-            ("GPT-6-LUNA", 872_000),
-            ("unknown-model", 1_000_000),
-            ("invalid-limit", 1_000_000),
-        ] {
-            let text = format!("model = '{model}'\n");
-            std::fs::write(&path, &text).unwrap();
-            let preview = setup_suggestion_from_file(
-                &path,
-                true,
-                "http://127.0.0.1:15722/v1",
-                Some(&catalog),
-                Some(&recommendations),
-            )
-            .unwrap();
-            for (config, lines, expected_window) in [
-                (&preview.copilot_config, &preview.copilot_lines, window),
-                (&preview.openai_config, &preview.openai_lines, 1_000_000),
-            ] {
-                let proposed = config.parse::<toml_edit::DocumentMut>().unwrap();
-                assert_eq!(
-                    proposed["model_context_window"].as_integer(),
-                    Some(expected_window)
-                );
-                assert!(proposed.get("model_auto_compact_token_limit").is_none());
-                assert_diff_snapshots(lines, &text, config);
-            }
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
-            assert_eq!(std::fs::read_to_string(&catalog).unwrap(), catalog_text);
-        }
-        let profiled = "model = 'gpt-6-astra'\nprofile = 'luna'\n[profiles.luna]\nmodel = 'gpt-6-luna'\nmodel_reasoning_effort = 'high'\n";
-        std::fs::write(&path, profiled).unwrap();
-        let preview = setup_suggestion_from_file(
-            &path,
-            true,
-            "http://127.0.0.1:15722/v1",
-            Some(&catalog),
-            Some(&recommendations),
-        )
-        .unwrap();
-        let proposed = preview
-            .copilot_config
-            .parse::<toml_edit::DocumentMut>()
-            .unwrap();
-        assert_eq!(proposed["model_context_window"].as_integer(), Some(872_000));
-        assert!(proposed.get("model_auto_compact_token_limit").is_none());
-        assert_eq!(
-            proposed["profiles"].to_string(),
-            profiled.parse::<toml_edit::DocumentMut>().unwrap()["profiles"].to_string()
-        );
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), profiled);
-    }
-
-    #[test]
-    fn context_preset_preserves_granular_policy_and_numeric_formatting() {
+    fn proposal_removes_top_level_context_window_and_preserves_granular_policy() {
         let text = r#"model_context_window = 1_000_000 # Keep numeric formatting
 model_auto_compact_token_limit = 900_000
 approval_policy = { granular = { sandbox_approval = false, rules = true } }
@@ -997,9 +882,10 @@ notify = ["unchanged"]
         )
         .unwrap();
         for config in [&preview.copilot_config, &preview.openai_config] {
-            assert!(config.contains("model_context_window = 1_000_000 # Keep numeric formatting"));
+            assert!(!config.contains("model_context_window"));
             assert!(config.contains("model_auto_compact_token_limit = 900_000"));
             let proposed = config.parse::<toml_edit::DocumentMut>().unwrap();
+            assert!(proposed.get("model_context_window").is_none());
             assert_eq!(
                 proposed["approval_policy"].to_string(),
                 text.parse::<toml_edit::DocumentMut>().unwrap()["approval_policy"].to_string()

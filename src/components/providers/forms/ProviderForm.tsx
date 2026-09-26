@@ -32,6 +32,10 @@ export const normalizeCodexCatalogModelsForSave = (
     const contextWindow = rawContextWindow
       ? Number.parseInt(rawContextWindow, 10)
       : undefined;
+    const maxContextWindow =
+      typeof item.maxContextWindow === "number" && item.maxContextWindow > 0
+        ? item.maxContextWindow
+        : undefined;
 
     const inputModalities = item.inputModalities?.filter(
       (m) => typeof m === "string" && m.trim(),
@@ -61,6 +65,7 @@ export const normalizeCodexCatalogModelsForSave = (
         : {}),
       ...(displayName ? { displayName } : {}),
       ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
+      ...(maxContextWindow ? { maxContextWindow } : {}),
       // Native Responses profile overrides (ignored by the chat/proxy profile).
       ...(typeof item.supportsParallelToolCalls === "boolean"
         ? { supportsParallelToolCalls: item.supportsParallelToolCalls }
@@ -125,6 +130,14 @@ export function ProviderForm({
   const [accountId, setAccountId] = useState<string | null>(
     initialMeta?.authBinding?.accountId ?? initialMeta?.githubAccountId ?? null,
   );
+  const [enableUltraReasoning, setEnableUltraReasoning] = useState<boolean>(
+    () => {
+      return (
+        (settings as Record<string, unknown>).enableUltraReasoning === true ||
+        (settings as Record<string, unknown>).enable_ultra_reasoning === true
+      );
+    },
+  );
   const { hasAnyAccount } = useCopilotAuth();
   const [catalog, setCatalog] = useState<CodexCatalogModel[]>(() => {
     const value = settings.modelCatalog as { models?: unknown[] } | undefined;
@@ -156,10 +169,18 @@ export function ProviderForm({
       meta,
       settingsConfig: JSON.stringify({
         ...settings,
+        enableUltraReasoning,
         modelCatalog: { models: normalizeCodexCatalogModelsForSave(catalog) },
       }),
     };
-  }, [accountId, catalog, initialData?.name, initialMeta, settings]);
+  }, [
+    accountId,
+    catalog,
+    enableUltraReasoning,
+    initialData?.name,
+    initialMeta,
+    settings,
+  ]);
 
   const enqueueAutoSave = useCallback(
     (version: number, values: ProviderFormValues) => {
@@ -302,6 +323,11 @@ export function ProviderForm({
           markChanged();
         }}
         onManageAuthAccounts={onManageAuthAccounts}
+        enableUltraReasoning={enableUltraReasoning}
+        onEnableUltraReasoningChange={(enabled) => {
+          setEnableUltraReasoning(enabled);
+          markChanged();
+        }}
         catalogModels={catalog}
         onCatalogModelsChange={(models) => {
           setCatalog(models);

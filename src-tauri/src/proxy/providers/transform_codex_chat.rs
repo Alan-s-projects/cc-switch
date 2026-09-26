@@ -278,7 +278,6 @@ pub fn responses_to_chat_completions(body: Value) -> Result<Value, ProxyError> {
     let messages = collapse_system_messages_to_head(messages);
     result["messages"] = json!(messages);
 
-    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("");
     if let Some(max_tokens) = body.get("max_output_tokens") {
         result["max_tokens"] = max_tokens.clone();
     }
@@ -295,10 +294,8 @@ pub fn responses_to_chat_completions(body: Value) -> Result<Value, ProxyError> {
         }
     }
 
-    if is_reasoning_gpt(model) {
-        if let Some(effort) = body.pointer("/reasoning/effort") {
-            result["reasoning_effort"] = effort.clone();
-        }
+    if let Some(effort) = body.pointer("/reasoning/effort") {
+        result["reasoning_effort"] = effort.clone();
     }
 
     let tools = tool_context.chat_tools();
@@ -336,15 +333,6 @@ pub fn responses_to_chat_completions(body: Value) -> Result<Value, ProxyError> {
     inject_openai_stream_include_usage(&mut result);
 
     Ok(result)
-}
-
-fn is_reasoning_gpt(model: &str) -> bool {
-    model
-        .to_ascii_lowercase()
-        .strip_prefix("gpt-")
-        .and_then(|version| version.split(|ch: char| !ch.is_ascii_digit()).next())
-        .and_then(|major| major.parse::<u32>().ok())
-        .is_some_and(|major| major >= 5)
 }
 
 pub(crate) fn inject_openai_stream_include_usage(result: &mut Value) {

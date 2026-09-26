@@ -45,17 +45,15 @@ export function CodexSetupSuggestion() {
     readSavedPath,
   );
   const [draftPath, setDraftPath] = useState<string | null>(null);
-  const [context1m, setContext1m] = useState(false);
   const [loadedSource, setLoadedSource] = useState<{
     selectedPath: string | null;
     configPath: string;
   } | null>(null);
   const { data, error, isFetching, refetch } = useQuery({
-    queryKey: ["codex-setup-suggestion", selectedPath, context1m],
+    queryKey: ["codex-setup-suggestion", selectedPath],
     queryFn: () =>
       invoke<SetupSuggestion>("get_codex_setup_suggestion", {
         configPath: selectedPath,
-        ...(context1m ? { recommendations: { context1m: true } } : {}),
       }),
     staleTime: 0,
     retry: false,
@@ -94,7 +92,6 @@ export function CodexSetupSuggestion() {
     if (nextPath === selectedPath) {
       if (!isFetching) void refetch();
     } else {
-      setContext1m(false);
       setSelectedPath(nextPath);
     }
   };
@@ -231,24 +228,6 @@ export function CodexSetupSuggestion() {
             <SelectContent>
               <SelectItem value="copilot">Copilot Bridge</SelectItem>
               <SelectItem value="openai">Official OpenAI sign-in</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="col-span-3 grid grid-cols-subgrid items-center gap-3">
-          <Label htmlFor="codex-context-window" className="text-xs">
-            Context
-          </Label>
-          <Select
-            value={context1m ? "1m" : "unchanged"}
-            onValueChange={(value) => setContext1m(value === "1m")}
-            disabled={!source || isPathEdited || Boolean(error)}
-          >
-            <SelectTrigger id="codex-context-window">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="unchanged">Unchanged</SelectItem>
-              <SelectItem value="1m">Use 1M context</SelectItem>
             </SelectContent>
           </Select>
         </div>

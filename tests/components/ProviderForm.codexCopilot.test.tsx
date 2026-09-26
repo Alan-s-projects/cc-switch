@@ -114,7 +114,9 @@ describe("Codex Copilot provider form", () => {
 
   it("saves per-model enabled state without deleting catalog rows", async () => {
     const onSubmit = renderForm();
-    const switches = screen.getAllByRole("switch");
+    const switches = screen.getAllByRole("switch", {
+      name: /codexConfig.modelAvailableInCodex/,
+    });
     expect(switches).toHaveLength(2);
     fireEvent.click(switches[1]);
     fireEvent.click(screen.getByRole("button", { name: "save" }));
@@ -144,7 +146,11 @@ describe("Codex Copilot provider form", () => {
       screen.queryByRole("button", { name: "common.cancel" }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("switch")[1]);
+    fireEvent.click(
+      screen.getAllByRole("switch", {
+        name: /codexConfig.modelAvailableInCodex/,
+      })[1],
+    );
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
     const saved = onSubmit.mock.calls[1][0];
     expect(saved.meta?.codexCopilotApiFormat).toBeUndefined();

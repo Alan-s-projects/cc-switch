@@ -500,6 +500,31 @@ fn apply_codex_copilot_model(
         if let Some(object) = body.as_object_mut() {
             object.remove("reasoning");
         }
+    } else if let Some(supported) = resolved.reasoning_efforts.as_ref() {
+        if let Some(effort) = body.pointer("/reasoning/effort").and_then(Value::as_str) {
+            if !supported.iter().any(|s| s.eq_ignore_ascii_case(effort)) {
+                // Fallback to highest supported effort (or none/omit)
+                const CANONICAL_EFFORTS: &[&str] =
+                    &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+                let fallback = CANONICAL_EFFORTS
+                    .iter()
+                    .rev()
+                    .find(|candidate| supported.iter().any(|s| s.eq_ignore_ascii_case(candidate)))
+                    .copied()
+                    .or_else(|| supported.last().map(String::as_str));
+                if let Some(fb) = fallback {
+                    if fb == "none" {
+                        if let Some(object) = body.as_object_mut() {
+                            object.remove("reasoning");
+                        }
+                    } else if let Some(reasoning) =
+                        body.get_mut("reasoning").and_then(Value::as_object_mut)
+                    {
+                        reasoning.insert("effort".to_string(), json!(fb));
+                    }
+                }
+            }
+        }
     }
     body["model"] = Value::String(resolved.id);
     Ok(transport)
@@ -1033,6 +1058,41 @@ mod tests {
         apply_codex_copilot_model(&mut body, Some(resolved)).unwrap();
         assert_eq!(body["parallel_tool_calls"], false);
         assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn clamps_unsupported_reasoning_effort_to_highest_supported_level() {
+        let model = super::super::providers::copilot_auth::CopilotModel {
+            id: "gpt-6-astra".into(),
+            name: "GPT-6 Astra".into(),
+            vendor: "OpenAI".into(),
+            model_picker_enabled: true,
+            model_type: "chat".into(),
+            policy_state: None,
+            context_window: Some(1_050_000),
+            max_context_window_tokens: Some(1_050_000),
+            max_output_tokens: Some(128_000),
+            supports_tool_calls: Some(true),
+            supported_endpoints: vec!["/responses".into()],
+            supports_parallel_tool_calls: Some(true),
+            supports_vision: Some(true),
+            reasoning_efforts: Some(vec![
+                "low".into(),
+                "medium".into(),
+                "high".into(),
+                "xhigh".into(),
+                "max".into(),
+            ]),
+        };
+        let resolved =
+            super::super::providers::copilot_model_map::resolve_model("gpt-6-astra", &[model]);
+        let mut body = json!({
+            "model": "gpt-6-astra",
+            "reasoning": { "effort": "ultra" }
+        });
+        let transport = apply_codex_copilot_model(&mut body, resolved).unwrap();
+        assert_eq!(transport.endpoint, "/responses");
+        assert_eq!(body["reasoning"]["effort"], "max");
     }
     #[test]
     fn replaces_client_fingerprints_and_preserves_payload_headers() {
