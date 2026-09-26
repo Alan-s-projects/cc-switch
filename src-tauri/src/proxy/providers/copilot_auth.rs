@@ -272,6 +272,9 @@ pub struct CopilotModel {
     /// Copilot-reported context window for this exact model ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// Total context window tokens advertised by Copilot limits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_window_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -322,11 +325,23 @@ fn extract_copilot_context_window(capabilities: Option<&Value>) -> Option<u64> {
         .min()
 }
 
+fn extract_copilot_total_context_window(capabilities: Option<&Value>) -> Option<u64> {
+    let capabilities = capabilities?;
+    capabilities
+        .get("limits")?
+        .get("max_context_window_tokens")?
+        .as_u64()
+        .filter(|tokens| *tokens > 0)
+}
+
 impl From<CopilotModelsResponseItem> for CopilotModel {
     fn from(model: CopilotModelsResponseItem) -> Self {
         let supports = model.capabilities.as_ref().and_then(|c| c.get("supports"));
         Self {
             context_window: extract_copilot_context_window(model.capabilities.as_ref()),
+            max_context_window_tokens: extract_copilot_total_context_window(
+                model.capabilities.as_ref(),
+            ),
             model_type: model
                 .capabilities
                 .as_ref()
@@ -1765,6 +1780,7 @@ mod tests {
         assert_eq!(model.context_window, Some(872000));
         assert_eq!(model.supports_parallel_tool_calls, Some(true));
         assert_eq!(model.supports_vision, Some(true));
+        assert_eq!(model.max_context_window_tokens, Some(1000000));
         assert_eq!(
             model.reasoning_efforts.unwrap(),
             ["none", "low", "medium", "max"]

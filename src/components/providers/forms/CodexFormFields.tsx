@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Check, ChevronsUpDown, Loader2, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -81,6 +82,8 @@ export function mergeCopilotModelCapabilities(
       existing?.contextWindow,
       model.context_window,
     ),
+    maxContextWindow:
+      model.max_context_window_tokens ?? existing?.maxContextWindow,
     maxOutputTokens: model.max_output_tokens ?? existing?.maxOutputTokens,
     supportsToolCalls: model.supports_tool_calls ?? existing?.supportsToolCalls,
     // Live capabilities supersede old inferred flags. An omitted declaration
@@ -108,6 +111,8 @@ interface CodexFormFieldsProps {
   selectedGitHubAccountId?: string | null;
   onGitHubAccountSelect?: (id: string | null) => void;
   onManageAuthAccounts?: (target: ManagedAuthProvider) => void;
+  enableUltraReasoning?: boolean;
+  onEnableUltraReasoningChange?: (enabled: boolean) => void;
   catalogModels: CodexCatalogModel[];
   onCatalogModelsChange: (models: CodexCatalogModel[]) => void;
 }
@@ -284,6 +289,8 @@ export function CodexFormFields({
   selectedGitHubAccountId,
   onGitHubAccountSelect,
   onManageAuthAccounts,
+  enableUltraReasoning = false,
+  onEnableUltraReasoningChange,
   catalogModels,
   onCatalogModelsChange,
 }: CodexFormFieldsProps) {
@@ -388,6 +395,30 @@ export function CodexFormFields({
             : undefined
         }
       />
+      <section className="rounded-lg border p-4 space-y-2">
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-0.5">
+            <Label
+              htmlFor="ultra-reasoning-toggle"
+              className="text-sm font-medium"
+            >
+              Ultra reasoning effort
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              When enabled, exposes the &ldquo;Ultra&rdquo; reasoning level to
+              Codex for all enabled models that support reasoning. When Codex
+              uses &ldquo;ultra&rdquo; or any unrecognized reasoning effort,
+              Atlas automatically falls back to the highest supported effort
+              level configured for that specific model.
+            </p>
+          </div>
+          <Switch
+            id="ultra-reasoning-toggle"
+            checked={enableUltraReasoning}
+            onCheckedChange={onEnableUltraReasoningChange}
+          />
+        </div>
+      </section>
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-medium">Model catalog</h3>
@@ -463,6 +494,15 @@ export function CodexFormFields({
                   })
                 }
               />
+              {model.maxContextWindow &&
+                Number(model.contextWindow) !== model.maxContextWindow && (
+                  <div className="col-span-full text-[11px] text-muted-foreground">
+                    Input limit:{" "}
+                    {Number(model.contextWindow || 0).toLocaleString()} tokens ·
+                    Total context: {model.maxContextWindow.toLocaleString()}{" "}
+                    tokens
+                  </div>
+                )}
               <ReasoningLevelsEditor
                 levels={model.reasoningLevels}
                 supportedLevels={model.supportedReasoningLevels}

@@ -34,6 +34,7 @@ export interface CopilotModel {
   model_type?: string;
   policy_state?: string;
   context_window?: number;
+  max_context_window_tokens?: number;
   max_output_tokens?: number;
   supports_tool_calls?: boolean;
   supported_endpoints?: string[];

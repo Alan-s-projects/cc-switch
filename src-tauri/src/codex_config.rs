@@ -154,11 +154,15 @@ fn codex_catalog_model_entry(
 
     let display_name = spec.display_name.as_deref().unwrap_or(&spec.model);
     let context_window = spec.context_window.unwrap_or(default_context_window);
+    let max_context_window = spec
+        .max_context_window
+        .unwrap_or(context_window)
+        .max(context_window);
     entry_obj.insert("slug".to_string(), json!(spec.model));
     entry_obj.insert("display_name".to_string(), json!(display_name));
     entry_obj.insert("description".to_string(), json!(display_name));
     entry_obj.insert("context_window".to_string(), json!(context_window));
-    entry_obj.insert("max_context_window".to_string(), json!(context_window));
+    entry_obj.insert("max_context_window".to_string(), json!(max_context_window));
     entry_obj.insert("priority".to_string(), json!(1000 + priority));
     entry_obj.insert("additional_speed_tiers".to_string(), json!([]));
     entry_obj.insert("service_tiers".to_string(), json!([]));
@@ -200,6 +204,8 @@ struct CodexCatalogModelSpec {
     display_name: Option<String>,
     /// Saved context limit, capped by live Copilot metadata during refresh.
     context_window: Option<u64>,
+    /// Total context limit from Copilot capability limits.
+    max_context_window: Option<u64>,
     /// Per-row override for the native template's `supports_parallel_tool_calls`
     /// (e.g. live Copilot declaration).
     supports_parallel_tool_calls: Option<bool>,
@@ -225,6 +231,11 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
     else {
         return Vec::new();
     };
+    let ultra_enabled = settings
+        .get("enableUltraReasoning")
+        .or_else(|| settings.get("enable_ultra_reasoning"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let mut seen = std::collections::HashSet::new();
     let mut specs = Vec::new();
@@ -260,6 +271,11 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
             model_config
                 .get("contextWindow")
                 .or_else(|| model_config.get("context_window")),
+        );
+        let max_context_window = parse_codex_positive_u64(
+            model_config
+                .get("maxContextWindow")
+                .or_else(|| model_config.get("max_context_window")),
         );
 
         let supports_parallel_tool_calls = model_config
@@ -312,6 +328,14 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
                     .collect(),
             );
         }
+        if ultra_enabled {
+            if let Some(ref mut levels) = reasoning_levels {
+                let has_reasoning = levels.iter().any(|l| l != "none");
+                if has_reasoning && !levels.iter().any(|l| l == "ultra") {
+                    levels.push("ultra".to_string());
+                }
+            }
+        }
         let default_reasoning_level = ["defaultReasoningLevel", "default_reasoning_level"]
             .into_iter()
             .find_map(|key| {
@@ -327,6 +351,7 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
             model: model.to_string(),
             display_name,
             context_window,
+            max_context_window,
             supports_parallel_tool_calls,
             input_modalities,
             reasoning_levels,
@@ -603,6 +628,36 @@ mod tests {
             settings["modelCatalog"]["models"][0]["reasoningLevels"],
             json!(["high", "ultra"])
         );
+    }
+
+    #[test]
+    fn ultra_reasoning_toggle_exposes_ultra_when_enabled() {
+        let settings = json!({
+            "enableUltraReasoning": true,
+            "modelCatalog": {"models": [
+                {"model": "gpt-6-astra", "supportedReasoningLevels": ["low", "high"]},
+                {"model": "non-reasoning", "supportedReasoningLevels": []}
+            ]}
+        });
+        let catalog = codex_model_catalog_from_settings(&settings, "")
+            .unwrap()
+            .unwrap();
+        let astra = &catalog["models"][0];
+        let efforts: Vec<&str> = astra["supported_reasoning_levels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["effort"].as_str())
+            .collect();
+        assert!(efforts.contains(&"ultra"));
+        let non_reasoning = &catalog["models"][1];
+        let non_efforts: Vec<&str> = non_reasoning["supported_reasoning_levels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["effort"].as_str())
+            .collect();
+        assert_eq!(non_efforts, vec!["none"]);
     }
 
     #[test]
