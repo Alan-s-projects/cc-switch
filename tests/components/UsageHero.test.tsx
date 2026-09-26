@@ -14,7 +14,13 @@ vi.mock("react-i18next", () => ({
 }));
 vi.mock("framer-motion", () => ({
   motion: {
-    div: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+    div: ({
+      children,
+      className,
+    }: {
+      children: ReactNode;
+      className?: string;
+    }) => <div className={className}>{children}</div>,
   },
 }));
 
@@ -65,16 +71,24 @@ describe("Usage token summary", () => {
     const tokens = screen.getByRole("region", { name: "Tokens Processed" });
     const requests = screen.getByRole("region", { name: "Requests" });
     const cost = screen.getByRole("region", { name: "Total Cost" });
-    expect(tokens).not.toContainElement(requests);
-    expect(requests.parentElement).toBe(cost.parentElement);
-    expect(tokens.parentElement).toBe(requests.parentElement?.parentElement);
+    expect(tokens.parentElement).toBe(cost.parentElement);
+    expect(requests.parentElement).toBe(tokens.parentElement);
+    expect(cost.parentElement).toHaveClass("grid-cols-1");
     expect(
-      cost.compareDocumentPosition(requests) & Node.DOCUMENT_POSITION_FOLLOWING,
+      cost.compareDocumentPosition(tokens) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      requests.compareDocumentPosition(tokens) &
+      tokens.compareDocumentPosition(requests) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    expect(tokens.firstElementChild).toHaveClass(
+      "sm:grid-cols-[minmax(190px,0.8fr)_minmax(0,2fr)]",
+    );
+    expect(tokens.querySelector("dl")).toHaveClass(
+      "grid-cols-2",
+      "sm:grid-cols-4",
+    );
+    expect(requests.querySelector("dl")).toHaveClass("grid-cols-2");
     expect(
       within(tokens)
         .getAllByRole("term")

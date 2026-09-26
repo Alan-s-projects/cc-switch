@@ -101,7 +101,7 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
     host && port ? `http://${host}:${port}/v1` : "Loading proxy address…";
   const metrics = [
     ["Requests today", summary ? fmtInt(summary.totalRequests, "en-US") : "—"],
-    ["Estimated cost today", summary ? fmtUsd(summary.totalCost, 4) : "—"],
+    ["Estimated cost today", summary ? fmtUsd(summary.totalCost, 1) : "—"],
     [
       "Success today",
       summary?.totalRequests ? `${summary.successRate.toFixed(1)}%` : "—",
