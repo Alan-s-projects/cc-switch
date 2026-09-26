@@ -138,5 +138,12 @@ describe("Usage token summary", () => {
       ),
     ).toBeVisible();
     expect(summary.totalCost).toBe(raw);
+    const costCard = screen.getByRole("region", { name: "Total Cost" });
+    expect(within(costCard).queryByText("USD")).not.toBeInTheDocument();
+    expect(costCard.firstElementChild).toHaveClass("p-4");
+    expect(within(costCard).getByText(display)).toHaveClass(
+      "text-2xl",
+      "leading-8",
+    );
   });
 });

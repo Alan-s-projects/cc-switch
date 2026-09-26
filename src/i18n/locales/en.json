@@ -197,7 +197,9 @@
     "reasoningLevelsSearch": "Search reasoning levels...",
     "reasoningLevelsEmpty": "No levels",
     "defaultReasoningLevelLabel": "Default level",
-    "defaultReasoningLevelPlaceholder": "Auto"
+    "defaultReasoningLevelPlaceholder": "Auto",
+    "catalogEmptySignedIn": "No models are in this catalog yet. Refresh models to load those available to your GitHub Copilot account.",
+    "catalogEmptySignedOut": "No models are available while GitHub Copilot is signed out. Sign in to GitHub Copilot, then refresh models to load the models your account can use."
   },
   "usage": {
     "title": "Usage Statistics",
