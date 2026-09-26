@@ -35,7 +35,6 @@ export interface UseDirectorySettingsResult {
   updateAppConfigDir: (value?: string) => void;
   browseAppConfigDir: () => Promise<void>;
   resetAppConfigDir: () => Promise<void>;
-  resetAllDirectories: () => void;
 }
 
 /**
@@ -153,14 +152,6 @@ export function useDirectorySettings(): UseDirectorySettingsResult {
     updateAppConfigDir(undefined);
   }, [updateAppConfigDir]);
 
-  const resetAllDirectories = useCallback(() => {
-    setAppConfigDir(initialAppConfigDirRef.current);
-    setResolvedDirs({
-      appConfig:
-        initialAppConfigDirRef.current ?? defaultsRef.current.appConfig,
-    });
-  }, []);
-
   return {
     appConfigDir,
     resolvedDirs,
@@ -169,6 +160,5 @@ export function useDirectorySettings(): UseDirectorySettingsResult {
     updateAppConfigDir,
     browseAppConfigDir,
     resetAppConfigDir,
-    resetAllDirectories,
   };
 }

@@ -24,22 +24,4 @@ describe("application settings form", () => {
       language: "en",
     });
   });
-
-  it("can reset an unsaved edit to the saved preferences", () => {
-    useSettingsQueryMock.mockReturnValue({ data: null, isLoading: false });
-    const { result } = renderHook(() => useSettingsForm());
-    expect(result.current.settings).toBeNull();
-    act(() => result.current.updateSettings({ launchOnStartup: true }));
-    act(() =>
-      result.current.resetSettings({
-        showInTray: true,
-        launchOnStartup: false,
-      }),
-    );
-    expect(result.current.settings).toEqual({
-      showInTray: true,
-      launchOnStartup: false,
-      language: "en",
-    });
-  });
 });

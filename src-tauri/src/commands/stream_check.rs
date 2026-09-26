@@ -1,4 +1,3 @@
-use crate::app_config::AppType;
 use crate::commands::copilot::CopilotAuthState;
 use crate::error::AppError;
 use crate::services::stream_check::{StreamCheckConfig, StreamCheckResult, StreamCheckService};
@@ -10,10 +9,10 @@ use tauri::State;
 pub async fn stream_check_provider(
     state: State<'_, AppState>,
     copilot_state: State<'_, CopilotAuthState>,
-    app_type: AppType,
+    app_type: String,
     provider_id: String,
 ) -> Result<StreamCheckResult, AppError> {
-    crate::copilot_bridge::require_codex(app_type.as_str())?;
+    crate::copilot_bridge::require_codex(&app_type)?;
     let config = state.db.get_stream_check_config()?;
     let provider = state
         .db

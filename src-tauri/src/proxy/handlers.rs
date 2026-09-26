@@ -162,23 +162,19 @@ pub async fn handle_responses(
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
-        .forward_request(method, &endpoint, body, headers, ctx.provider.clone())
+        .forward_request(method, &endpoint, body, headers, &ctx.provider)
         .await
     {
         Ok(result) => result,
-        Err(mut err) => {
-            if let Some(provider) = err.provider.take() {
-                ctx.provider = provider;
-            }
-            log_forward_error(&state, &ctx, is_stream, &err.error);
-            return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
+        Err(err) => {
+            log_forward_error(&state, &ctx, is_stream, &err);
+            return build_codex_proxy_error_response(&ctx, &endpoint, &err);
         }
     };
 
     let connection_guard = result.connection_guard.take();
     let codex_upstream_format = result.codex_upstream_format;
     ctx.outbound_model = result.outbound_model.take();
-    ctx.provider = result.provider;
     let response = result.response;
 
     if codex_response_transform(codex_upstream_format) == CodexResponseTransform::ChatCompletions {
@@ -278,22 +274,18 @@ async fn handle_codex_standalone_passthrough(
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
-        .forward_request(method, &endpoint, body, headers, ctx.provider.clone())
+        .forward_request(method, &endpoint, body, headers, &ctx.provider)
         .await
     {
         Ok(result) => result,
-        Err(mut err) => {
-            if let Some(provider) = err.provider.take() {
-                ctx.provider = provider;
-            }
-            log_forward_error(&state, &ctx, false, &err.error);
-            return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
+        Err(err) => {
+            log_forward_error(&state, &ctx, false, &err);
+            return build_codex_proxy_error_response(&ctx, &endpoint, &err);
         }
     };
 
     let connection_guard = result.connection_guard.take();
     ctx.outbound_model = result.outbound_model.take();
-    ctx.provider = result.provider;
 
     process_response(
         result.response,
@@ -333,23 +325,19 @@ pub async fn handle_responses_compact(
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
-        .forward_request(method, &endpoint, body, headers, ctx.provider.clone())
+        .forward_request(method, &endpoint, body, headers, &ctx.provider)
         .await
     {
         Ok(result) => result,
-        Err(mut err) => {
-            if let Some(provider) = err.provider.take() {
-                ctx.provider = provider;
-            }
-            log_forward_error(&state, &ctx, is_stream, &err.error);
-            return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
+        Err(err) => {
+            log_forward_error(&state, &ctx, is_stream, &err);
+            return build_codex_proxy_error_response(&ctx, &endpoint, &err);
         }
     };
 
     let connection_guard = result.connection_guard.take();
     let codex_upstream_format = result.codex_upstream_format;
     ctx.outbound_model = result.outbound_model.take();
-    ctx.provider = result.provider;
     let response = result.response;
 
     if codex_response_transform(codex_upstream_format) == CodexResponseTransform::ChatCompletions {
@@ -483,7 +471,6 @@ async fn handle_codex_chat_to_responses_transform(
             sse_stream,
             ctx.tag,
             usage_collector,
-            ctx.streaming_timeout_config(),
             connection_guard,
         );
 
@@ -502,9 +489,7 @@ async fn handle_codex_chat_to_responses_transform(
     }
 
     let _connection_guard = connection_guard;
-    let body_timeout = { std::time::Duration::ZERO };
-    let (mut response_headers, status, body_bytes) =
-        read_decoded_body(response, ctx.tag, body_timeout).await?;
+    let (mut response_headers, status, body_bytes) = read_decoded_body(response, ctx.tag).await?;
     let body_str = String::from_utf8_lossy(&body_bytes);
     let chat_response: Value = match serde_json::from_slice(&body_bytes) {
         Ok(value) => value,
@@ -630,9 +615,7 @@ async fn handle_codex_chat_error_response(
     ctx: &RequestContext,
     status: axum::http::StatusCode,
 ) -> Result<axum::response::Response, ProxyError> {
-    let body_timeout = { std::time::Duration::ZERO };
-    let (mut response_headers, _status, body_bytes) =
-        read_decoded_body(response, ctx.tag, body_timeout).await?;
+    let (mut response_headers, _status, body_bytes) = read_decoded_body(response, ctx.tag).await?;
 
     // 非 JSON 上游错误体（Cloudflare HTML、纯文本 "Unauthorized" 等）若丢成 None，
     // 客户端就看不到原始诊断信息；包成 Value::String 走转换函数的字符串分支。
@@ -757,8 +740,8 @@ fn codex_proxy_error_json(
     };
 
     let message = if upstream_status == Some(413) {
-        // 413 来自上游渠道商的网关（典型是 nginx 的 client_max_body_size），不是 CC
-        // Switch 本地代理的限制（本地 DefaultBodyLimit 已放到 200MB）。上游响应体往往是
+        // HTTP 413 comes from the upstream gateway, whose body limit can be lower
+        // than the local 200 MB request limit. The upstream response is often
         // 一整段 nginx HTML，对用户毫无价值，这里替换成明确指向上游 + 可操作的指引，
         // 避免「以为是 Copilot Bridge Atlas 封装了 nginx / 是本地代理的锅」这种反复出现的误解。
         format!(
@@ -838,7 +821,7 @@ fn codex_proxy_error_json(
 fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
     match error {
         ProxyError::ForwardFailed(_) => "copilot_bridge_atlas_forward_failed",
-        ProxyError::Timeout(_) | ProxyError::StreamIdleTimeout(_) => "copilot_bridge_atlas_timeout",
+        ProxyError::Timeout(_) => "copilot_bridge_atlas_timeout",
         ProxyError::NoProvidersConfigured => "copilot_bridge_atlas_no_providers_configured",
         ProxyError::ConfigError(_) => "copilot_bridge_atlas_config_error",
         ProxyError::TransformError(_) => "copilot_bridge_atlas_transform_error",
@@ -1396,8 +1379,7 @@ async fn log_usage(
         model
     };
 
-    let dedup_scope = super::usage::parser::dedup_scope_for_app(app_type, provider_id);
-    let request_id = usage.dedup_request_id(dedup_scope);
+    let request_id = usage.dedup_request_id(app_type, provider_id);
 
     if let Err(e) = logger.log_with_calculation(
         request_id,

@@ -51,17 +51,3 @@ it("leaves the preference alone when the picker is cancelled", async () => {
   expect(result.current.appConfigDir).toBe("/existing/atlas");
   expect(result.current.resolvedDirs.appConfig).toBe("/existing/atlas");
 });
-it("restores the initial Atlas data directory when settings are reset", async () => {
-  api.getAppConfigDirOverride.mockResolvedValue("/existing/atlas");
-  const { result } = mount();
-  await waitFor(() => expect(result.current.isLoading).toBe(false));
-  act(() => result.current.updateAppConfigDir(" /new/atlas "));
-  expect(result.current.resolvedDirs.appConfig).toBe("/new/atlas");
-  await act(() => result.current.resetAppConfigDir());
-  expect(result.current.resolvedDirs.appConfig).toBe(
-    "/home/mock/.copilot-bridge-atlas",
-  );
-  act(() => result.current.resetAllDirectories());
-  expect(result.current.appConfigDir).toBe("/existing/atlas");
-  expect(result.current.resolvedDirs.appConfig).toBe("/existing/atlas");
-});

@@ -91,7 +91,7 @@ describe("Atlas application scope", () => {
     renderApp();
     expect(screen.getByText("GitHub Copilot")).toBeVisible();
     expect(screen.getByTestId("bridge-overview")).toBeVisible();
-    expect(mocks.providers).toHaveBeenCalledWith("codex");
+    expect(mocks.providers).toHaveBeenCalledWith();
     for (const title of [
       "skills.manage",
       "mcp.title",

@@ -7,7 +7,7 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 
 export function HealthCheckButton({ providerId }: { providerId?: string }) {
   const healthCheck = useMutation({
-    mutationFn: (id: string) => streamCheckProvider("codex", id),
+    mutationFn: streamCheckProvider,
     onSuccess: (result) => {
       const details = [
         result.responseTimeMs != null ? `${result.responseTimeMs} ms` : "",

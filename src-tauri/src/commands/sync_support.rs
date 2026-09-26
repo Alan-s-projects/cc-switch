@@ -37,11 +37,7 @@ pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError>
 }
 
 fn post_sync_warning<E: std::fmt::Display>(err: E) -> String {
-    AppError::localized(
-        "sync.post_operation_sync_failed",
-        format!("Post-operation synchronization failed: {err}"),
-    )
-    .to_string()
+    format!("Post-operation synchronization failed: {err}")
 }
 
 pub(crate) fn post_sync_warning_from_result(

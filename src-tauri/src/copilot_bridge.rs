@@ -1,5 +1,5 @@
 //! The desktop bridge owns its database and generated catalog, never Codex files.
-use crate::{AppError, AppState, AppType, Database, Provider};
+use crate::{AppError, AppState, Database, Provider};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -31,7 +31,7 @@ pub fn providers(db: &Database) -> Result<IndexMap<String, Provider>, AppError> 
 
 pub fn current(db: &Database) -> Result<String, AppError> {
     let providers = providers(db)?;
-    let selected = crate::settings::get_effective_current_provider(db, &AppType::Codex)?;
+    let selected = crate::settings::get_effective_current_provider(db)?;
     Ok(selected
         .filter(|id| providers.contains_key(id))
         .or_else(|| providers.keys().next().cloned())
@@ -44,7 +44,7 @@ pub fn select(db: &Database, id: &str) -> Result<(), AppError> {
         .ok_or_else(|| AppError::Message("Copilot provider not found".into()))?;
     require_copilot(&provider)?;
     db.set_current_provider("codex", id)?;
-    crate::settings::set_current_provider(&AppType::Codex, Some(id))?;
+    crate::settings::set_current_provider(Some(id))?;
     refresh_catalog(&provider)
 }
 

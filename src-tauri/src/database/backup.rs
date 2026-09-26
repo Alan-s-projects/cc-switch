@@ -168,9 +168,8 @@ impl Database {
         batch_result.map_err(|e| AppError::Database(format!("执行 SQL 导入失败: {e}")))?;
         if !temp_conn.is_autocommit() {
             let _ = temp_conn.execute_batch("ROLLBACK;");
-            return Err(AppError::localized(
-                "backup.sql.incomplete_transaction",
-                "The SQL backup transaction is incomplete; the file may be truncated.",
+            return Err(AppError::Message(
+                "The SQL backup transaction is incomplete; the file may be truncated.".into(),
             ));
         }
 
@@ -245,9 +244,8 @@ impl Database {
             return Ok(());
         }
 
-        Err(AppError::localized(
-            "backup.sql.invalid_format",
-            "Only SQL backups exported by Copilot Bridge Atlas are supported.",
+        Err(AppError::Message(
+            "Only SQL backups exported by Copilot Bridge Atlas are supported.".into(),
         ))
     }
 
@@ -501,13 +499,10 @@ impl Database {
             return Ok(());
         }
 
-        Err(AppError::localized(
-            "backup.db.integrity_failed",
-            format!(
-                "Database backup integrity check failed: {}",
-                results.join("; ")
-            ),
-        ))
+        Err(AppError::Message(format!(
+            "Database backup integrity check failed: {}",
+            results.join("; ")
+        )))
     }
 
     /// Validate that the external SQL created a recognizable Copilot Bridge Atlas schema.
@@ -535,12 +530,9 @@ impl Database {
         }
         if !missing.is_empty() {
             let names = missing.join(", ");
-            return Err(AppError::localized(
-                "backup.sql.invalid_schema",
-                format!(
-                    "The imported SQL is missing required Copilot Bridge Atlas tables: {names}"
-                ),
-            ));
+            return Err(AppError::Message(format!(
+                "The imported SQL is missing required Copilot Bridge Atlas tables: {names}"
+            )));
         }
         Ok(())
     }

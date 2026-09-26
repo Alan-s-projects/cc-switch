@@ -43,7 +43,6 @@ describe("useSettings", () => {
       settings: saved,
       isLoading: false,
       updateSettings: vi.fn(),
-      resetSettings: vi.fn(),
     };
     directories = {
       appConfigDir: undefined,
@@ -53,7 +52,6 @@ describe("useSettings", () => {
       updateAppConfigDir: vi.fn(),
       browseAppConfigDir: vi.fn(),
       resetAppConfigDir: vi.fn(),
-      resetAllDirectories: vi.fn(),
     };
     mutateAsync.mockResolvedValue(true);
     setAppConfigDirOverride.mockResolvedValue(true);
@@ -65,10 +63,52 @@ describe("useSettings", () => {
     directories.appConfigDir = "  /custom/atlas  ";
     const { result } = renderHook(() => useSettings());
     await act(async () => {
-      await result.current.saveSettings(undefined, { silent: true });
+      await result.current.saveSettings();
     });
     expect(mutateAsync).toHaveBeenCalledWith(saved);
     expect(setAppConfigDirOverride).toHaveBeenCalledWith("/custom/atlas");
+    expect(result.current.requiresRestart).toBe(true);
+  });
+
+  it.each([
+    { description: "the saved override", override: "/existing/atlas" },
+    { description: "an unavailable override", override: undefined },
+  ])(
+    "waits for discovery and preserves $description when unchanged",
+    async ({ override }) => {
+      directories.isLoading = true;
+      const { result, rerender } = renderHook(() => useSettings());
+      expect(result.current.isLoading).toBe(true);
+      await expect(result.current.saveSettings()).resolves.toBeNull();
+      expect(mutateAsync).not.toHaveBeenCalled();
+      expect(setAppConfigDirOverride).not.toHaveBeenCalled();
+
+      directories = {
+        ...directories,
+        isLoading: false,
+        appConfigDir: override,
+        initialAppConfigDir: override,
+      };
+      rerender();
+      expect(result.current.isLoading).toBe(false);
+      await act(async () => {
+        await expect(result.current.saveSettings()).resolves.toEqual({
+          requiresRestart: false,
+        });
+      });
+      expect(mutateAsync).toHaveBeenCalledWith(saved);
+      expect(setAppConfigDirOverride).not.toHaveBeenCalled();
+      expect(result.current.requiresRestart).toBe(false);
+    },
+  );
+
+  it("can explicitly reset a loaded override to the default directory", async () => {
+    directories.initialAppConfigDir = "/existing/atlas";
+    const { result } = renderHook(() => useSettings());
+    await act(async () => {
+      await result.current.saveSettings();
+    });
+    expect(setAppConfigDirOverride).toHaveBeenCalledWith(null);
     expect(result.current.requiresRestart).toBe(true);
   });
 
@@ -83,14 +123,6 @@ describe("useSettings", () => {
       ...saved,
       launchOnStartup: true,
     });
-  });
-
-  it("resets the form and directory selection to saved data", () => {
-    const { result } = renderHook(() => useSettings());
-    act(() => result.current.resetSettings());
-    expect(form.resetSettings).toHaveBeenCalledWith(saved);
-    expect(directories.resetAllDirectories).toHaveBeenCalled();
-    expect(result.current.requiresRestart).toBe(false);
   });
 
   it("returns null when preferences have not loaded", async () => {

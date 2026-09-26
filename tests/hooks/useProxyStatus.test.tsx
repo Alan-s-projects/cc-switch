@@ -21,10 +21,14 @@ it("starts and stops only the proxy without client takeover or restoration", asy
   );
   const { result } = renderHook(() => useProxyStatus(), { wrapper });
   await waitFor(() => expect(result.current.isLoading).toBe(false));
-  await act(() => result.current.toggleProxyAsync(true));
-  await act(() => result.current.toggleProxyAsync(false));
-  expect(invoke).toHaveBeenCalledWith("start_proxy_server");
-  expect(invoke).toHaveBeenCalledWith("stop_proxy_server");
+  act(() => result.current.toggleProxy(true));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("start_proxy_server"),
+  );
+  await waitFor(() => expect(result.current.isPending).toBe(false));
+  act(() => result.current.toggleProxy(false));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("stop_proxy_server"));
+  await waitFor(() => expect(result.current.isPending).toBe(false));
   expect(
     invoke.mock.calls.every(([command]) =>
       ["get_proxy_status", "start_proxy_server", "stop_proxy_server"].includes(

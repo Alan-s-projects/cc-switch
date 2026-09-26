@@ -1,5 +1,4 @@
 import { http, HttpResponse } from "msw";
-import type { AppId } from "@/lib/api/types";
 import type { Provider, Settings } from "@/types";
 import { MODELS_DEV_API_URL } from "@/lib/modelsDevPricing";
 import {
@@ -19,15 +18,13 @@ const body = async <T>(request: Request): Promise<T> => {
 };
 export const handlers = [
   http.get(MODELS_DEV_API_URL, () => success({})),
-  http.post(`${root}/get_providers`, async ({ request }) =>
-    success(getProviders((await body<{ app: AppId }>(request)).app)),
-  ),
-  http.post(`${root}/get_current_provider`, async ({ request }) =>
-    success(getCurrentProviderId((await body<{ app: AppId }>(request)).app)),
+  http.post(`${root}/get_providers`, () => success(getProviders())),
+  http.post(`${root}/get_current_provider`, () =>
+    success(getCurrentProviderId()),
   ),
   http.post(`${root}/update_provider`, async ({ request }) => {
-    const data = await body<{ app: AppId; provider: Provider }>(request);
-    updateProvider(data.app, data.provider);
+    const data = await body<{ provider: Provider }>(request);
+    updateProvider(data.provider);
     return success(true);
   }),
   http.post(`${root}/get_settings`, () => success(getSettings())),

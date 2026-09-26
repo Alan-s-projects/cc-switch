@@ -25,14 +25,10 @@ export interface UseSettingsResult {
   updateAppConfigDir: (value?: string) => void;
   browseAppConfigDir: () => Promise<void>;
   resetAppConfigDir: () => Promise<void>;
-  saveSettings: (
-    overrides?: Partial<SettingsFormState>,
-    options?: { silent?: boolean },
-  ) => Promise<SaveResult | null>;
+  saveSettings: () => Promise<SaveResult | null>;
   autoSaveSettings: (
     updates: Partial<SettingsFormState>,
   ) => Promise<SaveResult | null>;
-  resetSettings: () => void;
   acknowledgeRestart: () => void;
 }
 
@@ -49,7 +45,6 @@ const sanitizeDir = (value?: string | null): string | undefined => {
  * 负责：
  * - 组合 useSettingsForm、useDirectorySettings
  * - 保存设置逻辑
- * - 重置设置逻辑
  */
 export function useSettings(): UseSettingsResult {
   const { t } = useTranslation();
@@ -61,7 +56,6 @@ export function useSettings(): UseSettingsResult {
     settings,
     isLoading: isFormLoading,
     updateSettings,
-    resetSettings: resetForm,
   } = useSettingsForm();
 
   // 2️⃣ 目录管理
@@ -73,18 +67,10 @@ export function useSettings(): UseSettingsResult {
     updateAppConfigDir,
     browseAppConfigDir,
     resetAppConfigDir,
-    resetAllDirectories,
   } = useDirectorySettings();
 
   const [requiresRestart, setRequiresRestart] = useState(false);
   const acknowledgeRestart = useCallback(() => setRequiresRestart(false), []);
-
-  // 重置设置
-  const resetSettings = useCallback(() => {
-    resetForm(data ?? null);
-    resetAllDirectories();
-    setRequiresRestart(false);
-  }, [data, resetForm, resetAllDirectories, setRequiresRestart]);
 
   // 即时保存设置（用于 General 标签页的实时更新）
   // 保存基础配置 + 独立的系统 API 调用（开机自启）
@@ -140,80 +126,73 @@ export function useSettings(): UseSettingsResult {
 
   // 完整保存设置（用于 Advanced 标签页的手动保存）
   // 包含所有系统 API 调用和完整的验证流程
-  const saveSettings = useCallback(
-    async (
-      overrides?: Partial<SettingsFormState>,
-      options?: { silent?: boolean },
-    ): Promise<SaveResult | null> => {
-      const mergedSettings = settings ? { ...settings, ...overrides } : null;
-      if (!mergedSettings) return null;
-      try {
-        const sanitizedAppDir = sanitizeDir(appConfigDir);
-        const previousAppDir = initialAppConfigDir;
+  const saveSettings = useCallback(async (): Promise<SaveResult | null> => {
+    if (!settings || isDirectoryLoading) return null;
+    try {
+      const sanitizedAppDir = sanitizeDir(appConfigDir);
+      const appDirChanged = sanitizedAppDir !== initialAppConfigDir;
 
-        const payload: Settings = { ...mergedSettings };
+      const payload: Settings = { ...settings };
 
-        await saveMutation.mutateAsync(payload);
+      await saveMutation.mutateAsync(payload);
 
+      if (appDirChanged) {
         await settingsApi.setAppConfigDirOverride(sanitizedAppDir ?? null);
+      }
 
-        // 只在开机自启状态真正改变时调用系统 API
-        if (
-          payload.launchOnStartup !== undefined &&
-          payload.launchOnStartup !== data?.launchOnStartup
-        ) {
-          try {
-            await settingsApi.setAutoLaunch(payload.launchOnStartup);
-          } catch (error) {
-            console.error("Failed to update auto-launch:", error);
-            toast.error(
-              t("settings.autoLaunchFailed", {
-                defaultValue: "Failed to set auto-launch",
-              }),
-            );
-          }
-        }
-
+      // 只在开机自启状态真正改变时调用系统 API
+      if (
+        payload.launchOnStartup !== undefined &&
+        payload.launchOnStartup !== data?.launchOnStartup
+      ) {
         try {
-          await providersApi.updateTrayMenu();
+          await settingsApi.setAutoLaunch(payload.launchOnStartup);
         } catch (error) {
-          console.warn("[useSettings] Failed to refresh tray menu", error);
-        }
-
-        const appDirChanged = sanitizedAppDir !== (previousAppDir ?? undefined);
-        setRequiresRestart(appDirChanged);
-
-        if (!options?.silent) {
-          toast.success(
-            t("notifications.settingsSaved", {
-              defaultValue: "Settings saved",
+          console.error("Failed to update auto-launch:", error);
+          toast.error(
+            t("settings.autoLaunchFailed", {
+              defaultValue: "Failed to set auto-launch",
             }),
-            { closeButton: true },
           );
         }
-
-        return { requiresRestart: appDirChanged };
-      } catch (error) {
-        console.error("[useSettings] Failed to save settings", error);
-        toast.error(
-          t("notifications.settingsSaveFailed", {
-            defaultValue: "Failed to save settings: {{error}}",
-            error: (error as Error)?.message ?? String(error),
-          }),
-        );
-        throw error;
       }
-    },
-    [
-      appConfigDir,
-      data,
-      initialAppConfigDir,
-      saveMutation,
-      settings,
-      setRequiresRestart,
-      t,
-    ],
-  );
+
+      try {
+        await providersApi.updateTrayMenu();
+      } catch (error) {
+        console.warn("[useSettings] Failed to refresh tray menu", error);
+      }
+
+      setRequiresRestart(appDirChanged);
+
+      toast.success(
+        t("notifications.settingsSaved", {
+          defaultValue: "Settings saved",
+        }),
+        { closeButton: true },
+      );
+
+      return { requiresRestart: appDirChanged };
+    } catch (error) {
+      console.error("[useSettings] Failed to save settings", error);
+      toast.error(
+        t("notifications.settingsSaveFailed", {
+          defaultValue: "Failed to save settings: {{error}}",
+          error: (error as Error)?.message ?? String(error),
+        }),
+      );
+      throw error;
+    }
+  }, [
+    appConfigDir,
+    data,
+    initialAppConfigDir,
+    isDirectoryLoading,
+    saveMutation,
+    settings,
+    setRequiresRestart,
+    t,
+  ]);
 
   const isLoading = useMemo(
     () => isFormLoading || isDirectoryLoading,
@@ -233,7 +212,6 @@ export function useSettings(): UseSettingsResult {
     resetAppConfigDir,
     saveSettings,
     autoSaveSettings,
-    resetSettings,
     acknowledgeRestart,
   };
 }

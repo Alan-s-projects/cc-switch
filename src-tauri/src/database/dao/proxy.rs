@@ -11,22 +11,13 @@ pub(crate) const PRICING_SOURCE_REQUEST: &str = "request";
 pub(crate) fn validate_cost_multiplier(value: &str) -> Result<Decimal, AppError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(AppError::localized(
-            "error.multiplierEmpty",
-            "Multiplier cannot be empty",
-        ));
+        return Err(AppError::Message("Multiplier cannot be empty".into()));
     }
     let parsed = Decimal::from_str(trimmed).map_err(|error| {
-        AppError::localized(
-            "error.invalidMultiplier",
-            format!("Invalid multiplier: {value} - {error}"),
-        )
+        AppError::Message(format!("Invalid multiplier: {value} - {error}"))
     })?;
     if parsed < Decimal::ZERO {
-        return Err(AppError::localized(
-            "error.invalidMultiplier",
-            "Multiplier cannot be negative",
-        ));
+        return Err(AppError::Message("Multiplier cannot be negative".into()));
     }
     Ok(parsed)
 }
@@ -35,10 +26,7 @@ pub(crate) fn validate_pricing_source(value: &str) -> Result<&str, AppError> {
     match value.trim() {
         PRICING_SOURCE_RESPONSE => Ok(PRICING_SOURCE_RESPONSE),
         PRICING_SOURCE_REQUEST => Ok(PRICING_SOURCE_REQUEST),
-        _ => Err(AppError::localized(
-            "error.invalidPricingMode",
-            format!("Invalid pricing mode: {value}"),
-        )),
+        _ => Err(AppError::Message(format!("Invalid pricing mode: {value}"))),
     }
 }
 

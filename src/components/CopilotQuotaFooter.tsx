@@ -5,10 +5,8 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 export default function CopilotQuotaFooter({ meta }: { meta?: ProviderMeta }) {
   const accountId =
     meta?.authBinding?.accountId ?? meta?.githubAccountId ?? null;
-  const { data, error, isFetching } = useCopilotQuota(accountId, {
-    autoQuery: true,
-  });
-  const used = Math.max(0, Math.min(100, data?.tiers[0]?.utilization ?? 0));
+  const { data, error, isFetching } = useCopilotQuota(accountId);
+  const used = Math.max(0, Math.min(100, data?.utilization ?? 0));
   return (
     <div className="space-y-3 border-t pt-4 text-sm">
       <div className="flex items-center justify-between gap-3">

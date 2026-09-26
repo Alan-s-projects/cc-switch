@@ -7,12 +7,6 @@ use crate::proxy::{
 use axum::http::HeaderMap;
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy)]
-pub struct StreamingTimeoutConfig {
-    pub first_byte_timeout: u64,
-    pub idle_timeout: u64,
-}
-
 pub struct RequestContext {
     pub start_time: Instant,
     pub provider: Provider,
@@ -39,7 +33,7 @@ impl RequestContext {
             .and_then(|model| model.as_str())
             .unwrap_or("unknown")
             .to_string();
-        let session = extract_session_id(headers, body, "codex");
+        let session = extract_session_id(headers, body);
         let provider =
             state
                 .provider_router
@@ -74,14 +68,12 @@ impl RequestContext {
 
     pub fn create_forwarder(&self, state: &ProxyState) -> RequestForwarder {
         RequestForwarder::new(
-            0,
             state.status.clone(),
             state.current_providers.clone(),
             state.codex_chat_history.clone(),
             state.app_handle.clone(),
             self.session_id.clone(),
             self.session_client_provided,
-            0,
             self.copilot_optimizer_config.clone(),
         )
     }
@@ -89,14 +81,5 @@ impl RequestContext {
     #[inline]
     pub fn latency_ms(&self) -> u64 {
         self.start_time.elapsed().as_millis() as u64
-    }
-
-    /// Keep existing long-running Codex streams free of local idle deadlines.
-    #[inline]
-    pub fn streaming_timeout_config(&self) -> StreamingTimeoutConfig {
-        StreamingTimeoutConfig {
-            first_byte_timeout: 0,
-            idle_timeout: 0,
-        }
     }
 }

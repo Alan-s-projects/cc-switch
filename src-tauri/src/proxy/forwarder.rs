@@ -1,6 +1,6 @@
 //! Forward Codex requests to one authenticated GitHub Copilot account.
 use super::{
-    body_filter::filter_private_params_with_whitelist,
+    body_filter::filter_private_params,
     content_encoding::{decompress_body_with_limit, get_content_encoding},
     json_canonical::{canonicalize_value, short_value_hash},
     providers::{
@@ -19,7 +19,6 @@ use crate::{
     commands::CopilotAuthState,
     provider::{CodexCopilotApiFormat, Provider},
 };
-use futures::StreamExt;
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::Manager;
@@ -62,14 +61,9 @@ impl CopilotRequestContext {
 
 pub struct ForwardResult {
     pub response: ProxyResponse,
-    pub provider: Provider,
     pub codex_upstream_format: Option<CodexUpstreamFormat>,
     pub outbound_model: Option<String>,
     pub(crate) connection_guard: Option<ActiveConnectionGuard>,
-}
-pub struct ForwardError {
-    pub error: ProxyError,
-    pub provider: Option<Provider>,
 }
 
 /// The request remains active until the response body finishes or is dropped.
@@ -116,22 +110,17 @@ pub struct RequestForwarder {
     session_id: String,
     session_client_provided: bool,
     copilot_optimizer_config: CopilotOptimizerConfig,
-    non_streaming_timeout: std::time::Duration,
-    streaming_first_byte_timeout: std::time::Duration,
     #[cfg(test)]
     copilot_fixture: Option<CopilotFixture>,
 }
 impl RequestForwarder {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        non_streaming_timeout: u64,
         status: Arc<RwLock<ProxyStatus>>,
         current_providers: Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
         codex_chat_history: Arc<CodexChatHistoryStore>,
         app_handle: Option<tauri::AppHandle>,
         session_id: String,
         session_client_provided: bool,
-        streaming_first_byte_timeout: u64,
         copilot_optimizer_config: CopilotOptimizerConfig,
     ) -> Self {
         Self {
@@ -142,25 +131,20 @@ impl RequestForwarder {
             session_id,
             session_client_provided,
             copilot_optimizer_config,
-            non_streaming_timeout: std::time::Duration::from_secs(non_streaming_timeout),
-            streaming_first_byte_timeout: std::time::Duration::from_secs(
-                streaming_first_byte_timeout,
-            ),
             #[cfg(test)]
             copilot_fixture: None,
         }
     }
 
     /// Each request is sent once; retry decisions belong to the Codex client.
-    #[allow(clippy::too_many_arguments)]
     pub async fn forward_request(
         &self,
         method: http::Method,
         endpoint: &str,
         body: Value,
         headers: http::HeaderMap,
-        provider: Provider,
-    ) -> Result<ForwardResult, ForwardError> {
+        provider: &Provider,
+    ) -> Result<ForwardResult, ProxyError> {
         let guard = ActiveConnectionGuard::acquire(self.status.clone()).await;
         {
             let mut status = self.status.write().await;
@@ -170,7 +154,7 @@ impl RequestForwarder {
             status.current_provider_id = Some(provider.id.clone());
         }
         let result = self
-            .forward(&provider, method, endpoint, body, &headers)
+            .forward(provider, method, endpoint, body, &headers)
             .await;
         let mut status = self.status.write().await;
         match result {
@@ -186,7 +170,6 @@ impl RequestForwarder {
                 );
                 Ok(ForwardResult {
                     response,
-                    provider,
                     outbound_model,
                     codex_upstream_format,
                     connection_guard: Some(guard),
@@ -197,10 +180,7 @@ impl RequestForwarder {
                 status.last_error = Some(error.to_string());
                 status.success_rate =
                     status.success_requests as f32 / status.total_requests as f32 * 100.0;
-                Err(ForwardError {
-                    error,
-                    provider: Some(provider),
-                })
+                Err(error)
             }
         }
     }
@@ -236,8 +216,7 @@ impl RequestForwarder {
                 .resolve_codex_copilot_model(provider, &body, api_format)
                 .await?;
             let transport = apply_codex_copilot_model(&mut body, resolved, api_format)?;
-            effective_endpoint =
-                rewrite_codex_endpoint_for_copilot(endpoint, &transport.endpoint).0;
+            effective_endpoint = rewrite_codex_endpoint_for_copilot(endpoint, &transport.endpoint);
             upstream_format = Some(match transport.protocol {
                 CopilotProtocol::Responses => CodexUpstreamFormat::NativeResponses,
                 CopilotProtocol::Chat => CodexUpstreamFormat::ChatCompletions,
@@ -263,7 +242,7 @@ impl RequestForwarder {
             .get("model")
             .and_then(Value::as_str)
             .map(str::to_string);
-        let streaming = is_streaming_request(&effective_endpoint, &body, headers);
+        let streaming = is_streaming_request(&body, headers);
         let (mut auth_headers, base_url) = self.copilot_identity(provider).await?;
         if let Some(context) = context {
             context.apply_headers(
@@ -306,23 +285,13 @@ impl RequestForwarder {
         let mut request = client.request(method, &url);
         if streaming {
             request = request.timeout(std::time::Duration::from_secs(24 * 60 * 60));
-        } else if !self.non_streaming_timeout.is_zero() {
-            request = request.timeout(self.non_streaming_timeout);
         }
         for (name, value) in &outgoing {
             request = request.header(name, value);
         }
         let request = request.body(body_bytes);
         let response = if streaming {
-            let timeout = if self.streaming_first_byte_timeout.is_zero() {
-                if self.non_streaming_timeout.is_zero() {
-                    std::time::Duration::from_secs(600)
-                } else {
-                    self.non_streaming_timeout
-                }
-            } else {
-                self.streaming_first_byte_timeout
-            };
+            let timeout = std::time::Duration::from_secs(600);
             tokio::time::timeout(timeout, request.send())
                 .await
                 .map_err(|_| {
@@ -337,7 +306,6 @@ impl RequestForwarder {
         .map_err(map_reqwest_send_error)?;
         let response = ProxyResponse::Reqwest(response);
         if response.status().is_success() {
-            let response = self.validate_success_response(response, streaming).await?;
             Ok((response, outbound_model, upstream_format))
         } else {
             let status = response.status().as_u16();
@@ -389,72 +357,6 @@ impl RequestForwarder {
             None => manager.get_default_api_endpoint().await,
         };
         Ok((build_copilot_request_headers(&token)?, endpoint))
-    }
-
-    async fn validate_success_response(
-        &self,
-        response: ProxyResponse,
-        request_is_streaming: bool,
-    ) -> Result<ProxyResponse, ProxyError> {
-        if request_is_streaming {
-            return self.prime_streaming_response(response).await;
-        }
-
-        if self.non_streaming_timeout.is_zero() {
-            return Ok(response);
-        }
-
-        let status = response.status();
-        let headers = response.headers().clone();
-        let body_timeout = self.non_streaming_timeout;
-        let body = tokio::time::timeout(
-            body_timeout,
-            response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES),
-        )
-        .await
-        .map_err(|_| {
-            ProxyError::Timeout(format!(
-                "响应体读取超时: {}s（上游发完响应头后 body 未到达）",
-                body_timeout.as_secs()
-            ))
-        })??;
-
-        Ok(ProxyResponse::buffered(status, headers, body))
-    }
-
-    async fn prime_streaming_response(
-        &self,
-        response: ProxyResponse,
-    ) -> Result<ProxyResponse, ProxyError> {
-        if self.streaming_first_byte_timeout.is_zero() {
-            return Ok(response);
-        }
-
-        let status = response.status();
-        let headers = response.headers().clone();
-        let timeout = self.streaming_first_byte_timeout;
-        let mut stream = Box::pin(response.bytes_stream());
-
-        let first = tokio::time::timeout(timeout, stream.next())
-            .await
-            .map_err(|_| {
-                ProxyError::Timeout(format!(
-                    "流式响应首包超时: {}s（上游已返回响应头但未返回数据）",
-                    timeout.as_secs()
-                ))
-            })?;
-
-        let Some(first) = first else {
-            return Err(ProxyError::ForwardFailed(
-                "流式响应在首包到达前结束".to_string(),
-            ));
-        };
-
-        let first =
-            first.map_err(|e| ProxyError::ForwardFailed(format!("读取流式响应首包失败: {e}")))?;
-
-        let replay = futures::stream::once(async move { Ok(first) }).chain(stream);
-        Ok(ProxyResponse::streamed(status, headers, replay))
     }
 
     fn codex_copilot_request_context(
@@ -536,8 +438,7 @@ fn codex_copilot_lookup_error(model_id: &str, error: CopilotAuthError) -> ProxyE
     let message =
         format!("Failed to resolve GitHub Copilot capabilities for model {model_id}: {error}");
     match error {
-        CopilotAuthError::DeviceFlowNotStarted
-        | CopilotAuthError::AuthorizationPending
+        CopilotAuthError::AuthorizationPending
         | CopilotAuthError::AccessDenied
         | CopilotAuthError::ExpiredToken
         | CopilotAuthError::GitHubTokenInvalid
@@ -585,23 +486,18 @@ fn apply_codex_copilot_model(
     Ok(transport)
 }
 
-fn rewrite_codex_endpoint_for_copilot(
-    inbound_endpoint: &str,
-    supported_endpoint: &str,
-) -> (String, Option<String>) {
+fn rewrite_codex_endpoint_for_copilot(inbound_endpoint: &str, supported_endpoint: &str) -> String {
     let (inbound_path, query) = split_endpoint_and_query(inbound_endpoint);
-    let passthrough_query = query.map(ToString::to_string);
     let mut target_path = supported_endpoint.trim_end_matches('/').to_string();
     if inbound_path.ends_with("/responses/compact")
         && matches!(target_path.as_str(), "/responses" | "/v1/responses")
     {
         target_path.push_str("/compact");
     }
-    let rewritten = match passthrough_query.as_deref() {
+    match query {
         Some(query) if !query.is_empty() => format!("{target_path}?{query}"),
         _ => target_path,
-    };
-    (rewritten, passthrough_query)
+    }
 }
 
 fn build_copilot_unversioned_url(base_url: &str, endpoint: &str) -> String {
@@ -623,10 +519,10 @@ fn map_reqwest_send_error(error: reqwest::Error) -> ProxyError {
 }
 
 fn prepare_upstream_request_body(request_body: Value) -> Value {
-    canonicalize_value(filter_private_params_with_whitelist(request_body, &[]))
+    canonicalize_value(filter_private_params(request_body))
 }
 
-fn is_streaming_request(_endpoint: &str, body: &Value, headers: &http::HeaderMap) -> bool {
+fn is_streaming_request(body: &Value, headers: &http::HeaderMap) -> bool {
     body.get("stream").and_then(Value::as_bool).unwrap_or(false)
         || headers
             .get(http::header::ACCEPT)
@@ -938,10 +834,7 @@ mod tests {
     use http::{HeaderMap, HeaderValue, StatusCode};
     use serde_json::json;
     use std::{collections::HashMap, time::Duration};
-    fn test_forwarder(
-        non_streaming_timeout: Duration,
-        streaming_first_byte_timeout: Duration,
-    ) -> RequestForwarder {
+    fn test_forwarder() -> RequestForwarder {
         RequestForwarder {
             status: Arc::new(RwLock::new(ProxyStatus::default())),
             current_providers: Arc::new(RwLock::new(HashMap::new())),
@@ -950,8 +843,6 @@ mod tests {
             session_id: String::new(),
             session_client_provided: false,
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
-            non_streaming_timeout,
-            streaming_first_byte_timeout,
             copilot_fixture: None,
         }
     }
@@ -993,77 +884,9 @@ mod tests {
             r#"{"a":2,"tools":[{"name":"lookup","parameters":{"properties":{"_id":{"type":"string"},"a":{"type":"string"},"b":{"type":"number"}},"type":"object"}}],"z":1}"#
         );
     }
-    #[tokio::test]
-    async fn non_streaming_success_is_buffered_before_marking_provider_successful() {
-        let forwarder = test_forwarder(Duration::from_secs(1), Duration::from_secs(1));
-        let response = ProxyResponse::streamed(
-            StatusCode::OK,
-            HeaderMap::new(),
-            futures::stream::once(async {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                Ok::<Bytes, std::io::Error>(Bytes::from_static(b"{\"ok\":true}"))
-            }),
-        );
-
-        let prepared = forwarder
-            .validate_success_response(response, false)
-            .await
-            .expect("response should be buffered");
-
-        assert_eq!(
-            prepared
-                .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
-                .await
-                .unwrap(),
-            Bytes::from_static(b"{\"ok\":true}")
-        );
-    }
-    #[tokio::test]
-    async fn non_streaming_body_read_error_is_retryable_before_success_record() {
-        let forwarder = test_forwarder(Duration::from_secs(1), Duration::from_secs(1));
-        let response = ProxyResponse::streamed(
-            StatusCode::OK,
-            HeaderMap::new(),
-            futures::stream::once(async {
-                Err::<Bytes, std::io::Error>(std::io::Error::other("body boom"))
-            }),
-        );
-
-        let err = match forwarder.validate_success_response(response, false).await {
-            Ok(_) => panic!("body read errors should fail the attempt"),
-            Err(err) => err,
-        };
-
-        assert!(matches!(err, ProxyError::ForwardFailed(_)));
-    }
-    #[tokio::test]
-    async fn streaming_success_primes_first_chunk_and_replays_it() {
-        let forwarder = test_forwarder(Duration::from_secs(1), Duration::from_secs(1));
-        let response = ProxyResponse::streamed(
-            StatusCode::OK,
-            HeaderMap::new(),
-            futures::stream::iter(vec![
-                Ok::<Bytes, std::io::Error>(Bytes::from_static(b"first")),
-                Ok::<Bytes, std::io::Error>(Bytes::from_static(b"second")),
-            ]),
-        );
-
-        let prepared = forwarder
-            .validate_success_response(response, true)
-            .await
-            .expect("stream should be primed");
-
-        assert_eq!(
-            prepared
-                .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
-                .await
-                .unwrap(),
-            Bytes::from_static(b"firstsecond")
-        );
-    }
     #[test]
     fn codex_copilot_tool_continuations_receive_agent_and_session_headers() {
-        let mut forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
+        let mut forwarder = test_forwarder();
         forwarder.session_id = "codex_12345678-1234-1234-1234-123456789abc".to_string();
         forwarder.session_client_provided = true;
         for item_type in [
@@ -1104,8 +927,8 @@ mod tests {
             } else {
                 headers.insert(source, HeaderValue::from_static(session_id));
             }
-            let session = super::super::session::extract_session_id(&headers, &body, "codex");
-            let mut forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
+            let session = super::super::session::extract_session_id(&headers, &body);
+            let mut forwarder = test_forwarder();
             forwarder.session_id = session.session_id;
             forwarder.session_client_provided = session.client_provided;
             let first_headers = codex_copilot_headers(&forwarder, &first);
@@ -1144,7 +967,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_gpt_models_before_authentication_or_forwarding() {
-        let forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
+        let forwarder = test_forwarder();
         let mut provider = Provider::with_id("copilot".into(), "Copilot".into(), json!({}));
         provider.meta = Some(crate::ProviderMeta {
             provider_type: Some("github_copilot".into()),
@@ -1232,7 +1055,7 @@ mod tests {
             "https://copilot.example/api/images/edits?version=1&extra=1"
         );
         assert_eq!(
-            rewrite_codex_endpoint_for_copilot("/responses/compact?x=1", "/responses").0,
+            rewrite_codex_endpoint_for_copilot("/responses/compact?x=1", "/responses"),
             "/responses/compact?x=1"
         );
     }
@@ -1241,7 +1064,6 @@ mod tests {
         use super::*;
         use crate::proxy::{
             handler_config::codex_stream_usage_event_filter,
-            handler_context::StreamingTimeoutConfig,
             providers::copilot_auth::{CopilotModel, COPILOT_EDITOR_VERSION, COPILOT_USER_AGENT},
             response_processor::{create_logged_passthrough_stream, SseUsageCollector},
             usage::parser::TokenUsage,
@@ -1315,7 +1137,7 @@ mod tests {
             upstream: &MockUpstream,
             protocol: CopilotProtocol,
         ) -> (RequestForwarder, Provider) {
-            let mut forwarder = test_forwarder(Duration::from_secs(3), Duration::from_secs(3));
+            let mut forwarder = test_forwarder();
             forwarder.session_id = "codex_12345678-1234-1234-1234-123456789abc".into();
             forwarder.session_client_provided = true;
             let endpoints = match protocol {
@@ -1514,12 +1336,12 @@ mod tests {
                         "/responses?fixture=images",
                         request.clone(),
                         client_headers(),
-                        provider,
+                        &provider,
                     )
                     .await
                 {
                     Ok(result) => result,
-                    Err(error) => panic!("forwarding failed: {}", error.error),
+                    Err(error) => panic!("forwarding failed: {error}"),
                 };
                 assert_eq!(
                     result.codex_upstream_format,
@@ -1555,10 +1377,6 @@ mod tests {
                     result.response.bytes_stream(),
                     "Codex",
                     Some(collector),
-                    StreamingTimeoutConfig {
-                        first_byte_timeout: 0,
-                        idle_timeout: 0,
-                    },
                     result.connection_guard,
                 );
                 let chunks: Vec<Bytes> = stream.try_collect().await.unwrap();
@@ -1612,12 +1430,12 @@ mod tests {
                             "/responses?fixture=images",
                             request.clone(),
                             client_headers(),
-                            provider,
+                            &provider,
                         )
                         .await
                     {
                         Ok(_) => panic!("an unsupported-image response must remain an error"),
-                        Err(error) => error.error,
+                        Err(error) => error,
                     };
                     match error {
                         ProxyError::UpstreamError { status, body } => {

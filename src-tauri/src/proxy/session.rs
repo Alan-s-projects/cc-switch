@@ -13,11 +13,7 @@ pub struct SessionIdResult {
     pub source: SessionIdSource,
     pub client_provided: bool,
 }
-pub fn extract_session_id(
-    headers: &HeaderMap,
-    body: &serde_json::Value,
-    _client_format: &str,
-) -> SessionIdResult {
+pub fn extract_session_id(headers: &HeaderMap, body: &serde_json::Value) -> SessionIdResult {
     extract_responses_session(headers, body, "codex").unwrap_or_else(generate_new_session_id)
 }
 fn extract_responses_session(
@@ -85,7 +81,7 @@ mod tests {
             "previous_response_id": "resp_abc123def456789"
         });
 
-        let result = extract_session_id(&headers, &body, "codex");
+        let result = extract_session_id(&headers, &body);
 
         assert!(!result.session_id.is_empty());
         assert_eq!(result.source, SessionIdSource::Generated);
@@ -102,7 +98,7 @@ mod tests {
                 "d937243f-2702-4f20-97b6-c9682235ab81".parse().unwrap(),
             );
 
-            let result = extract_session_id(&headers, &body, "codex");
+            let result = extract_session_id(&headers, &body);
 
             assert_eq!(
                 result.session_id,

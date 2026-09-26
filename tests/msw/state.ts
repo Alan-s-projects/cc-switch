@@ -1,4 +1,3 @@
-import type { AppId } from "@/lib/api/types";
 import type { Provider, Settings } from "@/types";
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 let providers: Record<string, Provider> = {};
@@ -20,9 +19,9 @@ export const resetProviderState = () => {
   appConfigDir = null;
 };
 resetProviderState();
-export const getProviders = (_app: AppId) => clone(providers);
-export const getCurrentProviderId = (_app: AppId) => "copilot";
-export const updateProvider = (_app: AppId, provider: Provider) => {
+export const getProviders = () => clone(providers);
+export const getCurrentProviderId = () => "copilot";
+export const updateProvider = (provider: Provider) => {
   providers[provider.id] = clone(provider);
 };
 export const getSettings = () => clone(settings);

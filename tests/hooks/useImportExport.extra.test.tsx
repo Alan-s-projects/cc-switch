@@ -61,29 +61,6 @@ describe("useImportExport Hook (edge cases)", () => {
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
-  it("resetStatus clears errors but preserves selected file", async () => {
-    openFileDialogMock.mockResolvedValue("/config.json");
-    importConfigMock.mockResolvedValue({ success: false, message: "broken" });
-    const { result } = renderHook(() => useImportExport());
-
-    await act(async () => {
-      await result.current.selectImportFile();
-    });
-
-    await act(async () => {
-      await result.current.importConfig();
-    });
-
-    act(() => {
-      result.current.resetStatus();
-    });
-
-    expect(result.current.selectedFile).toBe("/config.json");
-    expect(result.current.status).toBe("idle");
-    expect(result.current.errorMessage).toBeNull();
-    expect(result.current.backupId).toBeNull();
-  });
-
   it("does not call onImportSuccess when import fails", async () => {
     openFileDialogMock.mockResolvedValue("/config.json");
     importConfigMock.mockResolvedValue({

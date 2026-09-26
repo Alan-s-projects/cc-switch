@@ -9,8 +9,8 @@ import { Button } from "@/components/ui/button";
 
 export function CopilotSettingsPanel({ onCancel }: { onCancel: () => void }) {
   const { t } = useTranslation();
-  const { data, isLoading, error, refetch } = useProvidersQuery("codex");
-  const update = useUpdateProviderMutation("codex");
+  const { data, isLoading, error, refetch } = useProvidersQuery();
+  const update = useUpdateProviderMutation();
   const [authTarget, setAuthTarget] = useState<ManagedAuthProvider | null>(
     null,
   );
