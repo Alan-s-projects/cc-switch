@@ -78,6 +78,41 @@ describe("Copilot model catalog import", () => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
   });
 
+  it("orders enabled models first by name and toggles availability instead of removing rows", () => {
+    const input = props({
+      catalogModels: [
+        { model: "gpt-zulu", displayName: "Zulu" },
+        { model: "gpt-beta", displayName: "Beta", enabled: false },
+        { model: "gpt-alpha", displayName: "Alpha" },
+        { model: "gpt-charlie", displayName: "Charlie", enabled: false },
+      ],
+    });
+    render(<Harness {...input} />);
+
+    const displayNames = () =>
+      screen
+        .getAllByLabelText("Display name")
+        .map((field) => (field as HTMLInputElement).value);
+    expect(displayNames()).toEqual(["Alpha", "Zulu", "Beta", "Charlie"]);
+    expect(
+      screen
+        .getAllByRole("switch")
+        .map((toggle) => toggle.getAttribute("data-state")),
+    ).toEqual(["checked", "checked", "unchecked", "unchecked"]);
+    expect(
+      screen.queryByRole("button", { name: /Remove model/ }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("switch")[0]);
+    expect(input.onCatalogModelsChange).toHaveBeenLastCalledWith([
+      { model: "gpt-zulu", displayName: "Zulu" },
+      { model: "gpt-beta", displayName: "Beta", enabled: false },
+      { model: "gpt-alpha", displayName: "Alpha", enabled: false },
+      { model: "gpt-charlie", displayName: "Charlie", enabled: false },
+    ]);
+    expect(displayNames()).toEqual(["Zulu", "Alpha", "Beta", "Charlie"]);
+  });
+
   it("filters models by Copilot transport and imports them into the bridge catalog", async () => {
     vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
       model("gpt-6-astra"),

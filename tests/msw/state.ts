@@ -2,7 +2,6 @@ import type { Provider, Settings } from "@/types";
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 let providers: Record<string, Provider> = {};
 let settings: Settings = { showInTray: true };
-let appConfigDir: string | null = null;
 export const resetProviderState = () => {
   providers = {
     copilot: {
@@ -16,7 +15,6 @@ export const resetProviderState = () => {
     showInTray: true,
     language: "en",
   };
-  appConfigDir = null;
 };
 resetProviderState();
 export const getProviders = () => clone(providers);
@@ -27,8 +25,4 @@ export const updateProvider = (provider: Provider) => {
 export const getSettings = () => clone(settings);
 export const setSettings = (value: Partial<Settings>) => {
   settings = { ...settings, ...value };
-};
-export const getAppConfigDirOverride = () => appConfigDir;
-export const setAppConfigDirOverrideState = (value: string | null) => {
-  appConfigDir = value;
 };

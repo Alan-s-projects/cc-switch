@@ -17,7 +17,13 @@ export function CopilotCard({ provider }: { provider: Provider }) {
   const models =
     (provider.settingsConfig.modelCatalog as { models?: unknown[] } | undefined)
       ?.models ?? [];
-  const needsSetup = !account || models.length === 0;
+  const enabledModelCount = models.filter(
+    (model) =>
+      !model ||
+      typeof model !== "object" ||
+      (model as { enabled?: unknown }).enabled !== false,
+  ).length;
+  const needsSetup = !account || enabledModelCount === 0;
   return (
     <section className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -38,9 +44,11 @@ export function CopilotCard({ provider }: { provider: Provider }) {
             )}
           </div>
           <p className="text-sm text-muted-foreground">
-            {needsSetup
+            {!account
               ? "Open Settings → Copilot to sign in, fetch your models, and save the bridge settings."
-              : `${account.login} · ${models.length} models available to Codex`}
+              : enabledModelCount === 0
+                ? "No models are enabled for Codex. Open Settings → Copilot to enable at least one."
+                : `${account.login} · ${enabledModelCount} models available to Codex`}
           </p>
         </div>
       </div>

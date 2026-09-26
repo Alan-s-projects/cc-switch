@@ -3,6 +3,7 @@ import type {
   UsageSummary,
   DailyStats,
   ModelStats,
+  UnpricedModelUsage,
   LogFilters,
   ModelPricing,
   PaginatedLogs,
@@ -58,6 +59,22 @@ export const usageApi = {
     });
   },
 
+  getUnpricedModelUsage: async (
+    startDate?: number,
+    endDate?: number,
+    appType?: string,
+    providerName?: string,
+    model?: string,
+  ): Promise<UnpricedModelUsage[]> => {
+    return invoke("get_unpriced_model_usage", {
+      startDate,
+      endDate,
+      appType,
+      providerName,
+      model,
+    });
+  },
+
   getRequestLogs: async (
     filters: LogFilters,
     page: number = 0,
@@ -94,5 +111,9 @@ export const usageApi = {
 
   deleteModelPricing: async (modelId: string): Promise<void> => {
     return invoke("delete_model_pricing", { modelId });
+  },
+
+  resetModelPricingToDefaults: async (): Promise<void> => {
+    return invoke("reset_model_pricing_to_defaults");
   },
 };

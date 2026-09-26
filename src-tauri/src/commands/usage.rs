@@ -86,6 +86,26 @@ pub fn get_model_stats(
     )
 }
 
+/// Get GPT models with token usage but no matching local price.
+#[tauri::command]
+pub fn get_unpriced_model_usage(
+    state: State<'_, AppState>,
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+    app_type: Option<String>,
+    provider_name: Option<String>,
+    model: Option<String>,
+) -> Result<Vec<UnpricedModelUsage>, AppError> {
+    crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
+    state.db.get_unpriced_model_usage(
+        start_date,
+        end_date,
+        Some("codex"),
+        provider_name.as_deref(),
+        model.as_deref(),
+    )
+}
+
 /// 获取请求日志列表
 #[tauri::command]
 pub fn get_request_logs(
@@ -165,4 +185,10 @@ pub fn delete_model_pricing(state: State<'_, AppState>, model_id: String) -> Res
     crate::services::model_pricing::delete_model_pricing(&state.db, &model_id)?;
     log::info!("已删除模型定价: {model_id}");
     Ok(())
+}
+
+/// Reset GPT prices to the values bundled with this application.
+#[tauri::command]
+pub fn reset_model_pricing_to_defaults(state: State<'_, AppState>) -> Result<(), AppError> {
+    crate::services::model_pricing::reset_model_pricing_to_defaults(&state.db)
 }

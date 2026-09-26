@@ -31,18 +31,6 @@
       "copilotDescription": "Manage GitHub Copilot accounts"
     },
     "advanced": {
-      "configDir": {
-        "title": "Configuration Directory",
-        "description": "Choose where Atlas stores its application data."
-      },
-      "connectivityCheck": {
-        "title": "Connectivity Check Settings",
-        "description": "Configure timeout, retries, and the slow-response threshold for provider reachability checks"
-      },
-      "data": {
-        "title": "Data Management",
-        "description": "Import and export local configuration data"
-      },
       "backup": {
         "title": "Backup & Restore",
         "description": "Manage automatic backups, view and restore database snapshots"
@@ -76,21 +64,6 @@
     "themeLight": "Light",
     "themeDark": "Dark",
     "themeSystem": "System",
-    "importExport": "SQL Import/Export",
-    "importExportHint": "Import or export database SQL backups for migration or restore (import supports only backups exported by Copilot Bridge Atlas).",
-    "exportConfig": "Export SQL Backup",
-    "selectConfigFile": "Select SQL File",
-    "import": "Import",
-    "importing": "Importing...",
-    "importSuccess": "Import Successful!",
-    "importFailed": "Import Failed",
-    "importPartialSuccess": "The backup was imported, but Atlas could not refresh its model catalog. Reopen Atlas or edit Copilot setup.",
-    "importPartialHint": "Please manually reselect the provider to refresh the live configuration.",
-    "configExported": "Config exported to:",
-    "exportFailed": "Export failed",
-    "selectFileFailed": "Please choose a valid SQL backup file",
-    "configCorrupted": "SQL file may be corrupted or invalid",
-    "backupId": "Backup ID",
     "backupManager": {
       "title": "Database Backups",
       "empty": "No backups yet",
@@ -121,25 +94,12 @@
       "deleteConfirmTitle": "Confirm Delete",
       "deleteConfirmMessage": "This backup will be permanently deleted. This action cannot be undone."
     },
-    "autoReload": "Data refreshed",
     "windowBehavior": "Window Behavior",
     "launchOnStartup": "Launch on Startup",
     "launchOnStartupDescription": "Automatically run Copilot Bridge Atlas when system starts",
     "autoLaunchFailed": "Failed to set auto-launch",
-    "appConfigDir": "Copilot Bridge Atlas Configuration Directory",
-    "appConfigDirDescription": "Customize the storage location for Copilot Bridge Atlas configuration (point to cloud sync folder to enable config sync)",
-    "browsePlaceholderApp": "e.g., C:\\Users\\Administrator\\.copilot-bridge-atlas",
-    "browseDirectory": "Browse Directory",
-    "resetDefault": "Reset to default directory (takes effect after saving)",
-    "importFailedError": "Import config failed: {{message}}",
-    "exportFailedError": "Export config failed: {{message}}",
-    "restartRequired": "Restart Required",
-    "restartRequiredMessage": "Modifying the Copilot Bridge Atlas configuration directory requires restarting the application to take effect. Restart now?",
-    "restartNow": "Restart Now",
-    "restartLater": "Restart Later",
-    "restartFailed": "Application restart failed, please manually close and reopen.",
-    "devModeRestartHint": "Dev Mode: Automatic restart not supported, please manually restart the application.",
     "saving": "Saving...",
+    "saved": "Saved",
     "globalProxy": {
       "hint": "Route Copilot authentication and inference through an outbound proxy. Leave empty for a direct connection.",
       "username": "Username (optional)",
@@ -153,8 +113,7 @@
       "testSuccess": "Connected! Latency {{latency}}ms",
       "testFailed": "Connection failed: {{error}}"
     },
-    "saveFailedGeneric": "Save failed, please try again",
-    "selectSavePath": "Choose where to save the SQL backup."
+    "saveFailedGeneric": "Save failed, please try again"
   },
   "apps": {
     "codex": "Codex"
@@ -199,7 +158,8 @@
     "defaultReasoningLevelLabel": "Default level",
     "defaultReasoningLevelPlaceholder": "Auto",
     "catalogEmptySignedIn": "No models are in this catalog yet. Refresh models to load those available to your GitHub Copilot account.",
-    "catalogEmptySignedOut": "No models are available while GitHub Copilot is signed out. Sign in to GitHub Copilot, then refresh models to load the models your account can use."
+    "catalogEmptySignedOut": "No models are available while GitHub Copilot is signed out. Sign in to GitHub Copilot, then refresh models to load the models your account can use.",
+    "modelAvailableInCodex": "Available in Codex: {{model}}"
   },
   "usage": {
     "title": "Usage Statistics",
@@ -236,6 +196,21 @@
     "loadPricingError": "Failed to load pricing data",
     "modelPricingDesc": "Configure token costs for each model",
     "noPricingData": "No pricing data. Click \"Add\" to add model pricing configuration.",
+    "viewBuiltInPricing": "View built-in prices",
+    "resetPricing": "Reset to code defaults",
+    "resetPricingTitle": "Reset GPT prices to code defaults?",
+    "resetPricingDesc": "This removes all custom GPT price overrides and GPT deletion tombstones, then restores the prices bundled with Atlas. Custom GPT models without a bundled default will become unpriced. Non-GPT pricing and retired metadata are preserved. Previously recorded request costs are unchanged.",
+    "viewBuiltInPricingFile": "View bundled defaults in schema.rs",
+    "resetPricingConfirm": "Reset GPT prices",
+    "pricingReset": "Pricing reset to bundled GPT defaults",
+    "priceCheckFailed": "Could not check prices for this usage range. No missing-price result is available.",
+    "retryPriceCheck": "Retry price check",
+    "unpricedModelsTitle": "Unpriced model usage",
+    "unpricedModelsMessage": "No bundled or custom GPT price matches these models. Their usage cost is recorded as $0 until a matching price is added.",
+    "reviewPricing": "Review pricing",
+    "unpricedModelsCatalogNote": "A client-requested GPT model may not have a row in Copilot's advertised model list. If so, Atlas cannot read a matching hidden Copilot budget price or broaden its GPT pricing rules.",
+    "requestCount_one": "{{count}} request",
+    "requestCount_other": "{{count}} requests",
     "model": "Model",
     "displayName": "Display Name",
     "inputCost": "Input Cost",
@@ -292,14 +267,5 @@
         "saveFailed": "Save failed: {{error}}"
       }
     }
-  },
-  "streamCheck": {
-    "connectivityNote": "Connectivity check only probes whether the provider address is reachable; it does not send a real model request. Any response counts as \"reachable\" — which does not guarantee that auth or model settings are correct.",
-    "configSaved": "Connectivity check settings saved",
-    "configSaveFailed": "Save failed",
-    "checkParams": "Check Parameters",
-    "timeout": "Timeout (seconds)",
-    "maxRetries": "Max Retries",
-    "degradedThreshold": "Slow-response threshold (ms)"
   }
 }

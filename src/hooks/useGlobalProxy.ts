@@ -30,14 +30,18 @@ export function useGlobalProxyUrl() {
 /**
  * 设置全局代理 URL
  */
-export function useSetGlobalProxyUrl() {
+export function useSetGlobalProxyUrl({
+  showSuccessToast = true,
+}: { showSuccessToast?: boolean } = {}) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
 
   return useMutation({
     mutationFn: setGlobalProxyUrl,
     onSuccess: () => {
-      toast.success(t("settings.globalProxy.saved"));
+      if (showSuccessToast) {
+        toast.success(t("settings.globalProxy.saved"));
+      }
       queryClient.invalidateQueries({ queryKey: ["globalProxyUrl"] });
     },
     onError: (error: unknown) => {

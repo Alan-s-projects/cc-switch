@@ -6,8 +6,6 @@ import {
   updateProvider,
   getSettings,
   setSettings,
-  getAppConfigDirOverride,
-  setAppConfigDirOverrideState,
 } from "./state";
 const root = "http://tauri.local";
 const success = <T>(data: T) => HttpResponse.json(data as never);
@@ -29,43 +27,6 @@ export const handlers = [
   http.post(`${root}/save_settings`, async ({ request }) => {
     setSettings((await body<{ settings: Settings }>(request)).settings);
     return success(true);
-  }),
-  http.post(`${root}/get_app_config_dir_override`, () =>
-    success(getAppConfigDirOverride()),
-  ),
-  http.post(`${root}/set_app_config_dir_override`, async ({ request }) => {
-    setAppConfigDirOverrideState(
-      (await body<{ path: string | null }>(request)).path ?? null,
-    );
-    return success(true);
-  }),
-  http.post(`${root}/pick_directory`, async ({ request }) => {
-    const { defaultPath } = await body<{ defaultPath?: string }>(request);
-    return success(
-      defaultPath ? `${defaultPath}/picked` : "/mock/selected-dir",
-    );
-  }),
-  http.post(`${root}/open_file_dialog`, () =>
-    success("/mock/import-settings.sql"),
-  ),
-  http.post(`${root}/save_file_dialog`, () =>
-    success("/mock/export-settings.sql"),
-  ),
-  http.post(`${root}/import_config_from_file`, async ({ request }) => {
-    const { filePath } = await body<{ filePath: string }>(request);
-    return success(
-      filePath
-        ? { success: true, backupId: "backup-123" }
-        : { success: false, message: "Missing file" },
-    );
-  }),
-  http.post(`${root}/export_config_to_file`, async ({ request }) => {
-    const { filePath } = await body<{ filePath: string }>(request);
-    return success(
-      filePath
-        ? { success: true, filePath }
-        : { success: false, message: "Invalid destination" },
-    );
   }),
   http.post(`${root}/get_proxy_status`, () =>
     success({
@@ -93,11 +54,8 @@ export const handlers = [
       enableLogging: true,
     }),
   ),
-  ...["restart_app", "update_tray_menu", "set_auto_launch"].map((command) =>
+  ...["update_tray_menu", "set_auto_launch"].map((command) =>
     http.post(`${root}/${command}`, () => success(true)),
-  ),
-  http.post(`${root}/sync_current_providers_live`, () =>
-    success({ success: true }),
   ),
   http.post(`${root}/list_db_backups`, () => success([])),
 ];

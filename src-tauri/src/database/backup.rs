@@ -1,12 +1,14 @@
 //! 数据库备份和恢复
 //!
-//! 提供 SQL 导出/导入和二进制快照备份功能。
+//! 提供数据库快照备份和恢复。
 
 use super::{lock_conn, Database};
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
-use chrono::{Local, Utc};
+use chrono::Local;
+use chrono::Utc;
 use rusqlite::backup::{Backup, StepResult};
+#[cfg(test)]
 use rusqlite::types::ValueRef;
 use rusqlite::Connection;
 use std::fs;
@@ -14,11 +16,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use tempfile::{Builder, NamedTempFile};
 
+#[cfg(test)]
 const COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER: &str = "-- Copilot Bridge Atlas SQLite export";
 
 /// Bound combined INSERT batches while still amortizing statement parsing.
 /// A row larger than this cap is emitted alone because it cannot be split.
+#[cfg(test)]
 const INSERT_BATCH_MAX_ROWS: usize = 200;
+#[cfg(test)]
 const INSERT_BATCH_MAX_BYTES: usize = 1024 * 1024;
 
 /// Serialize every operation that observes or mutates the database-backup
@@ -34,6 +39,7 @@ fn lock_backup_file_operations() -> Result<BackupFileOperationGuard, AppError> {
 
 /// `dump_sql` 会写出的 PRAGMA。其余 PRAGMA 一律拒绝——`temp_store_directory`
 /// 能把临时文件重定向到任意目录，`writable_schema` 能绕过 schema 完整性检查。
+#[cfg(test)]
 const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version"];
 
 /// 执行外部 SQL 期间的 authorizer：拒绝一切能**离开临时数据库文件**的动作。
@@ -59,6 +65,7 @@ const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version"];
 /// - 文件后端的虚拟表模块（`csvfile`、`zipfile` 等）能读写任意路径 → 拒 vtable
 /// - `Unknown` 是 rusqlite 对未识别动作码的兜底 → 未知即拒，将来 SQLite 新增的
 ///   跨文件语句会默认落进这里，不依赖有人记得回来补名单
+#[cfg(test)]
 fn import_authorizer(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization {
     use rusqlite::hooks::{AuthAction, Authorization};
 
@@ -92,12 +99,14 @@ pub struct BackupEntry {
 
 impl Database {
     /// 导出为 SQLite 兼容的 SQL 文本（内存字符串，完整导出）
+    #[cfg(test)]
     pub fn export_sql_string(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
         Self::dump_sql(&snapshot, &[])
     }
 
     /// 导出为 SQLite 兼容的 SQL 文本
+    #[cfg(test)]
     pub fn export_sql(&self, target_path: &Path) -> Result<(), AppError> {
         let dump = self.export_sql_string()?;
 
@@ -109,6 +118,7 @@ impl Database {
     }
 
     /// 从 SQL 文件导入，返回生成的备份 ID（若无备份则为空字符串）
+    #[cfg(test)]
     pub fn import_sql(&self, source_path: &Path) -> Result<String, AppError> {
         if !source_path.exists() {
             return Err(AppError::InvalidInput(format!(
@@ -123,14 +133,17 @@ impl Database {
     }
 
     /// 从 SQL 字符串导入，返回生成的备份 ID（若无备份则为空字符串）
+    #[cfg(test)]
     pub fn import_sql_string(&self, sql_raw: &str) -> Result<String, AppError> {
         self.import_sql_string_inner(sql_raw)
     }
 
+    #[cfg(test)]
     fn import_sql_string_inner(&self, sql_raw: &str) -> Result<String, AppError> {
         self.import_sql_string_inner_with_hook(sql_raw, || Ok(()))
     }
 
+    #[cfg(test)]
     fn import_sql_string_inner_with_hook<F>(
         &self,
         sql_raw: &str,
@@ -204,6 +217,7 @@ impl Database {
     }
 
     /// 创建内存快照以避免长时间持有数据库锁
+    #[cfg(test)]
     pub(crate) fn snapshot_to_memory(&self) -> Result<Connection, AppError> {
         let conn = lock_conn!(self.conn);
         let mut snapshot =
@@ -233,6 +247,7 @@ impl Database {
         }
     }
 
+    #[cfg(test)]
     fn validate_copilot_bridge_atlas_sql_export(sql: &str) -> Result<(), AppError> {
         let trimmed = sql.trim_start();
         if trimmed.starts_with(COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER)
@@ -537,7 +552,8 @@ impl Database {
         Ok(())
     }
 
-    /// 导出数据库为 SQL 文本
+    /// 导出数据库为 SQL 文本 in the internal serialization tests.
+    #[cfg(test)]
     fn dump_sql(conn: &Connection, skip_tables: &[&str]) -> Result<String, AppError> {
         let mut output = String::new();
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -674,6 +690,7 @@ impl Database {
         Ok(output)
     }
 
+    #[cfg(test)]
     fn dump_sqlite_sequences(
         conn: &Connection,
         skip_tables: &[&str],
@@ -719,11 +736,13 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
     fn quote_identifier(identifier: &str) -> String {
         format!("\"{}\"", identifier.replace('"', "\"\""))
     }
 
     /// 获取表的列名列表
+    #[cfg(test)]
     fn get_table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, AppError> {
         let quoted_table = Self::quote_identifier(table);
         let mut stmt = conn
@@ -741,6 +760,7 @@ impl Database {
     }
 
     /// 格式化 SQL 值
+    #[cfg(test)]
     fn format_sql_value(value: ValueRef<'_>) -> Result<String, AppError> {
         match value {
             ValueRef::Null => Ok("NULL".to_string()),
@@ -760,6 +780,7 @@ impl Database {
         }
     }
 
+    #[cfg(test)]
     fn format_sql_real(value: f64) -> String {
         if value.is_nan() {
             // SQLite normalizes bound NaN values to NULL as well.
@@ -785,6 +806,7 @@ impl Database {
         literal
     }
 
+    #[cfg(test)]
     fn format_sql_blob(bytes: &[u8]) -> String {
         let mut s = String::from("X'");
         for b in bytes {

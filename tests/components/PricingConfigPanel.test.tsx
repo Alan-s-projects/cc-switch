@@ -6,15 +6,25 @@ import type { ModelPricing } from "@/types/usage";
 const mocks = vi.hoisted(() => ({
   pricing: vi.fn(),
   remove: vi.fn(),
+  reset: vi.fn(),
+  openSource: vi.fn(),
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: { defaultValue?: string } | string) =>
+      typeof options === "string" ? options : (options?.defaultValue ?? key),
   }),
+}));
+vi.mock("@/lib/api", () => ({
+  settingsApi: { openExternal: mocks.openSource },
 }));
 vi.mock("@/lib/query/usage", () => ({
   useModelPricing: mocks.pricing,
   useDeleteModelPricing: () => ({ mutate: mocks.remove, isPending: false }),
+  useResetModelPricingToDefaults: () => ({
+    mutate: mocks.reset,
+    isPending: false,
+  }),
 }));
 vi.mock("@/components/usage/PricingEditModal", () => ({
   PricingEditModal: ({
@@ -49,6 +59,10 @@ beforeEach(() => {
   mocks.remove
     .mockReset()
     .mockImplementation((_id, options) => options.onSuccess());
+  mocks.reset
+    .mockReset()
+    .mockImplementation((_value, options) => options.onSuccess());
+  mocks.openSource.mockReset().mockResolvedValue(undefined);
 });
 
 describe("Manual pricing configuration", () => {
@@ -90,5 +104,48 @@ describe("Manual pricing configuration", () => {
       }),
     );
     expect(mocks.remove).toHaveBeenCalledWith(model.modelId, expect.anything());
+  });
+
+  it("opens the bundled defaults source and confirms a scoped pricing reset", () => {
+    render(<PricingConfigPanel />);
+
+    const source = screen.getByRole("link", { name: "View built-in prices" });
+    expect(source).toHaveAttribute(
+      "href",
+      "https://github.com/Alan-s-projects/copilot-bridge-atlas/blob/atlas/src-tauri/src/database/schema.rs",
+    );
+    fireEvent.click(source);
+    expect(mocks.openSource).toHaveBeenCalledWith(
+      "https://github.com/Alan-s-projects/copilot-bridge-atlas/blob/atlas/src-tauri/src/database/schema.rs",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reset to code defaults" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("GPT deletion tombstones");
+    expect(dialog).toHaveTextContent(
+      "Custom GPT models without a bundled default will become unpriced.",
+    );
+    expect(dialog).toHaveTextContent(
+      "Non-GPT pricing and retired metadata are preserved.",
+    );
+    expect(dialog).toHaveTextContent(
+      "Previously recorded request costs are unchanged.",
+    );
+    expect(
+      within(dialog).getByRole("link", {
+        name: "View bundled defaults in schema.rs",
+      }),
+    ).toBeVisible();
+    expect(mocks.reset).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Reset GPT prices" }),
+    );
+    expect(mocks.reset).toHaveBeenCalledWith(undefined, expect.anything());
+    expect(
+      screen.queryByRole("dialog", { name: /Reset GPT prices/ }),
+    ).not.toBeInTheDocument();
   });
 });

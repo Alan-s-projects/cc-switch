@@ -47,7 +47,19 @@ try {
     $installerName = "Copilot-Bridge-Atlas-$atlasVersion-Windows-x64.msi"
     $installerPath = Join-Path $releaseDir $installerName
     Copy-Item -LiteralPath $builtMsi -Destination $installerPath -Force
-    $hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $installerStream = [IO.File]::OpenRead($installerPath)
+        try {
+            $hash = [BitConverter]::ToString(
+                $sha256.ComputeHash($installerStream)
+            ).Replace('-', '').ToLowerInvariant()
+        } finally {
+            $installerStream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
     [IO.File]::WriteAllText("$installerPath.sha256", "$hash  $installerName`n")
     Write-Output $installerPath
     Write-Output "SHA256: $hash"

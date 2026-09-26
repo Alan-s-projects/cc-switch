@@ -15,8 +15,7 @@ pub fn get_home_dir() -> PathBuf {
 
 /// Atlas never discovers another application's data directory.
 pub fn get_app_config_dir() -> PathBuf {
-    crate::app_store::get_app_config_dir_override()
-        .unwrap_or_else(|| get_home_dir().join(".copilot-bridge-atlas"))
+    get_home_dir().join(".copilot-bridge-atlas")
 }
 
 fn normalize_path_lexically(path: &Path) -> PathBuf {

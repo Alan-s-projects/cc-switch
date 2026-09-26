@@ -19,9 +19,17 @@ pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), 
     if state.proxy_service.is_running().await {
         state.proxy_service.stop().await?;
     } else {
-        let mut config = state.db.get_global_proxy_config().await.map_err(|e| e.to_string())?;
+        let mut config = state
+            .db
+            .get_global_proxy_config()
+            .await
+            .map_err(|e| e.to_string())?;
         config.proxy_enabled = false;
-        state.db.update_global_proxy_config(config).await.map_err(|e| e.to_string())?;
+        state
+            .db
+            .update_global_proxy_config(config)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }

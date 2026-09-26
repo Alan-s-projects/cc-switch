@@ -1382,7 +1382,7 @@ mod tests {
                 let chunks: Vec<Bytes> = stream.try_collect().await.unwrap();
                 assert_eq!(chunks.concat().as_slice(), reply.as_bytes());
                 wait_until_inactive(&forwarder).await;
-                let events = usage_events.lock().unwrap();
+                let events = usage_events.lock().unwrap().clone();
                 let usage = TokenUsage::from_codex_stream_events_auto(&events).unwrap();
                 assert_eq!(
                     (
@@ -1392,7 +1392,6 @@ mod tests {
                     ),
                     (20, 2, 10)
                 );
-                drop(events);
                 assert_eq!(forwarder.status.read().await.success_rate, 100.0);
             }
         }

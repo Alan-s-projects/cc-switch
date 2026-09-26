@@ -231,7 +231,10 @@ Stack Trace (Backtrace)
         drop(crash_log_guard);
 
         if saved {
-            eprintln!("\n[Copilot Bridge Atlas] Crash log saved to: {}", log_path.display());
+            eprintln!(
+                "\n[Copilot Bridge Atlas] Crash log saved to: {}",
+                log_path.display()
+            );
         }
 
         // 同时输出到 stderr（便于开发调试）
