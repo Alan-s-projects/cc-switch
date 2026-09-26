@@ -24,6 +24,8 @@ pub struct UsageSummary {
     pub total_cache_creation_tokens: u64,
     pub total_cache_read_tokens: u64,
     pub success_rate: f32,
+    #[serde(default)]
+    pub avg_latency_ms: f64,
     /// input + output + cache_creation + cache_read — the total tokens
     /// actually processed by the model (including cache hits). Used as the
     /// headline "real consumption" number in the usage hero.
@@ -454,7 +456,8 @@ impl Database {
                 COALESCE(d.total_output_tokens, 0) + COALESCE(r.total_output_tokens, 0),
                 COALESCE(d.total_cache_creation_tokens, 0) + COALESCE(r.total_cache_creation_tokens, 0),
                 COALESCE(d.total_cache_read_tokens, 0) + COALESCE(r.total_cache_read_tokens, 0),
-                COALESCE(d.success_count, 0) + COALESCE(r.success_count, 0)
+                COALESCE(d.success_count, 0) + COALESCE(r.success_count, 0),
+                COALESCE(d.total_latency_ms, 0) + COALESCE(r.total_latency_ms, 0)
             FROM
                 (SELECT
                     COUNT(*) as total_requests,
@@ -463,7 +466,8 @@ impl Database {
                     COALESCE(SUM(l.output_tokens), 0) as total_output_tokens,
                     COALESCE(SUM(l.cache_creation_tokens), 0) as total_cache_creation_tokens,
                     COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens,
-                    COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count
+                    COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
+                    COALESCE(SUM(CAST(l.latency_ms AS REAL)), 0) as total_latency_ms
                  FROM proxy_request_logs l {detail_join} {where_clause}) d,
                 (SELECT
                     COALESCE(SUM(r.request_count), 0) as total_requests,
@@ -472,7 +476,8 @@ impl Database {
                     COALESCE(SUM(r.output_tokens), 0) as total_output_tokens,
                     COALESCE(SUM(r.cache_creation_tokens), 0) as total_cache_creation_tokens,
                     COALESCE(SUM(r.cache_read_tokens), 0) as total_cache_read_tokens,
-                    COALESCE(SUM(r.success_count), 0) as success_count
+                    COALESCE(SUM(r.success_count), 0) as success_count,
+                    COALESCE(SUM(CAST(r.avg_latency_ms AS REAL) * r.request_count), 0) as total_latency_ms
                  FROM usage_daily_rollups r {rollup_join} {rollup_where}) r"
         );
 
@@ -489,6 +494,12 @@ impl Database {
             let total_cache_creation_tokens: i64 = row.get(4)?;
             let total_cache_read_tokens: i64 = row.get(5)?;
             let success_count: i64 = row.get(6)?;
+            let total_latency_ms: f64 = row.get(7)?;
+            let avg_latency_ms = if total_requests > 0 {
+                total_latency_ms / total_requests as f64
+            } else {
+                0.0
+            };
 
             let success_rate = if total_requests > 0 {
                 (success_count as f32 / total_requests as f32) * 100.0
@@ -511,6 +522,7 @@ impl Database {
                 total_cache_creation_tokens: total_cache_creation_tokens as u64,
                 total_cache_read_tokens: total_cache_read_tokens as u64,
                 success_rate,
+                avg_latency_ms,
                 real_total_tokens,
                 cache_hit_rate,
             })
@@ -2298,7 +2310,76 @@ mod tests {
         let summary = db.get_usage_summary(None, None, None, None, None)?;
         assert_eq!(summary.total_requests, 2);
         assert_eq!(summary.success_rate, 100.0);
+        assert_eq!(summary.avg_latency_ms, 125.0);
 
+        Ok(())
+    }
+
+    #[test]
+    fn summary_latency_weights_rollups_and_respects_range_and_model_filters() -> Result<(), AppError>
+    {
+        let db = Database::memory()?;
+        let start = local_ts(2026, 9, 1, 0, 0, 0);
+        let detail = local_ts(2026, 9, 3, 12, 0, 0);
+        let end = local_ts(2026, 9, 3, 23, 59, 59);
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO proxy_request_logs (
+                    request_id, provider_id, app_type, model,
+                    latency_ms, status_code, created_at, data_source
+                ) VALUES
+                    ('success', 'p1', 'codex', 'gpt-6-astra', 100, 200, ?1, 'proxy'),
+                    ('failed', 'p1', 'codex', 'gpt-6-astra', 300, 500, ?1, 'proxy'),
+                    ('other-model', 'p1', 'codex', 'gpt-6-luna', 9999, 200, ?1, 'proxy'),
+                    ('imported', 'p1', 'codex', 'gpt-6-astra', 9999, 200, ?1, 'codex_session'),
+                    ('outside', 'p1', 'codex', 'gpt-6-astra', 9999, 200, ?2, 'proxy')",
+                params![detail, end + 1],
+            )?;
+            conn.execute_batch(
+                "INSERT INTO usage_daily_rollups (
+                    date, app_type, provider_id, model, request_count,
+                    success_count, avg_latency_ms
+                ) VALUES
+                    ('2026-09-02', 'codex', 'p1', 'gpt-6-astra', 3, 2, 700),
+                    ('2026-08-31', 'codex', 'p1', 'gpt-6-astra', 100, 100, 9999),
+                    ('2026-09-02', 'codex', '_codex_session', 'gpt-6-astra', 100, 100, 9999);",
+            )?;
+        }
+        let summary = db.get_usage_summary(
+            Some(start),
+            Some(end),
+            Some("codex"),
+            None,
+            Some("gpt-6-astra"),
+        )?;
+        assert_eq!(summary.total_requests, 5);
+        assert!((summary.success_rate - 60.0).abs() < 0.001);
+        assert_eq!(summary.avg_latency_ms, 500.0);
+        assert_eq!(
+            serde_json::to_value(&summary).unwrap()["avgLatencyMs"],
+            500.0
+        );
+
+        let recent = db.get_usage_summary(
+            Some(detail),
+            Some(end),
+            Some("codex"),
+            None,
+            Some("gpt-6-astra"),
+        )?;
+        assert_eq!(recent.total_requests, 2);
+        assert_eq!(recent.avg_latency_ms, 200.0);
+
+        let empty = db.get_usage_summary(
+            Some(start),
+            Some(end),
+            Some("codex"),
+            None,
+            Some("gpt-no-records"),
+        )?;
+        assert_eq!(empty.total_requests, 0);
+        assert_eq!(empty.avg_latency_ms, 0.0);
         Ok(())
     }
 
@@ -2379,6 +2460,7 @@ mod tests {
         assert_eq!(summary.total_requests, 20);
         assert_eq!(summary.total_input_tokens, 2000);
         assert_eq!(summary.total_output_tokens, 1000);
+        assert_eq!(summary.avg_latency_ms, 120.0);
 
         Ok(())
     }

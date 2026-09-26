@@ -1,0 +1,152 @@
+import { render, screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { UsageHero } from "@/components/usage/UsageHero";
+import type { ReactNode } from "react";
+
+const summaryMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/query/usage", () => ({
+  useUsageSummary: summaryMock,
+}));
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (key: string, fallback?: string) => fallback ?? key,
+  }),
+}));
+vi.mock("framer-motion", () => ({
+  motion: {
+    div: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  },
+}));
+
+beforeEach(() => {
+  summaryMock.mockReset().mockReturnValue({
+    isLoading: false,
+    data: {
+      totalInputTokens: 200,
+      totalOutputTokens: 50,
+      totalCacheReadTokens: 800,
+      realTotalTokens: 1050,
+      cacheHitRate: 0.8,
+      totalCost: "1.25",
+      totalRequests: 12,
+      successRate: 91.7,
+      avgLatencyMs: 1250,
+    },
+  });
+});
+
+describe("Usage token summary", () => {
+  it("labels the total only Tokens Processed without client branding", () => {
+    render(
+      <UsageHero
+        range={{ preset: "today" }}
+        model="gpt-6-astra"
+        refreshIntervalMs={0}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Tokens Processed" }),
+    ).toBeVisible();
+    expect(screen.queryByText("Codex")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("img", { name: "Codex" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTitle((1050).toLocaleString())).toBeVisible();
+    expect(screen.getByText("$1")).toBeVisible();
+    expect(screen.getByText("80.0%")).toBeVisible();
+    expect(screen.getByText("Success Rate")).toBeVisible();
+    expect(screen.getByText("91.7%")).toBeVisible();
+    expect(screen.getByText("Average Latency")).toBeVisible();
+    expect(screen.getByText("1.25s")).toBeVisible();
+    expect(screen.queryByText("Creation")).not.toBeInTheDocument();
+    expect(screen.getByText("Hit")).toBeVisible();
+    expect(screen.getByText("800")).toBeVisible();
+    const tokens = screen.getByRole("region", { name: "Tokens Processed" });
+    const requests = screen.getByRole("region", { name: "Requests" });
+    const cost = screen.getByRole("region", { name: "Total Cost" });
+    expect(tokens).not.toContainElement(requests);
+    expect(requests.parentElement).toBe(cost.parentElement);
+    expect(tokens.parentElement).toBe(requests.parentElement?.parentElement);
+    expect(
+      requests.compareDocumentPosition(cost) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      within(tokens)
+        .getAllByRole("term")
+        .map((term) => term.textContent),
+    ).toEqual(["Fresh Input", "Output", "Hit", "Cache Hit Rate"]);
+    expect(
+      within(requests)
+        .getAllByRole("term")
+        .map((term) => term.textContent),
+    ).toEqual(["Average Latency", "Success Rate"]);
+    expect(within(tokens).getByText("80.0%")).toHaveClass("text-emerald-700");
+    expect(within(requests).getByText("91.7%")).toHaveClass("text-emerald-700");
+    const labels = [
+      "Fresh Input",
+      "Output",
+      "Hit",
+      "Cache Hit Rate",
+      "Average Latency",
+      "Success Rate",
+    ].map((label) => screen.getByText(label));
+    for (let index = 1; index < labels.length; index += 1) {
+      expect(
+        labels[index - 1].compareDocumentPosition(labels[index]) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+    expect(summaryMock).toHaveBeenLastCalledWith(
+      { preset: "today" },
+      { appType: "codex", providerName: undefined, model: "gpt-6-astra" },
+      { refetchInterval: false },
+    );
+  });
+
+  it("retains the loading state until the summary is available", () => {
+    summaryMock.mockReturnValue({ isLoading: true, data: undefined });
+    render(<UsageHero range={{ preset: "today" }} refreshIntervalMs={5000} />);
+
+    expect(
+      screen.queryByRole("heading", { name: "Tokens Processed" }),
+    ).not.toBeInTheDocument();
+    expect(summaryMock).toHaveBeenLastCalledWith(
+      { preset: "today" },
+      { appType: "codex", providerName: undefined, model: undefined },
+      { refetchInterval: 5000 },
+    );
+  });
+
+  it("does not invent success or latency when there are no requests", () => {
+    summaryMock.mockReturnValue({
+      isLoading: false,
+      data: { totalRequests: 0, successRate: 0, avgLatencyMs: 0 },
+    });
+    render(<UsageHero range={{ preset: "today" }} refreshIntervalMs={0} />);
+    expect(
+      screen.getByText("Success Rate").nextElementSibling,
+    ).toHaveTextContent("--");
+    expect(
+      screen.getByText("Average Latency").nextElementSibling,
+    ).toHaveTextContent("--");
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["514.5064", "$515"],
+    ["514.49", "$514"],
+    ["0.125", "$0"],
+    ["invalid", "--"],
+  ])("displays %s as %s without modifying the stored cost", (raw, display) => {
+    const summary = { totalRequests: 0, totalCost: raw };
+    summaryMock.mockReturnValue({ isLoading: false, data: summary });
+    render(<UsageHero range={{ preset: "today" }} refreshIntervalMs={0} />);
+    expect(
+      within(screen.getByRole("region", { name: "Total Cost" })).getByText(
+        display,
+      ),
+    ).toBeVisible();
+    expect(summary.totalCost).toBe(raw);
+  });
+});

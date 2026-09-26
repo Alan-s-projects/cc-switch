@@ -1,6 +1,5 @@
 import { http, HttpResponse } from "msw";
 import type { Provider, Settings } from "@/types";
-import { MODELS_DEV_API_URL } from "@/lib/modelsDevPricing";
 import {
   getProviders,
   getCurrentProviderId,
@@ -17,7 +16,6 @@ const body = async <T>(request: Request): Promise<T> => {
   return text ? (JSON.parse(text) as T) : ({} as T);
 };
 export const handlers = [
-  http.get(MODELS_DEV_API_URL, () => success({})),
   http.post(`${root}/get_providers`, () => success(getProviders())),
   http.post(`${root}/get_current_provider`, () =>
     success(getCurrentProviderId()),
@@ -87,8 +85,6 @@ export const handlers = [
       active_targets: [],
     }),
   ),
-  http.post(`${root}/get_default_cost_multiplier`, () => success("1")),
-  http.post(`${root}/get_pricing_model_source`, () => success("response")),
   http.post(`${root}/get_global_proxy_config`, () =>
     success({
       proxyEnabled: false,

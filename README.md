@@ -6,7 +6,7 @@ read-only Codex configuration previews.
 
 ## Install and connect
 
-Download `Copilot-Bridge-Atlas-4.2.4-Windows-x64.msi` from
+Download `Copilot-Bridge-Atlas-4.2.5-Windows-x64.msi` from
 [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 The installer is per-user and unsigned.
 
@@ -43,7 +43,8 @@ or change Codex's compaction settings.
   estimated cost, cache reuse, and the latest five requests. Connection warnings
   appear above Provider. Health check measures
   endpoint reachability, without an inference or authentication test.
-- **Usage:** history, trends, model/provider statistics, and global GPT pricing.
+- **Usage:** separate token, request, and cost summaries; history, trends, model
+  statistics, and a Cost Pricing tab for manual GPT prices.
   Historical recorded costs are preserved. Imported conversation totals are excluded.
   Token costs are estimates, not a Copilot subscription bill.
 - **Connect:** configuration detection, comparison, copying, and a context-window option.
@@ -53,6 +54,13 @@ or change Codex's compaction settings.
 Home usage updates are coalesced from request events instead of idle SQL polling.
 Status and quota polling pause while the window is inactive. Close the window to
 keep the bridge in the tray; use **Quit** to exit.
+
+The Usage total-cost summary rounds to whole USD for display only. Request logs,
+stored costs, and editable per-model prices retain their precision. Average latency
+includes both individual requests and weighted daily rollups for the selected range.
+
+Pricing has no models.dev downloads or automatic sync. Existing local price
+overrides are preserved; retired sync metadata remains inactive.
 
 ## Independent application identity
 

@@ -25,7 +25,7 @@ export function useUsageEventBridge() {
     (async () => {
       const off = await listen("usage-log-recorded", () => {
         if (disposed || !focusManager.isFocused()) return;
-        // invalidate 整个 usage 命名空间：summary / trends / providerStats /
+        // invalidate 整个 usage 命名空间：summary / trends /
         // modelStats / logs 全部跟着重拉
         queryClient.invalidateQueries({ queryKey: usageKeys.all });
       });

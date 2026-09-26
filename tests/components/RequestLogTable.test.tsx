@@ -71,6 +71,63 @@ describe("RequestLogTable", () => {
     );
   });
 
+  it.each([false, true])(
+    "omits Provider and Source columns and keeps cells aligned (has logs=%s)",
+    (hasLogs) => {
+      useRequestLogsMock.mockReturnValue({
+        isLoading: false,
+        data: {
+          data: hasLogs
+            ? [
+                {
+                  requestId: "request-1",
+                  providerName: "GitHub Copilot",
+                  model: "gpt-6-astra",
+                  createdAt: 1790400000,
+                  inputTokens: 100,
+                  outputTokens: 20,
+                  cacheReadTokens: 0,
+                  cacheCreationTokens: 0,
+                  latencyMs: 1000,
+                  statusCode: 200,
+                  totalCostUsd: "0.01",
+                  costMultiplier: "1",
+                  dataSource: "proxy",
+                },
+              ]
+            : [],
+          total: hasLogs ? 1 : 0,
+          page: 0,
+          pageSize: 20,
+        },
+      });
+      render(
+        <RequestLogTable
+          range={{ preset: "today" }}
+          rangeLabel="Today"
+          appType="codex"
+          refreshIntervalMs={0}
+        />,
+      );
+      expect(screen.getAllByRole("columnheader")).toHaveLength(7);
+      expect(
+        screen.queryByRole("columnheader", { name: "usage.provider" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("columnheader", { name: "Source" }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText("GitHub Copilot")).not.toBeInTheDocument();
+      expect(screen.queryByText("proxy")).not.toBeInTheDocument();
+      if (hasLogs) {
+        expect(screen.getAllByRole("cell")).toHaveLength(7);
+        expect(screen.getByText("gpt-6-astra")).toBeVisible();
+        expect(screen.getByText("$0.0100")).toBeVisible();
+      } else {
+        expect(screen.getByRole("cell")).toHaveAttribute("colspan", "7");
+      }
+    },
+  );
+
   it("resets pagination when the dashboard range changes", async () => {
     const initialRange: UsageRangeSelection = { preset: "today" };
     const nextRange: UsageRangeSelection = {

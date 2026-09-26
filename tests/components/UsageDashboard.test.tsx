@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import type { ComponentProps } from "react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UsageDashboard } from "@/components/usage/UsageDashboard";
 
@@ -59,10 +60,6 @@ vi.mock("@/components/usage/UsageTrendChart", () => ({
 
 vi.mock("@/components/usage/RequestLogTable", () => ({
   RequestLogTable: () => <div data-testid="request-log-table" />,
-}));
-
-vi.mock("@/components/usage/ProviderStatsTable", () => ({
-  ProviderStatsTable: () => <div data-testid="provider-stats-table" />,
 }));
 
 vi.mock("@/components/usage/ModelStatsTable", () => ({
@@ -131,21 +128,41 @@ describe("UsageDashboard", () => {
       screen.queryByRole("button", { name: "usage.appFilter.pi" }),
     ).not.toBeInTheDocument();
 
-    await waitFor(() =>
-      expect(useProviderStatsMock).toHaveBeenLastCalledWith(
-        expect.anything(),
-        { appType: "codex" },
-        expect.anything(),
-      ),
-    );
+    expect(useProviderStatsMock).not.toHaveBeenCalled();
     expect(useModelStatsMock).toHaveBeenLastCalledWith(
       expect.anything(),
-      { appType: "codex", providerName: undefined },
+      { appType: "codex" },
       expect.anything(),
     );
     expect(usageHeroMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ appType: "codex" }),
     );
+    expect(screen.queryByTitle("Codex")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("img", { name: "Codex" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("usage.allSources")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("usage.filterBySource")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "usage.requestLogs",
+      "usage.modelStats",
+      "Cost Pricing",
+    ]);
+    expect(screen.getByTestId("request-log-table")).toBeVisible();
+    expect(
+      screen.queryByTestId("pricing-config-panel"),
+    ).not.toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("tab", { name: "usage.modelStats" }),
+    );
+    expect(await screen.findByTestId("model-stats-table")).toBeVisible();
+    await userEvent.click(screen.getByRole("tab", { name: "Cost Pricing" }));
+    expect(await screen.findByTestId("pricing-config-panel")).toBeVisible();
+    expect(screen.queryByTestId("model-stats-table")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("request-log-table")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /settings\.advanced\.pricing/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("persists refresh interval changes", async () => {
