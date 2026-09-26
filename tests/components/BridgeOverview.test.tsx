@@ -118,7 +118,7 @@ describe("read-only bridge overview", () => {
     ).not.toBeInTheDocument();
     expect(proxy.getByText("http://127.0.0.1:15722/v1")).toBeVisible();
     expect(proxy.getByText("Proxy running")).toBeVisible();
-    expect(await usage.findByText("$1.2500")).toBeVisible();
+    expect(await usage.findByText("$1.3")).toBeVisible();
     expect(usage.getByText("80.0%")).toBeVisible();
     expect(usage.getByText("91.7%")).toBeVisible();
     expect(proxy.getByText("Active requests:").textContent).toContain("2");
@@ -150,13 +150,13 @@ describe("read-only bridge overview", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("keeps four decimal places for Overview cost estimates", async () => {
+  it("rounds Overview cost estimates to one decimal place", async () => {
     mocks.summary.mockResolvedValue({
       ...snapshot.summary,
-      totalCost: "552.5819",
+      totalCost: "553.0626",
     });
     renderOverview();
-    expect(await screen.findByText("$552.5819")).toBeVisible();
+    expect(await screen.findByText("$553.1")).toBeVisible();
   });
 
   it("shows at most five requests even when an older cached response has more", async () => {
@@ -213,7 +213,7 @@ describe("read-only bridge overview", () => {
   it("reports read failures separately from a known misconfiguration and retains the last usage snapshot", async () => {
     mocks.invoke.mockRejectedValue(new Error("Unable to read file"));
     const { client } = renderOverview();
-    expect(await screen.findByText("$1.2500")).toBeVisible();
+    expect(await screen.findByText("$1.3")).toBeVisible();
     mocks.summary.mockRejectedValue(new Error("Database unavailable"));
     await act(() =>
       client.invalidateQueries({ queryKey: ["bridge-overview"] }),
@@ -225,7 +225,7 @@ describe("read-only bridge overview", () => {
       screen.queryByText("Codex is not connected to Atlas"),
     ).not.toBeInTheDocument();
     expect(await screen.findByText(/Showing the last snapshot/)).toBeVisible();
-    expect(screen.getByText("$1.2500")).toBeVisible();
+    expect(screen.getByText("$1.3")).toBeVisible();
   });
 
   it("does not invent success or cache rates when no requests are recorded", async () => {
@@ -245,12 +245,12 @@ describe("read-only bridge overview", () => {
 
   it("explicitly refreshes usage, recent requests and the read-only connection check", async () => {
     renderOverview();
-    expect(await screen.findByText("$1.2500")).toBeVisible();
+    expect(await screen.findByText("$1.3")).toBeVisible();
     const refresh = screen.getByRole("button", { name: "Refresh overview" });
     await waitFor(() => expect(refresh).toBeEnabled());
     mocks.summary.mockResolvedValue({ ...snapshot.summary, totalCost: "2.5" });
     fireEvent.click(refresh);
-    expect(await screen.findByText("$2.5000")).toBeVisible();
+    expect(await screen.findByText("$2.5")).toBeVisible();
     expect(mocks.summary).toHaveBeenCalledTimes(2);
     expect(mocks.logs).toHaveBeenCalledTimes(2);
     expect(mocks.invoke).toHaveBeenCalledTimes(2);

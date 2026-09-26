@@ -65,65 +65,42 @@ export function UsageHero({
       initial={{ opacity: 0, y: 5 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      className="grid gap-3.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]"
+      className="grid grid-cols-1 gap-3.5"
     >
-      <div className="grid content-start gap-3.5">
-        <Card
-          role="region"
-          aria-label={t("usage.totalCost", "Total Cost")}
-          className="min-w-0"
-        >
-          <CardContent className="p-4">
+      <Card
+        role="region"
+        aria-label={t("usage.totalCost", "Total Cost")}
+        className="min-w-0"
+      >
+        <CardContent className="flex min-h-[106px] items-center p-4 sm:px-5">
+          <div>
             <h2 className="mb-1 text-sm font-medium">
               {t("usage.totalCost", "Total Cost")}
             </h2>
             <p className="text-2xl font-medium leading-8 tabular-nums">
               {fmtUsd(totalCost, 0)}
             </p>
-          </CardContent>
-        </Card>
-        <Card
-          role="region"
-          aria-label={t("usage.requests", "Requests")}
-          className="min-w-0"
-        >
-          <CardContent className="p-5">
-            <h2 className="mb-3 text-sm font-medium">
-              {t("usage.requests", "Requests")}
-            </h2>
-            <p className="text-[28px] font-medium leading-9 tabular-nums">
-              {requests.toLocaleString("en-US")}
-            </p>
-            <dl className="mt-5 grid gap-3 border-t border-border pt-4">
-              <SummaryRow
-                label={t("usage.avgLatency", "Average Latency")}
-                value={averageLatency}
-              />
-              <SummaryRow
-                label={t("usage.successRate", "Success Rate")}
-                value={successRate}
-                percentage
-              />
-            </dl>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
       <Card
         role="region"
         aria-label={t("usage.realTotal", "Tokens Processed")}
         className="min-w-0"
       >
-        <CardContent className="p-5">
-          <h2 className="mb-3 text-sm font-medium">
-            {t("usage.realTotal", "Tokens Processed")}
-          </h2>
-          <p
-            className="text-[28px] font-medium leading-9 tabular-nums"
-            title={realTotal.toLocaleString("en-US")}
-          >
-            {formatTokensShort(realTotal, 2)}
-          </p>
-          <dl className="mt-6 grid gap-4 border-t border-border pt-5">
+        <CardContent className="grid min-h-[142px] gap-4 p-4 sm:grid-cols-[minmax(190px,0.8fr)_minmax(0,2fr)] sm:items-center sm:gap-6 sm:p-5">
+          <div className="min-w-0">
+            <h2 className="mb-2 text-sm font-medium">
+              {t("usage.realTotal", "Tokens Processed")}
+            </h2>
+            <p
+              className="text-[28px] font-medium leading-9 tabular-nums"
+              title={realTotal.toLocaleString("en-US")}
+            >
+              {formatTokensShort(realTotal, 2)}
+            </p>
+          </div>
+          <dl className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
             <SummaryRow
               label={t("usage.freshInput", "Fresh Input")}
               value={formatTokensShort(input)}
@@ -139,6 +116,33 @@ export function UsageHero({
             <SummaryRow
               label={t("usage.cacheHitRate", "Cache Hit Rate")}
               value={`${hitPercentLabel}%`}
+              percentage
+            />
+          </dl>
+        </CardContent>
+      </Card>
+      <Card
+        role="region"
+        aria-label={t("usage.requests", "Requests")}
+        className="min-w-0"
+      >
+        <CardContent className="grid min-h-[142px] gap-4 p-4 sm:grid-cols-[minmax(190px,0.8fr)_minmax(0,2fr)] sm:items-center sm:gap-6 sm:p-5">
+          <div className="min-w-0">
+            <h2 className="mb-3 text-sm font-medium">
+              {t("usage.requests", "Requests")}
+            </h2>
+            <p className="text-[28px] font-medium leading-9 tabular-nums">
+              {requests.toLocaleString("en-US")}
+            </p>
+          </div>
+          <dl className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
+            <SummaryRow
+              label={t("usage.avgLatency", "Average Latency")}
+              value={averageLatency}
+            />
+            <SummaryRow
+              label={t("usage.successRate", "Success Rate")}
+              value={successRate}
               percentage
             />
           </dl>
