@@ -72,13 +72,7 @@ function LineText({ line }: { line?: ConfigDiffLine }) {
   );
 }
 
-export function ConfigDiff({
-  lines,
-  layout,
-}: {
-  lines: ConfigDiffLine[];
-  layout: "split" | "inline";
-}) {
+export function ConfigDiff({ lines }: { lines: ConfigDiffLine[] }) {
   const unchanged = lines.every((line) => line.kind === "context");
   const numberStyle =
     "select-none px-2 text-right align-top font-mono text-muted-foreground";
@@ -86,7 +80,8 @@ export function ConfigDiff({
     <div
       role="region"
       aria-label="Configuration diff"
-      className="min-h-0 flex-1 overflow-auto"
+      tabIndex={0}
+      className="code-diff-scrollbar relative min-h-0 flex-1 overflow-x-auto overflow-y-scroll overscroll-contain"
     >
       {unchanged && (
         <p className="border-b p-4 text-sm text-muted-foreground">
@@ -98,91 +93,47 @@ export function ConfigDiff({
           <caption className="sr-only">
             Current TOML compared with proposed TOML
           </caption>
-          {layout === "split" ? (
-            <>
-              <thead className="sticky top-0 z-10 border-b bg-muted">
-                <tr>
-                  <th
-                    scope="col"
-                    className="border-r px-4 py-2 text-left font-medium"
-                  >
-                    Current TOML
-                  </th>
-                  <th scope="col" className="px-4 py-2 text-left font-medium">
-                    Proposed TOML
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {splitRows(lines).map((row, index) => (
-                  <tr key={index}>
-                    {(["current", "proposed"] as const).map((side) => {
-                      const line = row[side];
-                      return (
-                        <td
-                          key={side}
-                          className={cn(
-                            "p-0 align-top",
-                            side === "current" && "border-r",
-                            lineStyle(line),
-                          )}
-                        >
-                          <div className="grid grid-cols-[3.5rem_minmax(0,1fr)]">
-                            <span aria-hidden className={numberStyle}>
-                              {side === "current"
-                                ? line?.oldLineNumber
-                                : line?.newLineNumber}
-                            </span>
-                            <LineText line={line} />
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </>
-          ) : (
-            <>
-              <colgroup>
-                <col className="w-14" />
-                <col className="w-14" />
-                <col />
-              </colgroup>
-              <thead className="sticky top-0 z-10 border-b bg-muted">
-                <tr>
-                  <th
-                    scope="col"
-                    aria-label="Current line number"
-                    className="px-2 py-2 text-right font-medium"
-                  >
-                    Old
-                  </th>
-                  <th
-                    scope="col"
-                    aria-label="Proposed line number"
-                    className="px-2 py-2 text-right font-medium"
-                  >
-                    New
-                  </th>
-                  <th scope="col" className="px-4 py-2 text-left font-medium">
-                    Current TOML → Proposed TOML
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((line, index) => (
-                  <tr key={index} className={lineStyle(line)}>
-                    <td className={numberStyle}>{line.oldLineNumber}</td>
-                    <td className={numberStyle}>{line.newLineNumber}</td>
-                    <td className="p-0 align-top">
-                      <LineText line={line} />
+          <thead className="sticky top-0 z-10 border-b bg-muted">
+            <tr>
+              <th
+                scope="col"
+                className="border-r px-4 py-2 text-left font-medium"
+              >
+                Current TOML
+              </th>
+              <th scope="col" className="px-4 py-2 text-left font-medium">
+                Proposed TOML
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {splitRows(lines).map((row, index) => (
+              <tr key={index}>
+                {(["current", "proposed"] as const).map((side) => {
+                  const line = row[side];
+                  return (
+                    <td
+                      key={side}
+                      className={cn(
+                        "p-0 align-top",
+                        side === "current" && "border-r",
+                        lineStyle(line),
+                      )}
+                    >
+                      <div className="grid grid-cols-[3.5rem_minmax(0,1fr)]">
+                        <span aria-hidden className={numberStyle}>
+                          {side === "current"
+                            ? line?.oldLineNumber
+                            : line?.newLineNumber}
+                        </span>
+                        <LineText line={line} />
+                      </div>
                     </td>
-                  </tr>
-                ))}
-              </tbody>
-            </>
-          )}
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
         </table>
       )}
     </div>

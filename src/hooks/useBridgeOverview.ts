@@ -7,6 +7,7 @@ import { resolveUsageRange } from "@/lib/usageRange";
 import { useWindowActive } from "@/lib/windowActivity";
 
 export const bridgeOverviewKey = ["bridge-overview"] as const;
+export const OVERVIEW_REQUEST_LIMIT = 5;
 const REFRESH_DELAY_MS = 5000;
 
 export function useBridgeOverview() {
@@ -18,7 +19,11 @@ export function useBridgeOverview() {
       const { startDate, endDate } = resolveUsageRange({ preset: "today" });
       const [summary, recent] = await Promise.all([
         usageApi.getUsageSummary(startDate, endDate, "codex"),
-        usageApi.getRequestLogs({ appType: "codex" }, 0, 10),
+        usageApi.getRequestLogs(
+          { appType: "codex" },
+          0,
+          OVERVIEW_REQUEST_LIMIT,
+        ),
       ]);
       return { summary, recent };
     },

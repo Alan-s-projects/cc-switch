@@ -676,30 +676,40 @@ pub fn create_logged_passthrough_stream(
                         // 尝试解析并记录完整的 SSE 事件
                         while let Some(event_text) = take_sse_block(&mut buffer) {
                             if !event_text.trim().is_empty() {
-                                // 提取 data 部分；只有 usage collector 存在时才解析 JSON。
-                                for line in event_text.lines() {
-                                    if let Some(data) = strip_sse_field(line, "data") {
-                                        if data.trim() != "[DONE]" {
-                                            let collected = match &collector {
-                                                Some(c) if c.should_collect(data) => {
-                                                    match serde_json::from_str::<Value>(data) {
-                                                        Ok(json_value) => {
-                                                            c.push(json_value).await;
-                                                            true
-                                                        }
-                                                        Err(_) => false,
-                                                    }
+                                // An SSE event joins all data fields with LF before JSON parsing.
+                                // Parsing each line separately loses multiline terminal usage.
+                                let mut data_fields = event_text
+                                    .lines()
+                                    .filter_map(|line| strip_sse_field(line, "data"));
+                                let Some(first) = data_fields.next() else {
+                                    continue;
+                                };
+                                // Single-line events stay borrowed on the usual hot path.
+                                let mut data = std::borrow::Cow::Borrowed(first);
+                                for field in data_fields {
+                                    let joined = data.to_mut();
+                                    joined.push('\n');
+                                    joined.push_str(field);
+                                }
+                                if data.trim() != "[DONE]" {
+                                    let collected = match &collector {
+                                        Some(c) if c.should_collect(&data) => {
+                                            match serde_json::from_str::<Value>(&data) {
+                                                Ok(json_value) => {
+                                                    c.push(json_value).await;
+                                                    true
                                                 }
-                                                _ => false,
-                                            };
-                                            log::trace!(
-                                                "[{tag}] <<< SSE data: bytes={}, usage_collected={collected} (content omitted)",
-                                                data.len()
-                                            );
-                                        } else {
-                                            log::debug!("[{tag}] <<< SSE: [DONE]");
+                                                Err(_) => false,
+                                            }
                                         }
-                                    }
+                                        _ => false,
+                                    };
+                                    log::trace!(
+                                        "[{tag}] <<< SSE data: bytes={}, usage_collected={collected} (content omitted)",
+                                        data.len()
+                                    );
+                                } else {
+                                    log::debug!("[{tag}] <<< SSE: [DONE]");
                                 }
                             }
                         }
@@ -790,6 +800,78 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
     use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn passthrough_usage_handles_multiline_and_incomplete_responses() {
+        use crate::proxy::handler_config::codex_stream_usage_event_filter;
+        use futures::TryStreamExt;
+        use serde_json::json;
+
+        for kind in [
+            "response.completed",
+            "response.incomplete",
+            "response.failed",
+        ] {
+            let event = json!({
+                "type": kind,
+                "response": {
+                    "id": "resp_usage_fixture",
+                    "model": "gpt-6-astra",
+                    "usage": {
+                        "input_tokens": 125,
+                        "output_tokens": 9,
+                        "input_tokens_details": { "cached_tokens": 70 }
+                    }
+                }
+            });
+            for multiline in [false, true] {
+                let json = if multiline {
+                    serde_json::to_string_pretty(&event).unwrap()
+                } else {
+                    serde_json::to_string(&event).unwrap()
+                };
+                let data = json
+                    .lines()
+                    .map(|line| format!("data: {line}\r\n"))
+                    .collect::<String>();
+                let input =
+                    format!(": heartbeat\r\n\r\nevent: {kind}\r\nid: transport-id\r\n{data}\r\n");
+                for chunk_size in [1, 7, input.len()] {
+                    let captured = Arc::new(std::sync::Mutex::new(None));
+                    let capture = captured.clone();
+                    let collector = SseUsageCollector::new(
+                        std::time::Instant::now(),
+                        Some(codex_stream_usage_event_filter),
+                        move |events, _| *capture.lock().unwrap() = Some(events),
+                    );
+                    let chunks = input
+                        .as_bytes()
+                        .chunks(chunk_size)
+                        .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                        .collect::<Vec<_>>();
+                    let output = create_logged_passthrough_stream(
+                        futures::stream::iter(chunks),
+                        "test",
+                        Some(collector),
+                        None,
+                    )
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap();
+                    assert_eq!(output.concat(), input.as_bytes());
+                    let events = captured.lock().unwrap().take().unwrap();
+                    assert_eq!(events, [event.clone()], "{kind}, multiline={multiline}");
+                    let usage = TokenUsage::from_codex_stream_events_auto(&events)
+                        .expect("terminal response usage must be retained");
+                    assert_eq!(usage.input_tokens, 125);
+                    assert_eq!(usage.output_tokens, 9);
+                    assert_eq!(usage.cache_read_tokens, 70);
+                    assert_eq!(usage.message_id.as_deref(), Some("resp_usage_fixture"));
+                    assert_eq!(usage.model.as_deref(), Some("gpt-6-astra"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn format_headers_keeps_only_allowlisted_diagnostic_values() {

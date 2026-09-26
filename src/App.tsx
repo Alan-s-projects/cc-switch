@@ -15,6 +15,7 @@ import { CopilotCard } from "@/components/providers/CopilotCard";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { UsagePage } from "@/components/usage/UsagePage";
 import { BridgeOverview } from "@/components/overview/BridgeOverview";
+import { BridgeWarnings } from "@/components/overview/BridgeWarnings";
 import { OverviewRefreshButton } from "@/components/overview/OverviewRefreshButton";
 import { CodexSetupSuggestion } from "@/components/providers/CodexSetupSuggestion";
 import { ProxyToggle } from "@/components/proxy/ProxyToggle";
@@ -124,6 +125,7 @@ export default function App() {
               </div>
               <OverviewRefreshButton />
             </div>
+            <BridgeWarnings status={status} />
             {isLoading ? (
               <Loader2 className="h-6 w-6 animate-spin" />
             ) : provider ? (

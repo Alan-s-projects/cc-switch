@@ -20,6 +20,7 @@ import {
   KeyRound,
   Github,
   SlidersHorizontal,
+  Info,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -70,7 +71,6 @@ export function SettingsPage({
     isSaving,
     appConfigDir,
     resolvedDirs,
-    updateSettings,
     updateAppConfigDir,
     browseAppConfigDir,
     resetAppConfigDir,
@@ -151,32 +151,16 @@ export function SettingsPage({
     }
   }, [closeAfterSave, t]);
 
-  // Revert failed optimistic edits so later saves cannot replay them.
   const handleAutoSave = useCallback(
     async (updates: Partial<SettingsFormState>): Promise<boolean> => {
-      if (!settings) return false;
-      const previousValues = Object.fromEntries(
-        Object.keys(updates).map((key) => [
-          key,
-          settings[key as keyof SettingsFormState],
-        ]),
-      ) as Partial<SettingsFormState>;
-      updateSettings(updates);
       try {
-        await autoSaveSettings(updates);
-        return true;
+        return (await autoSaveSettings(updates)) !== null;
       } catch (error) {
         console.error("[SettingsPage] Failed to autosave settings", error);
-        updateSettings(previousValues);
-        toast.error(
-          t("settings.saveFailedGeneric", {
-            defaultValue: "Save failed, please try again",
-          }),
-        );
         return false;
       }
     },
-    [autoSaveSettings, settings, t, updateSettings],
+    [autoSaveSettings],
   );
 
   const isBusy = useMemo(() => isLoading && !settings, [isLoading, settings]);
@@ -226,6 +210,7 @@ export function SettingsPage({
                 label: t("settings.tabAdvanced"),
                 icon: SlidersHorizontal,
               },
+              { value: "about", label: "About", icon: Info },
             ].map(({ value, label, icon: Icon }) => (
               <TabsTrigger
                 key={value}
@@ -256,7 +241,6 @@ export function SettingsPage({
                       settings={settings}
                       onChange={handleAutoSave}
                     />
-                    <AboutSection />
                   </motion.div>
                 ) : null}
               </TabsContent>
@@ -441,6 +425,10 @@ export function SettingsPage({
                     </Accordion>
                   </motion.div>
                 ) : null}
+              </TabsContent>
+
+              <TabsContent value="about" className="mt-0 pb-4">
+                <AboutSection />
               </TabsContent>
             </div>
 

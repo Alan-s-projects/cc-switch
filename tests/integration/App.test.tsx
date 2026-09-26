@@ -47,6 +47,11 @@ vi.mock("@/components/providers/CopilotCard", () => ({
 vi.mock("@/components/overview/BridgeOverview", () => ({
   BridgeOverview: () => <div data-testid="bridge-overview">Overview</div>,
 }));
+vi.mock("@/components/overview/BridgeWarnings", () => ({
+  BridgeWarnings: () => (
+    <section data-testid="bridge-warnings">Warnings</section>
+  ),
+}));
 vi.mock("@/components/proxy/ProxyToggle", () => ({
   ProxyToggle: () => (
     <button role="switch" aria-label="Proxy server" aria-checked={false} />
@@ -91,6 +96,13 @@ describe("Atlas application scope", () => {
     renderApp();
     expect(screen.getByText("GitHub Copilot")).toBeVisible();
     expect(screen.getByTestId("bridge-overview")).toBeVisible();
+    const warnings = screen.getByTestId("bridge-warnings");
+    const provider = screen.getByText("GitHub Copilot");
+    expect(warnings.parentElement).toBe(provider.parentElement);
+    expect(
+      warnings.compareDocumentPosition(provider) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(mocks.providers).toHaveBeenCalledWith();
     for (const title of [
       "skills.manage",

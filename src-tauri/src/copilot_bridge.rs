@@ -254,28 +254,6 @@ pub struct ConfigDiffLine {
 pub struct SetupRecommendations {
     #[serde(rename = "context1m")]
     pub context_1m: bool,
-    pub approval_policy: bool,
-    pub sandbox_mode: bool,
-    pub reasoning: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupContextPreset {
-    pub model: Option<String>,
-    pub current_context_window: Option<String>,
-    pub context_window: u64,
-    pub copilot_context_window: u64,
-    pub copilot_model_limit: Option<u64>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupSettingDefault {
-    pub option: &'static str,
-    pub key: &'static str,
-    pub current_value: String,
-    pub default_value: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -283,35 +261,16 @@ pub struct SetupSettingDefault {
 pub struct CodexSetupSuggestion {
     pub config_path: String,
     pub config_exists: bool,
-    pub suggestion: String,
-    pub endpoint: String,
     pub configured: bool,
-    pub current_provider: String,
     pub copilot_config: String,
-    pub copilot_diff: String,
     pub copilot_lines: Vec<ConfigDiffLine>,
     pub openai_config: String,
-    pub openai_diff: String,
     pub openai_lines: Vec<ConfigDiffLine>,
-    pub context_preset: SetupContextPreset,
-    pub setting_defaults: Vec<SetupSettingDefault>,
 }
 
-fn setup_setting_value(doc: &toml_edit::DocumentMut, key: &str) -> Option<String> {
-    let item = doc.get(key)?;
-    if let Some(value) = item.as_value() {
-        let mut value = value.clone();
-        value.decor_mut().clear();
-        Some(value.to_string())
-    } else {
-        Some(item.to_string().trim().to_string())
-    }
-}
+const CONTEXT_WINDOW_1M: u64 = 1_000_000;
 
-fn setup_context_preset(
-    current: &toml_edit::DocumentMut,
-    catalog: Option<&Path>,
-) -> SetupContextPreset {
+fn copilot_context_window(current: &toml_edit::DocumentMut, catalog: Option<&Path>) -> u64 {
     let model = current
         .get("profile")
         .and_then(toml_edit::Item::as_str)
@@ -344,55 +303,7 @@ fn setup_context_preset(
                 })
                 .min()
         });
-    let context_window = 1_000_000;
-    let copilot_context_window =
-        copilot_model_limit.map_or(context_window, |limit| context_window.min(limit));
-    SetupContextPreset {
-        model,
-        current_context_window: setup_setting_value(current, "model_context_window"),
-        context_window,
-        copilot_context_window,
-        copilot_model_limit,
-    }
-}
-
-fn setup_setting_defaults(current: &toml_edit::DocumentMut) -> Vec<SetupSettingDefault> {
-    // Documented file-level defaults, not an inference about the running app:
-    // https://learn.chatgpt.com/docs/config-file/config-sample
-    [
-        (
-            "approvalPolicy",
-            "approval_policy",
-            Some("on-request"),
-            "\"on-request\"",
-        ),
-        (
-            "sandboxMode",
-            "sandbox_mode",
-            Some("read-only"),
-            "\"read-only\"",
-        ),
-        (
-            "reasoning",
-            "model_reasoning_effort",
-            None,
-            "Model default (unset)",
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(option, key, default, default_value)| {
-        let item = current.get(key)?;
-        if default.is_some() && item.as_str() == default {
-            return None;
-        }
-        Some(SetupSettingDefault {
-            option,
-            key,
-            current_value: setup_setting_value(current, key)?,
-            default_value,
-        })
-    })
-    .collect()
+    copilot_model_limit.map_or(CONTEXT_WINDOW_1M, |limit| CONTEXT_WINDOW_1M.min(limit))
 }
 
 fn config_uses_endpoint(current: &toml_edit::DocumentMut, endpoint: &str) -> bool {
@@ -489,18 +400,12 @@ fn provider_table<'a>(
         .ok_or_else(|| AppError::Message("The selected model provider must be a TOML table".into()))
 }
 
-fn config_diff(current: &str, proposed: &str) -> (String, Vec<ConfigDiffLine>) {
+fn config_diff(current: &str, proposed: &str) -> Vec<ConfigDiffLine> {
     // Line-ending differences must not obscure the actual connection changes.
     let current = current.replace("\r\n", "\n");
     let proposed = proposed.replace("\r\n", "\n");
     let diff = similar::TextDiff::from_lines(&current, &proposed);
-    let unified = diff
-        .unified_diff()
-        .context_radius(3)
-        .header("a/config.toml", "b/config.toml")
-        .to_string();
-    let lines = diff
-        .iter_all_changes()
+    diff.iter_all_changes()
         .map(|change| ConfigDiffLine {
             kind: match change.tag() {
                 similar::ChangeTag::Equal => "context",
@@ -511,8 +416,7 @@ fn config_diff(current: &str, proposed: &str) -> (String, Vec<ConfigDiffLine>) {
             new_line_number: change.new_index().map(|index| index + 1),
             text: change.value().to_string(),
         })
-        .collect();
-    (unified, lines)
+        .collect()
 }
 
 fn setup_suggestion(
@@ -531,8 +435,6 @@ fn setup_suggestion(
                     .into(),
             )
         })?;
-    let context_preset = setup_context_preset(&current, catalog);
-    let setting_defaults = setup_setting_defaults(&current);
     let active = current
         .get("model_provider")
         .and_then(toml_edit::Item::as_str)
@@ -552,11 +454,6 @@ fn setup_suggestion(
                 })
                 .flatten()
         });
-    let current_provider = previous
-        .and_then(|item| item.get("name"))
-        .and_then(toml_edit::Item::as_str)
-        .unwrap_or(active)
-        .to_string();
     // Reusing the active custom id avoids changing Codex's provider identity when migrating a proxy.
     let id = if !active.is_empty()
         && !matches!(active, "openai" | "ollama" | "lmstudio" | "amazon-bedrock")
@@ -660,73 +557,30 @@ fn setup_suggestion(
             openai.remove("model_providers");
         }
     }
-    if let Some(recommendations) = recommendations {
+    if recommendations.is_some_and(|options| options.context_1m) {
         for (doc, context_window) in [
-            (&mut copilot, context_preset.copilot_context_window),
-            (&mut openai, context_preset.context_window),
+            (&mut copilot, copilot_context_window(&current, catalog)),
+            (&mut openai, CONTEXT_WINDOW_1M),
         ] {
-            if recommendations.context_1m {
-                set_connection_value(
-                    doc.as_table_mut(),
-                    "model_context_window",
-                    toml_edit::value(context_window as i64),
-                );
-            }
-            for (enabled, key, default) in [
-                (
-                    recommendations.approval_policy,
-                    "approval_policy",
-                    "on-request",
-                ),
-                (recommendations.sandbox_mode, "sandbox_mode", "read-only"),
-            ] {
-                if enabled && doc.contains_key(key) {
-                    set_connection_value(doc.as_table_mut(), key, toml_edit::value(default));
-                }
-            }
-            if recommendations.reasoning {
-                doc.remove("model_reasoning_effort");
-            }
+            set_connection_value(
+                doc.as_table_mut(),
+                "model_context_window",
+                toml_edit::value(context_window as i64),
+            );
         }
-    }
-    let mut snippet = toml_edit::DocumentMut::new();
-    snippet["model_provider"] = toml_edit::value(&id);
-    if let Some(catalog) = catalog {
-        snippet["model_catalog_json"] = toml_edit::value(catalog.to_string_lossy().as_ref());
-    }
-    let snippet_provider = provider_table(&mut snippet, &id)?;
-    for (key, value) in [
-        ("name", toml_edit::value("GitHub Copilot")),
-        ("base_url", toml_edit::value(endpoint)),
-        ("wire_api", toml_edit::value("responses")),
-        ("requires_openai_auth", toml_edit::value(false)),
-        (
-            "experimental_bearer_token",
-            toml_edit::value("PROXY_MANAGED"),
-        ),
-        ("supports_websockets", toml_edit::value(false)),
-    ] {
-        snippet_provider.insert(key, value);
     }
     let copilot_config = copilot.to_string();
     let openai_config = openai.to_string();
-    let (copilot_diff, copilot_lines) = config_diff(current_text, &copilot_config);
-    let (openai_diff, openai_lines) = config_diff(current_text, &openai_config);
+    let copilot_lines = config_diff(current_text, &copilot_config);
+    let openai_lines = config_diff(current_text, &openai_config);
     Ok(CodexSetupSuggestion {
         config_path: path.to_string_lossy().into_owned(),
         config_exists,
-        suggestion: snippet.to_string(),
-        endpoint: endpoint.into(),
         configured: config_uses_endpoint(&current, endpoint),
-        current_provider,
-        copilot_diff,
         copilot_lines,
-        openai_diff,
         openai_lines,
         copilot_config,
         openai_config,
-        context_preset,
-        setting_defaults,
     })
 }
 
@@ -923,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn optional_settings_only_change_selected_top_level_values_in_proposals() {
+    fn context_preset_preserves_other_preferences_in_both_proposals() {
         use serde_json::json;
 
         let directory = tempfile::tempdir().unwrap();
@@ -957,39 +811,11 @@ model_reasoning_effort = "medium"
         let baseline =
             setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None)
                 .unwrap();
-        let cases: [(serde_json::Value, &[(&str, Option<&str>)]); 7] = [
-            (json!({}), &[]),
-            (
-                json!({"context1m": false, "approvalPolicy": false, "sandboxMode": false, "reasoning": false}),
-                &[],
-            ),
-            (
-                json!({"context1m": true}),
-                &[("model_context_window", Some("1000000"))],
-            ),
-            (
-                json!({"approvalPolicy": true}),
-                &[("approval_policy", Some("\"on-request\""))],
-            ),
-            (
-                json!({"sandboxMode": true}),
-                &[("sandbox_mode", Some("\"read-only\""))],
-            ),
-            (
-                json!({"reasoning": true}),
-                &[("model_reasoning_effort", None)],
-            ),
-            (
-                json!({"context1m": true, "approvalPolicy": true, "sandboxMode": true, "reasoning": true}),
-                &[
-                    ("model_context_window", Some("1000000")),
-                    ("approval_policy", Some("\"on-request\"")),
-                    ("sandbox_mode", Some("\"read-only\"")),
-                    ("model_reasoning_effort", None),
-                ],
-            ),
-        ];
-        for (flags, changes) in cases {
+        for flags in [
+            json!({}),
+            json!({"context1m": false}),
+            json!({"context1m": true}),
+        ] {
             let recommendations: SetupRecommendations = serde_json::from_value(flags).unwrap();
             let preview = setup_suggestion_from_file(
                 &path,
@@ -999,24 +825,13 @@ model_reasoning_effort = "medium"
                 Some(&recommendations),
             )
             .unwrap();
-            if changes.is_empty() {
+            if !recommendations.context_1m {
                 assert_eq!(
                     serde_json::to_value(&preview).unwrap(),
                     serde_json::to_value(&baseline).unwrap()
                 );
             }
             assert!(preview.config_exists);
-            assert_eq!(preview.current_provider, baseline.current_provider);
-            assert_eq!(preview.suggestion, baseline.suggestion);
-            assert_eq!(
-                serde_json::to_value(&preview.context_preset).unwrap(),
-                serde_json::to_value(&baseline.context_preset).unwrap(),
-                "Current-value metadata must not follow the proposed changes"
-            );
-            assert_eq!(
-                serde_json::to_value(&preview.setting_defaults).unwrap(),
-                serde_json::to_value(&baseline.setting_defaults).unwrap()
-            );
             for (config, lines) in [
                 (&preview.copilot_config, &preview.copilot_lines),
                 (&preview.openai_config, &preview.openai_lines),
@@ -1030,13 +845,8 @@ model_reasoning_effort = "medium"
                     "approval_policy",
                     "sandbox_mode",
                 ] {
-                    if let Some((_, expected)) = changes.iter().find(|(changed, _)| *changed == key)
-                    {
-                        assert_eq!(
-                            setup_setting_value(&proposed, key).as_deref(),
-                            *expected,
-                            "{key}"
-                        );
+                    if recommendations.context_1m && key == "model_context_window" {
+                        assert_eq!(proposed[key].as_integer(), Some(1_000_000));
                     } else {
                         assert_eq!(
                             proposed[key].to_string(),
@@ -1064,36 +874,6 @@ model_reasoning_effort = "medium"
     }
 
     #[test]
-    fn default_choices_do_not_create_missing_top_level_overrides() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        let text = "model = 'gpt-6-astra'\n[profiles.keep]\nmodel_reasoning_effort = 'high'\n";
-        std::fs::write(&path, text).unwrap();
-        let baseline =
-            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None)
-                .unwrap();
-        let recommendations = SetupRecommendations {
-            context_1m: false,
-            approval_policy: true,
-            sandbox_mode: true,
-            reasoning: true,
-        };
-        let preview = setup_suggestion_from_file(
-            &path,
-            true,
-            "http://127.0.0.1:15722/v1",
-            None,
-            Some(&recommendations),
-        )
-        .unwrap();
-        assert_eq!(
-            serde_json::to_value(&preview).unwrap(),
-            serde_json::to_value(&baseline).unwrap()
-        );
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
-    }
-
-    #[test]
     fn context_preset_only_sets_window_and_respects_the_selected_copilot_model_limit() {
         use serde_json::json;
 
@@ -1107,15 +887,12 @@ model_reasoning_effort = "medium"
         ]})
         .to_string();
         std::fs::write(&catalog, &catalog_text).unwrap();
-        let recommendations = SetupRecommendations {
-            context_1m: true,
-            ..Default::default()
-        };
-        for (model, limit, window) in [
-            ("gpt-6-astra", Some(1_050_000), 1_000_000),
-            ("GPT-6-LUNA", Some(872_000), 872_000),
-            ("unknown-model", None, 1_000_000),
-            ("invalid-limit", None, 1_000_000),
+        let recommendations = SetupRecommendations { context_1m: true };
+        for (model, window) in [
+            ("gpt-6-astra", 1_000_000),
+            ("GPT-6-LUNA", 872_000),
+            ("unknown-model", 1_000_000),
+            ("invalid-limit", 1_000_000),
         ] {
             let text = format!("model = '{model}'\n");
             std::fs::write(&path, &text).unwrap();
@@ -1127,8 +904,6 @@ model_reasoning_effort = "medium"
                 Some(&recommendations),
             )
             .unwrap();
-            assert_eq!(preview.context_preset.copilot_model_limit, limit);
-            assert!(preview.context_preset.current_context_window.is_none());
             for (config, lines, expected_window) in [
                 (&preview.copilot_config, &preview.copilot_lines, window),
                 (&preview.openai_config, &preview.openai_lines, 1_000_000),
@@ -1154,8 +929,6 @@ model_reasoning_effort = "medium"
             Some(&recommendations),
         )
         .unwrap();
-        assert_eq!(preview.context_preset.model.as_deref(), Some("gpt-6-luna"));
-        assert_eq!(preview.context_preset.copilot_context_window, 872_000);
         let proposed = preview
             .copilot_config
             .parse::<toml_edit::DocumentMut>()
@@ -1170,45 +943,13 @@ model_reasoning_effort = "medium"
     }
 
     #[test]
-    fn defaults_comparison_only_lists_explicit_nondefault_settings() {
-        let current = r#"
-approval_policy = 'never' # Keep this comment
-sandbox_mode = 'danger-full-access'
-model_reasoning_effort = 'ultra'
-notify = ['keep']
-"#
-        .parse::<toml_edit::DocumentMut>()
-        .unwrap();
-        let defaults = setup_setting_defaults(&current);
-        assert_eq!(
-            serde_json::to_value(defaults).unwrap(),
-            serde_json::json!([
-                {"option": "approvalPolicy", "key": "approval_policy", "currentValue": "'never'", "defaultValue": "\"on-request\""},
-                {"option": "sandboxMode", "key": "sandbox_mode", "currentValue": "'danger-full-access'", "defaultValue": "\"read-only\""},
-                {"option": "reasoning", "key": "model_reasoning_effort", "currentValue": "'ultra'", "defaultValue": "Model default (unset)"},
-            ])
-        );
-        for text in [
-            "",
-            "approval_policy = 'on-request'\nsandbox_mode = 'read-only'\n",
-            "[profiles.keep]\napproval_policy = 'never'\nmodel_reasoning_effort = 'high'\n",
-        ] {
-            assert!(setup_setting_defaults(&text.parse().unwrap()).is_empty());
-        }
-    }
-
-    #[test]
-    fn optional_defaults_handle_granular_policy_and_preserve_context_formatting() {
+    fn context_preset_preserves_granular_policy_and_numeric_formatting() {
         let text = r#"model_context_window = 1_000_000 # Keep numeric formatting
 model_auto_compact_token_limit = 900_000
 approval_policy = { granular = { sandbox_approval = false, rules = true } }
 notify = ["unchanged"]
 "#;
-        let recommendations = SetupRecommendations {
-            context_1m: true,
-            approval_policy: true,
-            ..Default::default()
-        };
+        let recommendations = SetupRecommendations { context_1m: true };
         let preview = setup_suggestion(
             text,
             Path::new("config.toml"),
@@ -1218,15 +959,14 @@ notify = ["unchanged"]
             Some(&recommendations),
         )
         .unwrap();
-        assert_eq!(preview.setting_defaults.len(), 1);
-        assert!(preview.setting_defaults[0]
-            .current_value
-            .contains("granular"));
         for config in [&preview.copilot_config, &preview.openai_config] {
             assert!(config.contains("model_context_window = 1_000_000 # Keep numeric formatting"));
             assert!(config.contains("model_auto_compact_token_limit = 900_000"));
             let proposed = config.parse::<toml_edit::DocumentMut>().unwrap();
-            assert_eq!(proposed["approval_policy"].as_str(), Some("on-request"));
+            assert_eq!(
+                proposed["approval_policy"].to_string(),
+                text.parse::<toml_edit::DocumentMut>().unwrap()["approval_policy"].to_string()
+            );
             assert_eq!(proposed["notify"].to_string().trim(), "[\"unchanged\"]");
         }
     }
@@ -1371,7 +1111,7 @@ notify = ["unchanged"]
 
     #[test]
     fn config_diff_lines_serialize_numbered_changes_and_preserve_missing_newlines() {
-        let (unified, lines) = config_diff("same\r\nold", "same\nnew\n");
+        let lines = config_diff("same\r\nold", "same\nnew\n");
         assert_eq!(
             serde_json::to_value(lines).unwrap(),
             serde_json::json!([
@@ -1380,7 +1120,6 @@ notify = ["unchanged"]
                 { "kind": "added", "oldLineNumber": null, "newLineNumber": 2, "text": "new\n" }
             ])
         );
-        assert!(unified.contains("\\ No newline at end of file"));
     }
 
     #[test]
@@ -1398,14 +1137,14 @@ notify = ["unchanged"]
                 "start\nnew\nsame\nsame\ninserted\nend",
             ),
         ] {
-            let (_, lines) = config_diff(current, proposed);
+            let lines = config_diff(current, proposed);
             assert_diff_snapshots(&lines, current, proposed);
         }
 
-        // Keep context outside the unified diff's three-line display radius.
+        // Keep every unchanged line in the comparison.
         let current = format!("before\n{}old\n", "same\n".repeat(10));
         let proposed = format!("before\n{}new\n", "same\n".repeat(10));
-        let (_, lines) = config_diff(&current, &proposed);
+        let lines = config_diff(&current, &proposed);
         assert_diff_snapshots(&lines, &current, &proposed);
         assert_eq!(
             lines.iter().filter(|line| line.kind == "context").count(),
@@ -1750,10 +1489,12 @@ command = "unchanged"
         assert_eq!(official["forced_login_method"].as_str(), Some("chatgpt"));
         assert!(!official.contains_key("model_catalog_json"));
         assert!(!official.contains_key("openai_base_url"));
-        assert!(preview.copilot_diff.contains("--- a/config.toml"));
-        assert!(preview
-            .copilot_diff
-            .contains("-base_url = \"http://localhost:4142/v1\""));
+        assert!(preview.copilot_lines.iter().any(|line| {
+            line.kind == "removed"
+                && line
+                    .text
+                    .contains("base_url = \"http://localhost:4142/v1\"")
+        }));
         let second = setup_suggestion(
             &preview.copilot_config,
             &path,
@@ -1763,7 +1504,6 @@ command = "unchanged"
             None,
         )
         .unwrap();
-        assert!(second.copilot_diff.is_empty(), "{}", second.copilot_diff);
         assert_diff_snapshots(
             &second.copilot_lines,
             &preview.copilot_config,
@@ -1795,7 +1535,7 @@ command = "unchanged"
     }
 
     #[test]
-    fn suggestion_preserves_provider_id_without_copying_preferences_or_secrets() {
+    fn proposal_preserves_preferences_and_replaces_the_previous_proxy_token() {
         let text = r#"# user comment
 model_provider = "my-copilot"
 model = "gpt-6-astra"
@@ -1813,11 +1553,24 @@ command = "keep-me"
             setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None)
                 .unwrap();
         assert!(result.configured);
-        let parsed = result.suggestion.parse::<toml_edit::DocumentMut>().unwrap();
+        let parsed = result
+            .copilot_config
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
         assert_eq!(parsed["model_provider"].as_str(), Some("my-copilot"));
-        assert!(!result.suggestion.contains("private-token"));
-        assert!(!result.suggestion.contains("mcp_servers"));
-        assert!(!result.suggestion.contains("model_auto_compact"));
+        assert_eq!(
+            parsed["model_providers"]["my-copilot"]["experimental_bearer_token"].as_str(),
+            Some("PROXY_MANAGED")
+        );
+        assert!(!result.copilot_config.contains("private-token"));
+        assert_eq!(
+            parsed["mcp_servers"]["example"]["command"].as_str(),
+            Some("keep-me")
+        );
+        assert_eq!(
+            parsed["model_auto_compact_token_limit"].as_integer(),
+            Some(900000)
+        );
         assert_eq!(std::fs::read_to_string(path).unwrap(), text);
     }
 
@@ -1833,7 +1586,7 @@ command = "keep-me"
             assert_diff_snapshots(&result.openai_lines, text, &result.openai_config);
             assert!(!result.configured);
             assert!(result
-                .suggestion
+                .copilot_config
                 .contains("model_provider = \"copilot-bridge-atlas\""));
             assert!(!path.exists());
         }
@@ -1868,8 +1621,7 @@ command = "keep-me"
         for app in ["claude", "gemini", "grokbuild", "opencode"] {
             assert!(require_codex(app).is_err());
         }
-        let mut provider =
-            Provider::with_id("test".into(), "test".into(), serde_json::json!({}));
+        let mut provider = Provider::with_id("test".into(), "test".into(), serde_json::json!({}));
         assert!(require_copilot(&provider).is_err());
         provider.meta = Some(
             serde_json::from_value(serde_json::json!({

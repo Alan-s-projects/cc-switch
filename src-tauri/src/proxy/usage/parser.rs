@@ -133,14 +133,18 @@ impl TokenUsage {
     pub fn from_codex_stream_events_auto(events: &[Value]) -> Option<Self> {
         log::debug!("[Codex] 智能解析流式事件，共 {} 个事件", events.len());
 
-        // 先尝试 Codex Responses API 格式 (response.completed 事件)
-        for event in events {
-            if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
-                if event_type == "response.completed" {
-                    if let Some(response) = event.get("response") {
-                        log::debug!("[Codex] 找到 response.completed 事件");
-                        return Self::from_codex_response_auto(response);
-                    }
+        // Incomplete/failed native Responses can still report billable tokens.
+        // Prefer the final reported usage without inventing any missing counts.
+        for event in events.iter().rev() {
+            if matches!(
+                event.get("type").and_then(Value::as_str),
+                Some("response.completed" | "response.incomplete" | "response.failed")
+            ) {
+                if let Some(usage) = event
+                    .get("response")
+                    .and_then(Self::from_codex_response_auto)
+                {
+                    return Some(usage);
                 }
             }
         }

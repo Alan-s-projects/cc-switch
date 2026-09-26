@@ -116,6 +116,25 @@ html.dark {
   display: none;
 }
 
+.code-diff-scrollbar {
+  scrollbar-width: auto;
+  scrollbar-gutter: stable;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+}
+
+.code-diff-scrollbar::-webkit-scrollbar {
+  display: block;
+  width: 10px;
+  height: 10px;
+}
+
+.code-diff-scrollbar::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: hsl(var(--muted-foreground) / 0.5);
+  background-clip: padding-box;
+}
+
 *:focus-visible {
   @apply outline-2 outline-blue-500 outline-offset-2;
 }

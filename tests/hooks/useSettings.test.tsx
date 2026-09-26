@@ -21,6 +21,7 @@ vi.mock("@/lib/query", () => ({
 }));
 vi.mock("@/lib/api", () => ({
   settingsApi: {
+    get: async () => ({ ...saved }),
     setAppConfigDirOverride: (...args: unknown[]) =>
       setAppConfigDirOverride(...args),
     setAutoLaunch: (...args: unknown[]) => setAutoLaunch(...args),
@@ -137,7 +138,11 @@ describe("useSettings", () => {
     directories.appConfigDir = "/custom/atlas";
     mutateAsync.mockRejectedValueOnce(new Error("save failed"));
     const { result } = renderHook(() => useSettings());
-    await expect(result.current.saveSettings()).rejects.toThrow("save failed");
+    await act(async () => {
+      await expect(result.current.saveSettings()).rejects.toThrow(
+        "save failed",
+      );
+    });
     expect(setAppConfigDirOverride).not.toHaveBeenCalled();
     expect(result.current.requiresRestart).toBe(false);
   });
