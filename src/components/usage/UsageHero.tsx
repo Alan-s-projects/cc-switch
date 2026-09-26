@@ -65,8 +65,50 @@ export function UsageHero({
       initial={{ opacity: 0, y: 5 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      className="grid gap-3.5 md:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]"
+      className="grid gap-3.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]"
     >
+      <div className="grid content-start gap-3.5">
+        <Card
+          role="region"
+          aria-label={t("usage.totalCost", "Total Cost")}
+          className="min-w-0"
+        >
+          <CardContent className="p-5">
+            <h2 className="mb-3 text-sm font-medium">
+              {t("usage.totalCost", "Total Cost")}
+            </h2>
+            <p className="text-[28px] font-medium leading-9 tabular-nums">
+              {fmtUsd(totalCost, 0)}
+            </p>
+            <p className="mt-1.5 text-xs text-muted-foreground">USD</p>
+          </CardContent>
+        </Card>
+        <Card
+          role="region"
+          aria-label={t("usage.requests", "Requests")}
+          className="min-w-0"
+        >
+          <CardContent className="p-5">
+            <h2 className="mb-3 text-sm font-medium">
+              {t("usage.requests", "Requests")}
+            </h2>
+            <p className="text-[28px] font-medium leading-9 tabular-nums">
+              {requests.toLocaleString("en-US")}
+            </p>
+            <dl className="mt-5 grid gap-3 border-t border-border pt-4">
+              <SummaryRow
+                label={t("usage.avgLatency", "Average Latency")}
+                value={averageLatency}
+              />
+              <SummaryRow
+                label={t("usage.successRate", "Success Rate")}
+                value={successRate}
+                percentage
+              />
+            </dl>
+          </CardContent>
+        </Card>
+      </div>
       <Card
         role="region"
         aria-label={t("usage.realTotal", "Tokens Processed")}
@@ -103,48 +145,6 @@ export function UsageHero({
           </dl>
         </CardContent>
       </Card>
-      <div className="grid content-start gap-3.5">
-        <Card
-          role="region"
-          aria-label={t("usage.requests", "Requests")}
-          className="min-w-0"
-        >
-          <CardContent className="p-5">
-            <h2 className="mb-3 text-sm font-medium">
-              {t("usage.requests", "Requests")}
-            </h2>
-            <p className="text-[28px] font-medium leading-9 tabular-nums">
-              {requests.toLocaleString("en-US")}
-            </p>
-            <dl className="mt-5 grid gap-3 border-t border-border pt-4">
-              <SummaryRow
-                label={t("usage.avgLatency", "Average Latency")}
-                value={averageLatency}
-              />
-              <SummaryRow
-                label={t("usage.successRate", "Success Rate")}
-                value={successRate}
-                percentage
-              />
-            </dl>
-          </CardContent>
-        </Card>
-        <Card
-          role="region"
-          aria-label={t("usage.totalCost", "Total Cost")}
-          className="min-w-0"
-        >
-          <CardContent className="p-5">
-            <h2 className="mb-3 text-sm font-medium">
-              {t("usage.totalCost", "Total Cost")}
-            </h2>
-            <p className="text-[28px] font-medium leading-9 tabular-nums">
-              {fmtUsd(totalCost, 0)}
-            </p>
-            <p className="mt-1.5 text-xs text-muted-foreground">USD</p>
-          </CardContent>
-        </Card>
-      </div>
     </motion.div>
   );
 }

@@ -69,7 +69,11 @@ describe("Usage token summary", () => {
     expect(requests.parentElement).toBe(cost.parentElement);
     expect(tokens.parentElement).toBe(requests.parentElement?.parentElement);
     expect(
-      requests.compareDocumentPosition(cost) & Node.DOCUMENT_POSITION_FOLLOWING,
+      cost.compareDocumentPosition(requests) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      requests.compareDocumentPosition(tokens) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
       within(tokens)
@@ -83,20 +87,6 @@ describe("Usage token summary", () => {
     ).toEqual(["Average Latency", "Success Rate"]);
     expect(within(tokens).getByText("80.0%")).toHaveClass("text-emerald-700");
     expect(within(requests).getByText("91.7%")).toHaveClass("text-emerald-700");
-    const labels = [
-      "Fresh Input",
-      "Output",
-      "Hit",
-      "Cache Hit Rate",
-      "Average Latency",
-      "Success Rate",
-    ].map((label) => screen.getByText(label));
-    for (let index = 1; index < labels.length; index += 1) {
-      expect(
-        labels[index - 1].compareDocumentPosition(labels[index]) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy();
-    }
     expect(summaryMock).toHaveBeenLastCalledWith(
       { preset: "today" },
       { appType: "codex", providerName: undefined, model: "gpt-6-astra" },
