@@ -1,6 +1,6 @@
 //! Codex Responses ↔ OpenAI Chat Completions conversion.
 //!
-//! This module is used when the Codex client talks to CC Switch through the
+//! This module is used when the Codex client talks to Copilot Bridge Atlas through the
 //! Responses API, while the selected upstream provider only exposes an
 //! OpenAI-compatible Chat Completions endpoint.
 
@@ -9,7 +9,6 @@ use super::codex_chat_common::{
     response_function_call_item, response_function_call_item_with_namespace,
     split_leading_think_block,
 };
-use crate::provider::CodexChatReasoningConfig;
 use crate::proxy::{
     error::ProxyError,
     json_canonical::{
@@ -18,7 +17,7 @@ use crate::proxy::{
     },
     tool_media::{
         chat_file_from_input_file, flush_pending_chat_tool_media, plan_chat_tool_output_media,
-        queue_chat_tool_output_media, strip_and_clamp_media_from_tool_value, ToolMediaScope,
+        queue_chat_tool_output_media, strip_and_clamp_media_from_tool_value,
         TOOL_RESULT_MEDIA_MOVED_MARKER,
     },
 };
@@ -253,18 +252,9 @@ pub(crate) fn build_codex_tool_context_from_request(body: &Value) -> CodexToolCo
     context
 }
 
-/// Convert an OpenAI Responses request into an OpenAI Chat Completions request.
-#[allow(dead_code)]
-pub fn responses_to_chat_completions(body: Value) -> Result<Value, ProxyError> {
-    responses_to_chat_completions_with_reasoning(body, None)
-}
-
 /// Convert an OpenAI Responses request into an OpenAI Chat Completions request,
-/// using provider-declared Codex Chat reasoning capabilities when available.
-pub fn responses_to_chat_completions_with_reasoning(
-    body: Value,
-    reasoning_config: Option<&CodexChatReasoningConfig>,
-) -> Result<Value, ProxyError> {
+/// preserving the requested GPT reasoning effort.
+pub fn responses_to_chat_completions(body: Value) -> Result<Value, ProxyError> {
     let mut result = json!({});
     let tool_context = build_codex_tool_context_from_request(&body);
 
@@ -291,11 +281,7 @@ pub fn responses_to_chat_completions_with_reasoning(
 
     let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("");
     if let Some(max_tokens) = body.get("max_output_tokens") {
-        if super::transform::is_openai_o_series(model) {
-            result["max_completion_tokens"] = max_tokens.clone();
-        } else {
-            result["max_tokens"] = max_tokens.clone();
-        }
+        result["max_tokens"] = max_tokens.clone();
     }
     if let Some(max_tokens) = body.get("max_tokens") {
         result["max_tokens"] = max_tokens.clone();
@@ -310,7 +296,11 @@ pub fn responses_to_chat_completions_with_reasoning(
         }
     }
 
-    apply_reasoning_options(&mut result, &body, model, reasoning_config);
+    if is_reasoning_gpt(model) {
+        if let Some(effort) = body.pointer("/reasoning/effort") {
+            result["reasoning_effort"] = effort.clone();
+        }
+    }
 
     let tools = tool_context.chat_tools();
     if !tools.is_empty() {
@@ -342,215 +332,41 @@ pub fn responses_to_chat_completions_with_reasoning(
     }
     // OpenAI 兼容上游在流式下默认不在 SSE 里返回 usage，必须显式声明
     // include_usage 才会在末尾吐 usage chunk。Codex CLI 用 Responses 协议、
-    // 自身不带 stream_options，缺这一注入会导致 kimi/MiniMax 等第三方流式请求的
+    // 自身不带 stream_options，缺这一注入会导致 GPT 流式请求的
     // token/成本/缓存命中率全部漏记（input/output/cache 全为 0）。
-    // 与 Claude→openai_chat 路径共用同一 helper，保证两个客户端方向一致。
-    super::transform::inject_openai_stream_include_usage(&mut result);
+    inject_openai_stream_include_usage(&mut result);
 
     Ok(result)
 }
 
-fn apply_reasoning_options(
-    result: &mut Value,
-    body: &Value,
-    model: &str,
-    config: Option<&CodexChatReasoningConfig>,
-) {
-    let Some(config) = config else {
-        if super::transform::supports_reasoning_effort(model) {
-            if let Some(effort) = body.pointer("/reasoning/effort") {
-                result["reasoning_effort"] = effort.clone();
-            }
-        }
-        return;
-    };
+fn is_reasoning_gpt(model: &str) -> bool {
+    model
+        .to_ascii_lowercase()
+        .strip_prefix("gpt-")
+        .and_then(|version| version.split(|ch: char| !ch.is_ascii_digit()).next())
+        .and_then(|major| major.parse::<u32>().ok())
+        .is_some_and(|major| major >= 5)
+}
 
-    let supports_effort = config.supports_effort.unwrap_or(false);
-    let supports_thinking = config.supports_thinking.unwrap_or(false) || supports_effort;
-    let Some(reasoning_enabled) = reasoning_requested(body) else {
-        return;
-    };
-
-    if supports_thinking {
-        match config
-            .thinking_param
-            .as_deref()
-            .unwrap_or("thinking")
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "thinking" => {
-                result["thinking"] = json!({
-                    "type": if reasoning_enabled { "enabled" } else { "disabled" }
-                });
-            }
-            "enable_thinking" => {
-                result["enable_thinking"] = json!(reasoning_enabled);
-            }
-            "reasoning_split" => {
-                result["reasoning_split"] = json!(reasoning_enabled);
-            }
-            _ => {}
-        }
-    }
-
-    // effort_param 在 early return 之前算出：reasoning.effort 形态的「显式关闭」分支要用到。
-    let effort_param = config
-        .effort_param
-        .as_deref()
-        .unwrap_or("reasoning_effort")
-        .trim()
-        .to_ascii_lowercase();
-
-    if !reasoning_enabled {
-        // OpenRouter 原生 reasoning.effort 支持显式 "none"（语义：彻底关闭推理）。
-        // 上游显式发 effort=none/off/disabled（或 reasoning=null）时 reasoning_enabled 为 false，
-        // 直接 return 会丢失关闭意图——OpenRouter 部分模型默认开思考，不带字段无法关闭，
-        // 造成行为与成本偏差；故对该形态忠实转发 {"reasoning":{"effort":"none"}}。
-        // 顶层 reasoning_effort 平台的枚举不含 none，仍走上方 thinking 关闭路径、不发 effort。
-        // 注意：完全不带 reasoning 字段时 reasoning_requested 返回 None 已提前 return，
-        // 不会走到这里，故只有上游「显式」表达关闭才透传 none。
-        if effort_param == "reasoning.effort" {
-            result["reasoning"] = json!({ "effort": "none" });
-        }
+pub(crate) fn inject_openai_stream_include_usage(result: &mut Value) {
+    let is_stream = result
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !is_stream {
         return;
     }
-
-    if !supports_effort {
-        return;
-    }
-
-    let Some(effort) = body.pointer("/reasoning/effort").and_then(|v| v.as_str()) else {
-        return;
-    };
-    let Some(mapped) = map_reasoning_effort(
-        effort,
-        config.effort_value_mode.as_deref(),
-        config.effort_levels.as_deref(),
-    ) else {
-        return;
-    };
-
-    match effort_param.as_str() {
-        // OpenAI 风格顶层字段（DeepSeek 官方、OpenAI o-series 等）。
-        "reasoning_effort" => {
-            result["reasoning_effort"] = json!(mapped);
+    match result.get_mut("stream_options") {
+        Some(Value::Object(opts)) => {
+            opts.insert("include_usage".to_string(), json!(true));
         }
-        // OpenRouter 原生归一化对象：reasoning.effort 会被 OpenRouter 翻译成各底层模型
-        // （OpenAI/Grok/Gemini/Anthropic）的正确推理参数，覆盖面比顶层 OpenAI 别名更全。
-        // 本转换从空对象构造、不残留原始 reasoning 对象，故不会出现 reasoning 与
-        // reasoning_effort 并存触发 400 的情况（参见 openclaw#24119）。
-        "reasoning.effort" => {
-            result["reasoning"] = json!({ "effort": mapped });
+        _ => {
+            result["stream_options"] = json!({ "include_usage": true });
         }
-        _ => {}
     }
 }
 
-fn reasoning_requested(body: &Value) -> Option<bool> {
-    if let Some(effort) = body.pointer("/reasoning/effort").and_then(|v| v.as_str()) {
-        return Some(!matches!(
-            effort.trim().to_ascii_lowercase().as_str(),
-            "none" | "off" | "disabled"
-        ));
-    }
-
-    body.get("reasoning").map(|value| !value.is_null())
-}
-
-fn map_reasoning_effort<'a>(
-    effort: &str,
-    mode: Option<&str>,
-    effort_levels: Option<&'a [String]>,
-) -> Option<&'a str> {
-    let effort = effort.trim().to_ascii_lowercase();
-    if matches!(effort.as_str(), "none" | "off" | "disabled") {
-        return None;
-    }
-
-    // ultra 是 Codex 扩展档位：已知枚举的专用模式（deepseek/openrouter/low_high）
-    // 钳到自身最高合法档而非丢弃——丢弃会让"选最深思考"静默退化成"不带 effort"；
-    // passthrough 面向枚举未知的通用上游，档位由用户/预设的 reasoningLevels 声明
-    // 背书，与 max/xhigh 一样原值透传。
-    match mode.unwrap_or("passthrough") {
-        "deepseek" => match effort.as_str() {
-            "max" | "xhigh" | "ultra" => Some("max"),
-            _ => Some("high"),
-        },
-        "low_high" => match effort.as_str() {
-            "minimal" | "low" => Some("low"),
-            _ => Some("high"),
-        },
-        // OpenRouter effort 枚举为 xhigh|high|medium|low|minimal（无 max）。max 是
-        // Codex / 部分模型的扩展档位，对 OpenRouter 非法，会触发
-        // `400 reasoning_effort: Invalid option`（见 openclaw#77350）；钳到最高合法档
-        // xhigh，其余合法值透传，未知值丢弃以免被上游拒绝。
-        "openrouter" => match effort.as_str() {
-            "max" | "xhigh" | "ultra" => Some("xhigh"),
-            "high" => Some("high"),
-            "medium" => Some("medium"),
-            "low" => Some("low"),
-            "minimal" => Some("minimal"),
-            _ => None,
-        },
-        // OpenCode Zen：合法档位逐模型（表数据 = 供应商 modelCatalog 各条目的
-        // reasoningLevels，镜像 models.dev——glm-5.2 仅 high|max、deepseek-v4-flash
-        // 为 low|high|max、kimi-k3 仅 max），opencode 客户端也严格按模型声明发值，
-        // 故不能用统一并集映射。无表（模型未收录目录、或为 toggle/budget 型未声明
-        // effort）→ None，完全不发 reasoning_effort；有表 → 钳到「不小于请求的
-        // 最近合法档」，请求超出最高档则取最高合法档；请求值本身无法识别 → None
-        // （同其他模式的未知值丢弃策略）。
-        "zen" => {
-            let levels = effort_levels?;
-            let requested = zen_effort_rank(&effort)?;
-            levels
-                .iter()
-                .filter_map(|level| zen_effort_rank(level).map(|rank| (rank, level.as_str())))
-                .filter(|(rank, _)| *rank >= requested)
-                .min_by_key(|(rank, _)| *rank)
-                .or_else(|| {
-                    levels
-                        .iter()
-                        .filter_map(|level| {
-                            zen_effort_rank(level).map(|rank| (rank, level.as_str()))
-                        })
-                        .max_by_key(|(rank, _)| *rank)
-                })
-                .map(|(_, level)| level)
-        }
-        _ => match effort.as_str() {
-            "minimal" => Some("minimal"),
-            "low" => Some("low"),
-            "medium" => Some("medium"),
-            "high" => Some("high"),
-            "xhigh" => Some("xhigh"),
-            "max" => Some("max"),
-            "ultra" => Some("ultra"),
-            _ => None,
-        },
-    }
-}
-
-/// Codex 规范档位序（minimal < low < medium < high < xhigh < max < ultra），供 zen
-/// 逐模型钳制做大小比较；目录里的非法/扩展值（如 "none"）返回 None，查表时被滤掉。
-fn zen_effort_rank(effort: &str) -> Option<u8> {
-    match effort.trim().to_ascii_lowercase().as_str() {
-        "minimal" => Some(0),
-        "low" => Some(1),
-        "medium" => Some(2),
-        "high" => Some(3),
-        "xhigh" => Some(4),
-        "max" => Some(5),
-        "ultra" => Some(6),
-        _ => None,
-    }
-}
-
-/// MiniMax 严格要求 messages 中只能首条出现 `role=system`，
-/// 否则返回 `invalid params, chat content has invalid message role: system (2013)`。
-/// 把所有 system 消息合并到首位，避免中间 system（如 Codex 的 `developer` 指令）触发该约束；
-/// 该重排对 OpenAI / DeepSeek 等宽松兼容层也是无损的。
+// Keep instruction normalization stable for existing GPT Chat requests.
 fn collapse_system_messages_to_head(messages: Vec<Value>) -> Vec<Value> {
     let mut system_chunks: Vec<String> = Vec::new();
     let mut rest: Vec<Value> = Vec::with_capacity(messages.len());
@@ -660,7 +476,6 @@ fn append_responses_input_as_chat_messages(
         last_assistant_index,
         &mut pending_reasoning,
     );
-    backfill_tool_call_reasoning_placeholders(messages);
     Ok(())
 }
 
@@ -742,7 +557,6 @@ fn append_responses_item_as_chat_message(
                     strip_and_clamp_media_from_tool_value(
                         output,
                         &mut media_parts,
-                        ToolMediaScope::AllSupported,
                         &replacement_block,
                         TOOL_RESULT_MEDIA_MOVED_MARKER,
                     )
@@ -766,7 +580,7 @@ fn append_responses_item_as_chat_message(
             // message / function_call（后者经 flush_pending_tool_calls 消费）。
             // 此前这里在 pending_tool_calls 为空时直接回溯附挂到上一条 assistant，
             // 会把新一轮的思考错拼进旧消息，导致紧跟的纯文本 assistant 丢失
-            // reasoning_content，思考型模型（kimi 等）多轮对话因此中途"断片"。
+            // reasoning_content，从而丢失多轮对话中的思考历史。
             // 真正的尾部剩余由 input 结束时的收尾逻辑、或回合边界消息（user 等）
             // 到达时回溯附挂，见 attach_pending_reasoning_to_previous_assistant。
             append_pending_reasoning(pending_reasoning, responses_reasoning_item_text(item));
@@ -1124,45 +938,6 @@ fn attach_pending_reasoning_to_assistant(
     }
 }
 
-/// 在所有 input 处理完毕后，对仍缺 `reasoning_content` 的 assistant tool-call 消息补占位。
-/// 必须作为管线末端的最终兜底执行：真实 reasoning 可能以尾随 `reasoning` item 的形式经
-/// `attach_pending_reasoning_to_previous_assistant` 回填，过早注入占位会被
-/// `append_reasoning_content` 追加而污染真实思考。
-fn backfill_tool_call_reasoning_placeholders(messages: &mut [Value]) {
-    for message in messages.iter_mut() {
-        let is_assistant_tool_call = message.get("role").and_then(|value| value.as_str())
-            == Some("assistant")
-            && message
-                .get("tool_calls")
-                .and_then(|value| value.as_array())
-                .is_some_and(|calls| !calls.is_empty());
-        if is_assistant_tool_call {
-            ensure_tool_call_reasoning_content(message);
-        }
-    }
-}
-
-/// kimi/Moonshot、DeepSeek 等 thinking 模型要求每条带 `tool_calls` 的 assistant
-/// 消息都必须携带非空 `reasoning_content`。跨轮历史恢复 miss（如代理重启丢失内存缓存、
-/// call_id 歧义无法恢复、上游某轮未产出思考）时，这里补一个占位，避免上游返回
-/// `reasoning_content is missing in assistant tool call message`。
-/// 与 `transform::anthropic_to_openai_with_reasoning_content` 的占位行为保持对称。
-fn ensure_tool_call_reasoning_content(message: &mut Value) {
-    let Some(obj) = message.as_object_mut() else {
-        return;
-    };
-    let has_reasoning = obj
-        .get("reasoning_content")
-        .and_then(|value| value.as_str())
-        .is_some_and(|text| !text.trim().is_empty());
-    if !has_reasoning {
-        obj.insert(
-            "reasoning_content".to_string(),
-            Value::String("tool call".to_string()),
-        );
-    }
-}
-
 /// 将仍未消费的 pending reasoning 回溯附挂到上一条 assistant 消息。
 ///
 /// 只允许两种「真正的尾部」场景调用：
@@ -1314,9 +1089,8 @@ fn responses_input_file_to_chat_file(part: &Value) -> Option<Value> {
 /// `tools`: `tool_search_output` items (dynamically loaded tool groups) and
 /// `additional_tools` carriers (Codex 0.154+ ships extra tools — the
 /// `functions`/`collaboration` exec sandbox, plugins — in this Responses
-/// private-extension carrier). The xAI Responses passthrough already promotes
-/// the same carriers (`promote_additional_tools`); the Chat and Anthropic
-/// converters go through this registry so they keep the carried tools too.
+/// private-extension carrier). Keep these tools in the Chat registry so their
+/// names remain available when converting subsequent calls and results.
 fn collect_input_declared_tools(value: &Value, context: &mut CodexToolContext) {
     match value {
         Value::Array(items) => {
@@ -1440,10 +1214,8 @@ fn responses_function_tool_to_chat_tool(tool: &Value, chat_name: &str) -> Option
     // Omit a missing description instead of serializing null — hosted tools
     // and undescribed custom tools reach this branch without the field, and
     // strict OpenAI-compatible upstreams reject the whole request on a null
-    // value (400 "expected string, received null"). Same treatment as the
-    // anthropic→chat/responses converters; insertion keeps the original
-    // name→description→parameters key order for byte-identical output when
-    // the description is present.
+    // value (400 "expected string, received null"). Keep the original
+    // name/description/parameters order when the description is present.
     if let Some(description) = tool.get("description").filter(|d| !d.is_null()) {
         function["description"] = description.clone();
     }
@@ -2019,11 +1791,6 @@ pub(crate) fn chat_usage_to_responses_usage(usage: Option<&Value>) -> Value {
                 .pointer("/input_tokens_details/cached_tokens")
                 .and_then(Value::as_u64)
         })
-        // DeepSeek Chat 的文档化缓存命中字段（与 usage/parser.rs 的处理对应），末位兜底。
-        // 官方端点目前把同值镜像进未文档化的 prompt_tokens_details.cached_tokens（上面的
-        // 标准字段已命中），故仅当上游只发文档字段、不发镜像时此兜底生效（如部分中转），
-        // 并防御未文档化镜像将来消失；上游发任一标准字段时行为零变化。
-        .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(Value::as_u64))
         .unwrap_or(0);
     let cache_write = usage
         .pointer("/prompt_tokens_details/cache_write_tokens")
@@ -2068,7 +1835,7 @@ pub(crate) fn chat_usage_to_responses_usage(usage: Option<&Value>) -> Value {
 }
 
 pub(crate) fn response_id_from_chat_id(id: Option<&str>) -> String {
-    let id = id.unwrap_or("ccswitch");
+    let id = id.unwrap_or("copilot_bridge_atlas");
     if id.starts_with("resp_") {
         id.to_string()
     } else {
@@ -2085,10 +1852,9 @@ pub(crate) fn response_status_from_finish_reason(finish_reason: Option<&str>) ->
 
 /// 把 Chat Completions 上游的错误体规整成 OpenAI Responses API 风格的错误对象。
 ///
-/// 兼容三类输入：
+/// 兼容两类输入：
 /// 1. 标准 OpenAI 形式 `{"error": {"message": "...", "type": "...", "code": ...}}`
-/// 2. MiniMax 等非标形式（如 `{"base_resp": {"status_code": 2013, "status_msg": "..."}}`）
-/// 3. 顶层只有 `message` / `detail` / 裸字符串的最小错误
+/// 2. 顶层只有 `message` / `detail` / 裸字符串的最小错误
 ///
 /// 输出统一为 `{"error": {"message", "type", "code", "param"}}`，与 OpenAI Responses
 /// API 错误响应一致；Codex 客户端的错误处理只识别这个形状。
@@ -2120,8 +1886,6 @@ pub fn chat_error_to_response_error(body: Option<&Value>) -> Value {
     let message = source
         .get("message")
         .or_else(|| source.get("detail"))
-        .or_else(|| source.get("status_msg"))
-        .or_else(|| source.pointer("/base_resp/status_msg"))
         .and_then(|v| v.as_str())
         .map(ToString::to_string)
         .or_else(|| source.as_str().map(ToString::to_string))
@@ -2139,7 +1903,6 @@ pub fn chat_error_to_response_error(body: Option<&Value>) -> Value {
     let code = source
         .get("code")
         .cloned()
-        .or_else(|| source.pointer("/base_resp/status_code").cloned())
         .unwrap_or(serde_json::Value::Null);
 
     let param = source
@@ -2163,7 +1926,7 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
     fn large_test_image_data_url() -> String {
-        let bytes = b"CC_SWITCH_TOOL_MEDIA_SENTINEL".repeat(400);
+        let bytes = b"COPILOT_BRIDGE_ATLAS_TOOL_MEDIA_SENTINEL".repeat(400);
         format!("data:image/png;base64,{}", STANDARD.encode(bytes))
     }
 
@@ -2195,7 +1958,7 @@ mod tests {
 
     fn convert_test_input(items: Vec<Value>) -> Value {
         responses_to_chat_completions(json!({
-            "model": "kimi-k3",
+            "model": "gpt-chat",
             "input": items
         }))
         .unwrap()
@@ -2206,31 +1969,9 @@ mod tests {
     }
 
     #[test]
-    fn map_reasoning_effort_handles_ultra_per_mode() {
-        // passthrough 面向枚举未知的通用上游：ultra 与 max/xhigh 一样原值透传，
-        // 让声明了该档位的上游能收到用户选择。
-        assert_eq!(map_reasoning_effort("ultra", None, None), Some("ultra"));
-        // 已知枚举的专用模式钳到自身最高合法档，而不是走 None 被静默丢弃。
-        assert_eq!(
-            map_reasoning_effort("ultra", Some("deepseek"), None),
-            Some("max")
-        );
-        assert_eq!(
-            map_reasoning_effort("ultra", Some("low_high"), None),
-            Some("high")
-        );
-        assert_eq!(
-            map_reasoning_effort("ultra", Some("openrouter"), None),
-            Some("xhigh")
-        );
-        // 真正的未知值仍然丢弃，防上游 400。
-        assert_eq!(map_reasoning_effort("turbo", None, None), None);
-    }
-
-    #[test]
     fn responses_request_with_stream_injects_include_usage() {
         let input = json!({
-            "model": "kimi-k2.6",
+            "model": "gpt-chat.6",
             "input": [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
             "stream": true
         });
@@ -2244,7 +1985,7 @@ mod tests {
     #[test]
     fn responses_request_without_stream_omits_stream_options() {
         let input = json!({
-            "model": "kimi-k2.6",
+            "model": "gpt-chat.6",
             "input": [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
         });
 
@@ -2256,7 +1997,7 @@ mod tests {
     #[test]
     fn responses_request_merges_include_usage_into_existing_stream_options() {
         let input = json!({
-            "model": "kimi-k2.6",
+            "model": "gpt-chat.6",
             "input": [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
             "stream": true,
             "stream_options": {"continuous_usage_stats": true}
@@ -2484,7 +2225,7 @@ mod tests {
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(messages[0]["content"], "Please run the tool.");
         assert_eq!(messages[1]["role"], "assistant");
-        assert_eq!(messages[1]["reasoning_content"], "tool call");
+        assert!(messages[1].get("reasoning_content").is_none());
     }
 
     #[test]
@@ -2830,332 +2571,12 @@ mod tests {
     }
 
     #[test]
-    fn responses_request_to_chat_uses_provider_reasoning_effort_for_deepseek_model() {
-        let input = json!({
-            "model": "deepseek-v4-pro",
-            "input": "hello",
-            "reasoning": {"effort": "xhigh"}
-        });
-        let config = CodexChatReasoningConfig {
-            supports_thinking: Some(true),
-            supports_effort: Some(true),
-            thinking_param: Some("thinking".to_string()),
-            effort_param: Some("reasoning_effort".to_string()),
-            effort_value_mode: Some("deepseek".to_string()),
-            output_format: Some("reasoning_content".to_string()),
-            effort_levels: None,
-        };
-
-        let result = responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
-
-        assert_eq!(result["thinking"]["type"], "enabled");
-        assert_eq!(result["reasoning_effort"], "max");
-    }
-
-    #[test]
-    fn chat_usage_to_responses_usage_maps_deepseek_cache_hit_tokens() {
-        // DeepSeek Chat 的文档化缓存命中字段也要进 Responses 的
-        // input_tokens_details（issue #6073 关联）：当上游只发该字段、不镜像
-        // prompt_tokens_details.cached_tokens 时（如部分中转），少了这个兜底，
-        // 路由模式下合成的 response.completed 里 cached_tokens 为 0，
-        // Codex 侧会话记录与本地日志都拿不到缓存命中。
-        let usage = json!({
-            "prompt_tokens": 1000,
-            "completion_tokens": 100,
-            "total_tokens": 1100,
-            "prompt_cache_hit_tokens": 600,
-            "prompt_cache_miss_tokens": 400
-        });
-
-        let result = chat_usage_to_responses_usage(Some(&usage));
-        assert_eq!(result["input_tokens"], 1000);
-        assert_eq!(result["output_tokens"], 100);
-        assert_eq!(result["input_tokens_details"]["cached_tokens"], 600);
-        assert_eq!(result["input_tokens_details"]["cache_write_tokens"], 0);
-    }
-
-    #[test]
-    fn responses_request_to_chat_maps_openrouter_to_native_reasoning_object() {
-        // OpenRouter 平台形态：原生 reasoning:{effort} 对象 + "openrouter" 值映射
-        // （与 infer_aggregator_platform_config 推断出的配置保持一致）。
-        let config = CodexChatReasoningConfig {
-            supports_thinking: Some(false),
-            supports_effort: Some(true),
-            thinking_param: Some("none".to_string()),
-            effort_param: Some("reasoning.effort".to_string()),
-            effort_value_mode: Some("openrouter".to_string()),
-            output_format: Some("auto".to_string()),
-            effort_levels: None,
-        };
-
-        // max 不在 OpenRouter 枚举内（见 openclaw#77350），必须钳成 xhigh，
-        // 且写进原生 reasoning 对象，而非顶层 reasoning_effort 别名。
-        let input = json!({
-            "model": "deepseek/deepseek-chat-v3.1",
-            "input": "hello",
-            "reasoning": {"effort": "max"}
-        });
-        let result = responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
-
-        assert_eq!(result["reasoning"]["effort"], "xhigh");
-        assert!(result.get("reasoning_effort").is_none());
-        // thinking_param=none：即使 supports_effort 把 supports_thinking 带成 true，
-        // 也不写任何 thinking 字段（OpenRouter 不认 thinking:{type}）。
-        assert!(result.get("thinking").is_none());
-
-        // 合法档位原样透传。
-        let input_high = json!({
-            "model": "deepseek/deepseek-chat-v3.1",
-            "input": "hello",
-            "reasoning": {"effort": "high"}
-        });
-        let result_high =
-            responses_to_chat_completions_with_reasoning(input_high, Some(&config)).unwrap();
-        assert_eq!(result_high["reasoning"]["effort"], "high");
-        assert!(result_high.get("reasoning_effort").is_none());
-    }
-
-    #[test]
-    fn responses_request_to_chat_passes_explicit_none_through_for_openrouter() {
-        // OpenRouter 原生 reasoning 对象支持显式关闭：effort=none 应忠实转发为
-        // {"reasoning":{"effort":"none"}}，而非被吞掉——否则默认开思考的模型无法关闭，
-        // 带来行为与成本偏差。
-        let config = CodexChatReasoningConfig {
-            supports_thinking: Some(false),
-            supports_effort: Some(true),
-            thinking_param: Some("none".to_string()),
-            effort_param: Some("reasoning.effort".to_string()),
-            effort_value_mode: Some("openrouter".to_string()),
-            output_format: Some("auto".to_string()),
-            effort_levels: None,
-        };
-
-        let input = json!({
-            "model": "openai/gpt-5",
-            "input": "hello",
-            "reasoning": {"effort": "none"}
-        });
-        let result = responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
-
-        assert_eq!(result["reasoning"]["effort"], "none");
-        // none 不是 OpenAI 顶层 reasoning_effort 的合法枚举，不写顶层别名；也不写 thinking。
-        assert!(result.get("reasoning_effort").is_none());
-        assert!(result.get("thinking").is_none());
-    }
-
-    #[test]
-    fn responses_request_to_chat_drops_explicit_none_for_top_level_effort_provider() {
-        // 对照：顶层 reasoning_effort 平台（DeepSeek/OpenAI 风格）的 effort 枚举不含 none，
-        // 显式 none 不应透传成 reasoning_effort:"none"（会被上游拒），仅走 thinking 关闭路径。
-        // 锁定「none 透传仅限 reasoning.effort 形态」的边界，防止回归。
-        let config = CodexChatReasoningConfig {
-            supports_thinking: Some(true),
-            supports_effort: Some(true),
-            thinking_param: Some("thinking".to_string()),
-            effort_param: Some("reasoning_effort".to_string()),
-            effort_value_mode: Some("deepseek".to_string()),
-            output_format: Some("reasoning_content".to_string()),
-            effort_levels: None,
-        };
-
-        let input = json!({
-            "model": "deepseek-v4-pro",
-            "input": "hello",
-            "reasoning": {"effort": "none"}
-        });
-        let result = responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
-
-        // thinking 关闭信号照发；但不写 reasoning_effort，也不写原生 reasoning 对象。
-        assert_eq!(result["thinking"]["type"], "disabled");
-        assert!(result.get("reasoning_effort").is_none());
-        assert!(result.get("reasoning").is_none());
-    }
-
-    #[test]
-    fn responses_request_to_chat_clamps_zen_effort_to_model_declared_levels() {
-        // OpenCode Zen 平台形态 + 逐模型档位钳制（表数据镜像 models.dev：glm-5.2
-        // 仅声明 high|max）。锁定：统一并集映射会把 Codex 默认的 medium 发给只声明
-        // high|max 的 glm-5.2（恰好是预设默认模型），严格校验的网关会报错；
-        // 低档一律上钳到最近合法档，超出最高档（含 Codex 扩展档 ultra）取最高合法档。
-        let config = CodexChatReasoningConfig {
-            supports_thinking: Some(true),
-            supports_effort: Some(true),
-            thinking_param: Some("none".to_string()),
-            effort_param: Some("reasoning_effort".to_string()),
-            effort_value_mode: Some("zen".to_string()),
-            output_format: Some("reasoning_content".to_string()),
-            effort_levels: Some(vec!["high".to_string(), "max".to_string()]),
-        };
-
-        for (input_effort, expected) in [
-            ("minimal", "high"),
-            ("low", "high"),
-            ("medium", "high"),
-            ("high", "high"),
-            ("xhigh", "max"),
-            ("max", "max"),
-            ("ultra", "max"),
-        ] {
-            let input = json!({
-                "model": "glm-5.2",
-                "input": "hello",
-                "reasoning": {"effort": input_effort}
-            });
-            let result =
-                responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
-            assert_eq!(
-                result["reasoning_effort"], expected,
-                "effort={input_effort}"
-            );
-            // 写成顶层 reasoning_effort；不发任何 thinking 字段
-            // （网关只认平台归一参数，不认厂商 thinking 形状）。
-            assert!(result.get("thinking").is_none());
-        }
-    }
-
-    #[test]
-    fn responses_request_to_chat_zen_preserves_low_when_model_declares_it() {
-        // deepseek-v4-flash 声明 low|high|max：low 合法原样透传，medium 上钳 high，
-        // xhigh 上钳 max——回归锁：旧 deepseek 厂商分支把非 max 一律归 high，
-        // 逐模型钳制不得比那更差，也不得发出声明外的值。
-        let config = CodexChatReasoningConfig {
-            supports_thinking: Some(true),
-            supports_effort: Some(true),
-            thinking_param: Some("none".to_string()),
-            effort_param: Some("reasoning_effort".to_string()),
-            effort_value_mode: Some("zen".to_string()),
-            output_format: Some("reasoning_content".to_string()),
-            effort_levels: Some(vec![
-                "low".to_string(),
-                "high".to_string(),
-                "max".to_string(),
-            ]),
-        };
-
-        for (input_effort, expected) in [
-            ("minimal", "low"),
-            ("low", "low"),
-            ("medium", "high"),
-            ("xhigh", "max"),
-        ] {
-            let input = json!({
-                "model": "deepseek-v4-flash",
-                "input": "hello",
-                "reasoning": {"effort": input_effort}
-            });
-            let result =
-                responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
-            assert_eq!(
-                result["reasoning_effort"], expected,
-                "effort={input_effort}"
-            );
-        }
-    }
-
-    #[test]
-    fn responses_request_to_chat_zen_single_level_model_clamps_everything_to_max() {
-        // kimi-k3 仅声明 max（全模型交集不存在，统一映射覆盖不了它——必须逐模型）：
-        // 任何请求档都钳到 max。
-        let config = CodexChatReasoningConfig {
-            supports_thinking: Some(true),
-            supports_effort: Some(true),
-            thinking_param: Some("none".to_string()),
-            effort_param: Some("reasoning_effort".to_string()),
-            effort_value_mode: Some("zen".to_string()),
-            output_format: Some("reasoning_content".to_string()),
-            effort_levels: Some(vec!["max".to_string()]),
-        };
-
-        for input_effort in ["minimal", "medium", "high", "max"] {
-            let input = json!({
-                "model": "kimi-k3",
-                "input": "hello",
-                "reasoning": {"effort": input_effort}
-            });
-            let result =
-                responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
-            assert_eq!(result["reasoning_effort"], "max", "effort={input_effort}");
-        }
-    }
-
-    #[test]
-    fn responses_request_to_chat_omits_zen_effort_without_model_levels() {
-        // 模型未在目录声明 effort（toggle/budget 型如 glm-5.1、qwen 系，或目录未收录）
-        // → 完全不发 reasoning_effort，避免给严格校验的网关送无法核实的值。
-        let config = CodexChatReasoningConfig {
-            supports_thinking: Some(true),
-            supports_effort: Some(true),
-            thinking_param: Some("none".to_string()),
-            effort_param: Some("reasoning_effort".to_string()),
-            effort_value_mode: Some("zen".to_string()),
-            output_format: Some("reasoning_content".to_string()),
-            effort_levels: None,
-        };
-
-        let input = json!({
-            "model": "glm-5.1",
-            "input": "hello",
-            "reasoning": {"effort": "medium"}
-        });
-        let result = responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
-
-        assert!(result.get("reasoning_effort").is_none());
-        assert!(result.get("thinking").is_none());
-    }
-
-    #[test]
-    fn responses_request_to_chat_maps_thinking_only_provider_without_effort() {
-        let input = json!({
-            "model": "kimi-k2.6",
-            "input": "hello",
-            "reasoning": {"effort": "high"}
-        });
-        let config = CodexChatReasoningConfig {
-            supports_thinking: Some(true),
-            supports_effort: Some(false),
-            thinking_param: Some("thinking".to_string()),
-            effort_param: Some("none".to_string()),
-            effort_value_mode: None,
-            output_format: Some("reasoning_content".to_string()),
-            effort_levels: None,
-        };
-
-        let result = responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
-
-        assert_eq!(result["thinking"]["type"], "enabled");
-        assert!(result.get("reasoning_effort").is_none());
-    }
-
-    #[test]
-    fn responses_request_to_chat_maps_enable_thinking_provider() {
-        let input = json!({
-            "model": "qwen3-max",
-            "input": "hello",
-            "reasoning": {"effort": "medium"}
-        });
-        let config = CodexChatReasoningConfig {
-            supports_thinking: Some(true),
-            supports_effort: Some(false),
-            thinking_param: Some("enable_thinking".to_string()),
-            effort_param: Some("none".to_string()),
-            effort_value_mode: None,
-            output_format: Some("reasoning_content".to_string()),
-            effort_levels: None,
-        };
-
-        let result = responses_to_chat_completions_with_reasoning(input, Some(&config)).unwrap();
-
-        assert_eq!(result["enable_thinking"], true);
-        assert!(result.get("reasoning_effort").is_none());
-    }
-
-    #[test]
     fn chat_response_to_responses_extracts_reasoning_details() {
         let input = json!({
-            "id": "chatcmpl_minimax",
+            "id": "chatcmpl_reasoning",
             "object": "chat.completion",
             "created": 123,
-            "model": "MiniMax-M2.7",
+            "model": "gpt-5.4",
             "choices": [{
                 "message": {
                     "role": "assistant",
@@ -3217,7 +2638,7 @@ mod tests {
     #[test]
     fn responses_request_to_chat_merges_mid_stream_system_into_head() {
         let input = json!({
-            "model": "MiniMax-M2.7",
+            "model": "gpt-5.4",
             "instructions": "You are Codex.",
             "input": [
                 {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Permissions block"}]},
@@ -3255,7 +2676,7 @@ mod tests {
         // Shape from #7451: Codex 0.154+ ships extra tools in an
         // `additional_tools` input carrier (role `developer`, no `content`).
         let input = json!({
-            "model": "agnes-3.0-flash",
+            "model": "gpt-5.4",
             "input": [
                 {
                     "type": "additional_tools",
@@ -3325,7 +2746,7 @@ mod tests {
     #[test]
     fn additional_tools_carrier_tools_dedup_against_top_level_tools() {
         let input = json!({
-            "model": "m",
+            "model": "gpt-5.4",
             "tools": [
                 {"type": "function", "name": "wait", "description": "Top-level wait.", "parameters": {"type": "object", "properties": {}}}
             ],
@@ -3354,7 +2775,7 @@ mod tests {
         // No carrier present: developer messages keep mapping to system and
         // no tools array is fabricated.
         let input = json!({
-            "model": "m",
+            "model": "gpt-5.4",
             "input": [
                 {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Instructions."}]},
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
@@ -3369,25 +2790,6 @@ mod tests {
         assert_eq!(messages[0]["content"], "Instructions.");
         assert_eq!(messages[1]["role"], "user");
         assert!(result.get("tools").is_none());
-    }
-
-    #[test]
-    fn collapse_system_messages_preserves_non_system_order() {
-        let input = vec![
-            json!({"role": "system", "content": "S1"}),
-            json!({"role": "user", "content": "U1"}),
-            json!({"role": "assistant", "content": "A1"}),
-            json!({"role": "system", "content": "S2"}),
-            json!({"role": "user", "content": "U2"}),
-        ];
-        let out = collapse_system_messages_to_head(input);
-
-        assert_eq!(out.len(), 4);
-        assert_eq!(out[0]["role"], "system");
-        assert_eq!(out[0]["content"], "S1\n\nS2");
-        assert_eq!(out[1]["content"], "U1");
-        assert_eq!(out[2]["content"], "A1");
-        assert_eq!(out[3]["content"], "U2");
     }
 
     #[test]
@@ -3591,11 +2993,10 @@ mod tests {
     }
 
     #[test]
-    fn responses_request_to_chat_injects_placeholder_reasoning_for_bare_tool_call() {
-        // 历史恢复 miss 时，带 tool_calls 的 assistant 消息没有任何可用 reasoning，
-        // 必须补占位，否则 kimi/Moonshot thinking 模型会拒绝整个请求。
+    fn responses_request_to_chat_omits_reasoning_for_bare_tool_call() {
+        // 没有可用 reasoning 时，保留工具调用而不编造 reasoning_content。
         let input = json!({
-            "model": "kimi-k2-thinking",
+            "model": "gpt-chat-thinking",
             "input": [
                 {
                     "type": "function_call",
@@ -3616,7 +3017,7 @@ mod tests {
 
         assert_eq!(messages[0]["role"], "assistant");
         assert_eq!(messages[0]["tool_calls"][0]["id"], "call_1");
-        assert_eq!(messages[0]["reasoning_content"], "tool call");
+        assert!(messages[0].get("reasoning_content").is_none());
         assert_eq!(messages[1]["role"], "tool");
     }
 
@@ -3656,9 +3057,9 @@ mod tests {
     fn responses_request_to_chat_attaches_reasoning_forward_to_following_assistant() {
         // 回归：reasoning 必须前向附挂到其后的 assistant 消息，不得回溯拼进
         // 上一条 assistant。此前多轮序列 [r1, m1, r2, m2] 中 r2 会被拼到 m1
-        // 尾部、 m2 丢失 reasoning_content，思考型模型（kimi 等）因此中途"断片"。
+        // 尾部、m2 丢失 reasoning_content，从而丢失多轮对话中的思考历史。
         let input = json!({
-            "model": "kimi-k2-thinking",
+            "model": "gpt-chat-thinking",
             "input": [
                 {
                     "type": "reasoning",
@@ -3700,12 +3101,12 @@ mod tests {
 
     #[test]
     fn responses_request_to_chat_keeps_reasoning_on_final_answer_after_tool_call() {
-        // 回归（Kimi 契约）：[reasoning, function_call, output, reasoning, message]
+        // 回归：[reasoning, function_call, output, reasoning, message]
         // 最后一个纯文本 assistant 必须保留自己的 reasoning_content，且该 reasoning
         // 不得被回溯拼进前面的 tool-call 消息（否则上游历史里 tool-call 消息的思考
         // 被污染、最终答复消息反而没有 reasoning_content）。
         let input = json!({
-            "model": "kimi-k2-thinking",
+            "model": "gpt-chat-thinking",
             "input": [
                 {
                     "type": "reasoning",
@@ -3885,7 +3286,7 @@ mod tests {
 
         assert_eq!(
             messages[2]["content"][0]["text"],
-            "[cc-switch: media output of tool call call_image]"
+            "[copilot-bridge-atlas: media output of tool call call_image]"
         );
         assert_eq!(messages[2]["content"][1]["type"], "image_url");
         assert_eq!(messages[2]["content"][1]["image_url"]["url"], data_url);
@@ -3922,7 +3323,6 @@ mod tests {
             vec!["assistant", "tool", "tool", "user"]
         );
         assert_eq!(messages[0]["reasoning_content"], "keep outputs adjacent");
-        assert_ne!(messages[0]["reasoning_content"], "tool call");
         assert_eq!(messages[1]["tool_call_id"], "call_1");
         assert_eq!(messages[2]["tool_call_id"], "call_2");
         assert!(messages[1]["content"].is_string());
@@ -4063,10 +3463,10 @@ mod tests {
                     "type": "image",
                     "source": {
                         "media_type": "image/jpeg",
-                        "data": "ANTHROPIC_SENTINEL"
+                        "data": "SOURCE_SENTINEL"
                     }
                 }),
-                "data:image/jpeg;base64,ANTHROPIC_SENTINEL",
+                "data:image/jpeg;base64,SOURCE_SENTINEL",
                 None,
             ),
             (
@@ -4262,7 +3662,7 @@ mod tests {
             serde_json::from_str(messages[1]["content"].as_str().unwrap()).unwrap();
         let rewritten = tool_item["output"].as_str().unwrap();
 
-        assert!(rewritten.contains("[cc-switch: omitted 20000 bytes]"));
+        assert!(rewritten.contains("[copilot-bridge-atlas: omitted 20000 bytes]"));
         assert!(!rewritten.contains(&"A".repeat(64)));
         assert!(!rewritten.contains("CUSTOM_STRING_IMAGE_SENTINEL"));
         assert_eq!(messages[2]["content"][1]["type"], "image_url");
@@ -4373,7 +3773,7 @@ mod tests {
         );
         assert_eq!(messages[0]["tool_calls"].as_array().unwrap().len(), 1);
         assert_eq!(messages[0]["tool_calls"][0]["id"], "call_1");
-        assert_eq!(messages[0]["reasoning_content"], "tool call");
+        assert!(messages[0].get("reasoning_content").is_none());
         assert_eq!(messages[1]["tool_calls"].as_array().unwrap().len(), 1);
         assert_eq!(messages[1]["tool_calls"][0]["id"], "call_2");
         assert_eq!(messages[1]["reasoning_content"], "second batch reasoning");
@@ -4515,7 +3915,7 @@ mod tests {
     }
 
     #[test]
-    fn responses_request_to_chat_backfills_reasoning_placeholder_for_coalesced_call() {
+    fn responses_request_to_chat_omits_reasoning_for_coalesced_call_without_reasoning() {
         let result = convert_test_input(vec![
             json!({
                 "type": "message",
@@ -4532,13 +3932,13 @@ mod tests {
         assert_eq!(message_roles(&result), vec!["assistant", "tool"]);
         assert_eq!(messages[0]["content"], "Running the build now.");
         assert_eq!(messages[0]["tool_calls"][0]["id"], "call_build");
-        assert_eq!(messages[0]["reasoning_content"], "tool call");
+        assert!(messages[0].get("reasoning_content").is_none());
     }
 
     #[test]
     fn responses_request_to_chat_coalesces_custom_tool_call_with_commentary() {
         let input = json!({
-            "model": "kimi-k3",
+            "model": "gpt-chat",
             "tools": [{
                 "type": "custom",
                 "name": "apply_patch",
@@ -4711,7 +4111,7 @@ mod tests {
         assert!(tool_content[2]["data"]
             .as_str()
             .unwrap()
-            .starts_with("[cc-switch: omitted 20000 bytes]"));
+            .starts_with("[copilot-bridge-atlas: omitted 20000 bytes]"));
         assert!(!tool_content_text.contains(&data_url));
         assert!(!tool_content_text.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
     }
@@ -4719,7 +4119,7 @@ mod tests {
     #[test]
     fn responses_request_to_chat_media_conversion_is_deterministic() {
         let input = json!({
-            "model": "kimi-k3",
+            "model": "gpt-chat",
             "input": [
                 test_function_call("call_repeat"),
                 test_function_output(
@@ -5009,7 +4409,7 @@ mod tests {
             "id": "chatcmpl_drop",
             "object": "chat.completion",
             "created": 123,
-            "model": "kimi-k3",
+            "model": "gpt-chat",
             "choices": [{
                 "message": {
                     "role": "assistant",
@@ -5037,7 +4437,7 @@ mod tests {
             "id": "chatcmpl_mixed",
             "object": "chat.completion",
             "created": 123,
-            "model": "kimi-k3",
+            "model": "gpt-chat",
             "choices": [{
                 "message": {
                     "role": "assistant",
@@ -5071,7 +4471,7 @@ mod tests {
             "id": "chatcmpl_legacy",
             "object": "chat.completion",
             "created": 123,
-            "model": "kimi-k3",
+            "model": "gpt-chat",
             "choices": [{
                 "message": {
                     "role": "assistant",
@@ -5094,7 +4494,7 @@ mod tests {
             "id": "chatcmpl_trunc",
             "object": "chat.completion",
             "created": 123,
-            "model": "kimi-k3",
+            "model": "gpt-chat",
             "choices": [{
                 "message": {
                     "role": "assistant",
@@ -5122,7 +4522,7 @@ mod tests {
             "id": "chatcmpl_ws",
             "object": "chat.completion",
             "created": 123,
-            "model": "kimi-k3",
+            "model": "gpt-chat",
             "choices": [{
                 "message": {
                     "role": "assistant",
@@ -5148,7 +4548,7 @@ mod tests {
             "id": "chatcmpl_text",
             "object": "chat.completion",
             "created": 123,
-            "model": "kimi-k3",
+            "model": "gpt-chat",
             "choices": [{
                 "message": {"role": "assistant", "content": "完成了"},
                 "finish_reason": "stop"
@@ -5195,7 +4595,7 @@ mod tests {
             "id": "chatcmpl_think",
             "object": "chat.completion",
             "created": 123,
-            "model": "MiniMax-M2.7",
+            "model": "gpt-5.4",
             "choices": [{
                 "message": {
                     "role": "assistant",
@@ -5263,27 +4663,6 @@ mod tests {
     }
 
     #[test]
-    fn chat_error_to_response_error_normalizes_minimax_base_resp() {
-        // MiniMax 把错误塞在 base_resp 里，code 是数字而不是字符串
-        let input = json!({
-            "base_resp": {
-                "status_code": 2013,
-                "status_msg": "invalid params, chat content has invalid message role: system"
-            }
-        });
-
-        let result = chat_error_to_response_error(Some(&input));
-
-        assert_eq!(
-            result["error"]["message"],
-            "invalid params, chat content has invalid message role: system"
-        );
-        assert_eq!(result["error"]["code"], 2013);
-        // type 没有显式给出，应该回落到 upstream_error
-        assert_eq!(result["error"]["type"], "upstream_error");
-    }
-
-    #[test]
     fn chat_error_to_response_error_handles_plain_text_body() {
         let input = json!("Upstream timeout");
 
@@ -5319,14 +4698,14 @@ mod tests {
         assert_eq!(result["error"]["type"], "upstream_error");
     }
     // Regression tests for tool_choice without tools guard
-    // https://github.com/farion1231/cc-switch/issues/3557
+    // https://github.com/farion1231/copilot-bridge-atlas/issues/3557
 
     #[test]
     fn responses_request_to_chat_drops_tool_choice_when_no_tools() {
         // When tools is absent from the request, tool_choice must be dropped
         // to avoid 503/400 from strict OpenAI-compatible upstreams.
         let input = json!({
-            "model": "qwen3-7-max",
+            "model": "gpt-5.4",
             "tool_choice": "auto",
             "input": "hi"
         });
@@ -5338,7 +4717,7 @@ mod tests {
             "tool_choice should be dropped when tools is absent"
         );
         assert!(result.get("tools").is_none(), "tools should be absent");
-        assert_eq!(result["model"], "qwen3-7-max");
+        assert_eq!(result["model"], "gpt-5.4");
     }
 
     #[test]
@@ -5551,5 +4930,23 @@ mod tests {
             "tools should be present from tool_search_output"
         );
         assert_eq!(result["tools"][0]["function"]["name"], "search_docs");
+    }
+    #[test]
+    fn collapse_system_messages_preserves_non_system_order() {
+        let input = vec![
+            json!({"role": "system", "content": "S1"}),
+            json!({"role": "user", "content": "U1"}),
+            json!({"role": "assistant", "content": "A1"}),
+            json!({"role": "system", "content": "S2"}),
+            json!({"role": "user", "content": "U2"}),
+        ];
+        let out = collapse_system_messages_to_head(input);
+
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0]["role"], "system");
+        assert_eq!(out[0]["content"], "S1\n\nS2");
+        assert_eq!(out[1]["content"], "U1");
+        assert_eq!(out[2]["content"], "A1");
+        assert_eq!(out[3]["content"], "U2");
     }
 }

@@ -31,7 +31,7 @@ use std::collections::HashSet;
 /// # Example
 /// ```ignore
 /// let input = json!({
-///     "model": "claude-3",
+///     "model": "gpt-6-astra",
 ///     "_internal_id": "abc123",
 ///     "messages": [{"role": "user", "content": "hello", "_token": "secret"}]
 /// });
@@ -58,7 +58,7 @@ pub fn filter_private_params(body: Value) -> Value {
 /// # Example
 /// ```ignore
 /// let input = json!({
-///     "model": "claude-3",
+///     "model": "gpt-6-astra",
 ///     "_metadata": {"key": "value"},  // 白名单中，保留
 ///     "_internal_id": "abc123"        // 不在白名单中，过滤
 /// });

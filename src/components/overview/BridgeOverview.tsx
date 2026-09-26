@@ -69,8 +69,8 @@ const RecentRequests = memo(function RecentRequests({
                 {(log.latencyMs / 1000).toFixed(2)} s
               </td>
               <td className="whitespace-nowrap px-4 py-2 text-xs">
-                {formatTokensShort(log.inputTokens, "en")} /{" "}
-                {formatTokensShort(log.outputTokens, "en")}
+                {formatTokensShort(log.inputTokens)} /{" "}
+                {formatTokensShort(log.outputTokens)}
               </td>
               <td className="px-4 py-2 text-xs">
                 {fmtUsd(log.totalCostUsd, 4)}
@@ -251,7 +251,9 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
           {metrics.map(([label, value]) => (
             <div key={label} className="rounded-xl border px-5 py-4">
               <dt className="text-xs text-muted-foreground">{label}</dt>
-              <dd className="mt-2 text-xl font-semibold tabular-nums">{value}</dd>
+              <dd className="mt-2 text-xl font-semibold tabular-nums">
+                {value}
+              </dd>
             </div>
           ))}
         </dl>

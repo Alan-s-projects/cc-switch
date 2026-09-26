@@ -25,20 +25,8 @@ export const settingsApi = {
     await invoke("check_for_updates");
   },
 
-  async isPortable(): Promise<boolean> {
-    return await invoke("is_portable_mode");
-  },
-
-  async pickDirectory(defaultPath?: string): Promise<string | null> {
-    return await invoke("pick_directory", { defaultPath });
-  },
-
   async selectConfigDirectory(defaultPath?: string): Promise<string | null> {
     return await invoke("pick_directory", { defaultPath });
-  },
-
-  async getAppConfigPath(): Promise<string> {
-    return await invoke("get_app_config_path");
   },
 
   async openAppConfigFolder(): Promise<void> {
@@ -94,10 +82,6 @@ export const settingsApi = {
 
   async setAutoLaunch(enabled: boolean): Promise<boolean> {
     return await invoke("set_auto_launch", { enabled });
-  },
-
-  async getAutoLaunchStatus(): Promise<boolean> {
-    return await invoke("get_auto_launch_status");
   },
 
   async getLogConfig(): Promise<LogConfig> {

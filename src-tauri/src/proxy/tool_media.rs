@@ -1,6 +1,6 @@
 //! Shared media handling for tool outputs.
 //!
-//! Responses and Anthropic tool outputs may carry structured media blocks.
+//! Codex tool outputs can carry structured Responses or MCP media blocks.
 //! Chat Completions tool messages are text-only, so protocol bridges extract
 //! those blocks and re-emit them in a synthetic user message.
 
@@ -9,24 +9,9 @@ use serde_json::{json, Map, Value};
 
 pub(crate) const WHOLE_DATA_URL_MIN_BYTES: usize = 8 * 1024;
 pub(crate) const TOOL_RESULT_MEDIA_MOVED_MARKER: &str =
-    "[cc-switch: tool result media moved to the following user message]";
-pub(crate) const TOOL_RESULT_MEDIA_ATTACHED_MARKER: &str =
-    "[cc-switch: tool result media attached as native media]";
+    "[copilot-bridge-atlas: tool result media moved to the following user message]";
 const BASE64ISH_MIN_BYTES: usize = 16 * 1024;
 const MAX_MEDIA_TRAVERSAL_DEPTH: usize = 32;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolMediaScope {
-    /// Used by Anthropic and Responses bridges that attach images natively.
-    ImagesOnly,
-    /// Used by Gemini Native `generateContent`, whose existing bridge only
-    /// promises inline base64 image input. Remote URLs and malformed data URLs
-    /// must stay in the legacy tool-result representation.
-    InlineImagesOnly,
-    /// Used by Chat conversion bridges, where user messages can carry all
-    /// currently mapped Chat input modalities.
-    AllSupported,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolMediaKind {
@@ -38,16 +23,6 @@ enum ToolMediaKind {
 pub(crate) struct ChatToolOutputMediaPlan {
     pub(crate) tool_content: String,
     pub(crate) media_parts: Vec<Value>,
-}
-
-impl ToolMediaScope {
-    fn allows(self, kind: ToolMediaKind) -> bool {
-        matches!(kind, ToolMediaKind::Image) || matches!(self, Self::AllSupported)
-    }
-
-    fn accepts_chat_part(self, part: &Value) -> bool {
-        !matches!(self, Self::InlineImagesOnly) || chat_image_part_has_inline_data(part)
-    }
 }
 
 /// Build a Chat-compatible tool-output plan without changing no-media output.
@@ -65,7 +40,6 @@ pub(crate) fn plan_chat_tool_output_media(mut output: Value) -> Option<ChatToolO
     let replaced = strip_and_clamp_media_from_tool_value(
         &mut output,
         &mut media_parts,
-        ToolMediaScope::AllSupported,
         &replacement_block,
         TOOL_RESULT_MEDIA_MOVED_MARKER,
     );
@@ -96,7 +70,7 @@ pub(crate) fn queue_chat_tool_output_media(
 
     pending_media.push(json!({
         "type": "text",
-        "text": format!("[cc-switch: media output of tool call {call_id}]")
+        "text": format!("[copilot-bridge-atlas: media output of tool call {call_id}]")
     }));
     pending_media.extend(media_parts);
 }
@@ -117,11 +91,8 @@ pub(crate) fn flush_pending_chat_tool_media(
 
 /// Convert one recognized tool media block to a Chat user content part. This
 /// is the single shape-recognition entry point used by extraction.
-pub(crate) fn chat_media_part_from_tool_part(part: &Value, scope: ToolMediaScope) -> Option<Value> {
+pub(crate) fn chat_media_part_from_tool_part(part: &Value) -> Option<Value> {
     let kind = tool_media_kind(part)?;
-    if !scope.allows(kind) {
-        return None;
-    }
 
     let chat_part = match kind {
         ToolMediaKind::Image => chat_image_part(part),
@@ -139,7 +110,7 @@ pub(crate) fn chat_media_part_from_tool_part(part: &Value, scope: ToolMediaScope
         }),
     }?;
 
-    scope.accepts_chat_part(&chat_part).then_some(chat_part)
+    Some(chat_part)
 }
 
 /// Map a Responses `input_file` block to the Chat file payload. Kept here so
@@ -185,14 +156,12 @@ pub(crate) fn whole_string_image_data_url(value: &str) -> Option<Value> {
 pub(crate) fn strip_and_clamp_media_from_tool_value(
     value: &mut Value,
     media_parts: &mut Vec<Value>,
-    scope: ToolMediaScope,
     replacement_block: &Value,
     replacement_text: &str,
 ) -> usize {
     let replaced = strip_media_from_tool_value_at_depth(
         value,
         media_parts,
-        scope,
         replacement_block,
         replacement_text,
         0,
@@ -216,7 +185,7 @@ pub(crate) fn clamp_base64ish_strings(value: &mut Value) {
                 || looks_like_base64_payload(trimmed);
             if should_omit {
                 let byte_len = text.len();
-                *text = format!("[cc-switch: omitted {byte_len} bytes]");
+                *text = format!("[copilot-bridge-atlas: omitted {byte_len} bytes]");
             }
         }
         Value::Array(items) => {
@@ -236,7 +205,6 @@ pub(crate) fn clamp_base64ish_strings(value: &mut Value) {
 fn strip_media_from_tool_value_at_depth(
     value: &mut Value,
     media_parts: &mut Vec<Value>,
-    scope: ToolMediaScope,
     replacement_block: &Value,
     replacement_text: &str,
     depth: usize,
@@ -247,12 +215,10 @@ fn strip_media_from_tool_value_at_depth(
 
     match value {
         Value::String(text) => {
-            if scope.allows(ToolMediaKind::Image) {
-                if let Some(media_part) = whole_string_image_data_url(text) {
-                    media_parts.push(media_part);
-                    *text = replacement_text.to_string();
-                    return 1;
-                }
+            if let Some(media_part) = whole_string_image_data_url(text) {
+                media_parts.push(media_part);
+                *text = replacement_text.to_string();
+                return 1;
             }
 
             let trimmed = text.trim();
@@ -265,7 +231,6 @@ fn strip_media_from_tool_value_at_depth(
             let replaced = strip_media_from_tool_value_at_depth(
                 &mut parsed,
                 media_parts,
-                scope,
                 replacement_block,
                 replacement_text,
                 depth + 1,
@@ -282,7 +247,6 @@ fn strip_media_from_tool_value_at_depth(
                 strip_media_from_tool_value_at_depth(
                     item,
                     media_parts,
-                    scope,
                     replacement_block,
                     replacement_text,
                     depth + 1,
@@ -290,7 +254,7 @@ fn strip_media_from_tool_value_at_depth(
             })
             .sum(),
         Value::Object(_) => {
-            if let Some(media_part) = chat_media_part_from_tool_part(value, scope) {
+            if let Some(media_part) = chat_media_part_from_tool_part(value) {
                 media_parts.push(media_part);
                 *value = replacement_block.clone();
                 return 1;
@@ -304,7 +268,6 @@ fn strip_media_from_tool_value_at_depth(
                     strip_media_from_tool_value_at_depth(
                         content,
                         media_parts,
-                        scope,
                         replacement_block,
                         replacement_text,
                         depth + 1,
@@ -484,18 +447,6 @@ fn image_url_content_part(image_url: Value) -> Value {
     Value::Object(content_part)
 }
 
-fn chat_image_part_has_inline_data(part: &Value) -> bool {
-    part.pointer("/image_url/url")
-        .and_then(Value::as_str)
-        .is_some_and(|url| {
-            let trimmed = url.trim();
-            let Some(comma_index) = trimmed.find(',') else {
-                return false;
-            };
-            comma_index + 1 < trimmed.len() && is_image_base64_data_url(trimmed)
-        })
-}
-
 fn merge_top_level_detail(part: &Value, image_url: &mut Map<String, Value>) {
     if image_url.get("detail").is_none() {
         if let Some(detail) = part.get("detail") {
@@ -567,7 +518,7 @@ mod tests {
             "detail": "high"
         });
 
-        let mapped = chat_media_part_from_tool_part(&part, ToolMediaScope::AllSupported).unwrap();
+        let mapped = chat_media_part_from_tool_part(&part).unwrap();
 
         assert_eq!(mapped["type"], "image_url");
         assert_eq!(mapped["image_url"]["url"], "https://example.com/image.png");
@@ -582,7 +533,7 @@ mod tests {
             "detail": "original"
         });
 
-        let mapped = chat_media_part_from_tool_part(&part, ToolMediaScope::AllSupported).unwrap();
+        let mapped = chat_media_part_from_tool_part(&part).unwrap();
 
         assert_eq!(mapped["image_url"]["detail"], "auto");
     }
@@ -599,7 +550,7 @@ mod tests {
             "prompt_cache_breakpoint": true
         });
 
-        let mapped = chat_media_part_from_tool_part(&part, ToolMediaScope::AllSupported).unwrap();
+        let mapped = chat_media_part_from_tool_part(&part).unwrap();
 
         assert_eq!(
             mapped,
@@ -635,11 +586,9 @@ mod tests {
             }
         });
 
-        let anthropic =
-            chat_media_part_from_tool_part(&anthropic, ToolMediaScope::AllSupported).unwrap();
-        let mcp = chat_media_part_from_tool_part(&mcp, ToolMediaScope::AllSupported).unwrap();
-        let anthropic_url =
-            chat_media_part_from_tool_part(&anthropic_url, ToolMediaScope::AllSupported).unwrap();
+        let anthropic = chat_media_part_from_tool_part(&anthropic).unwrap();
+        let mcp = chat_media_part_from_tool_part(&mcp).unwrap();
+        let anthropic_url = chat_media_part_from_tool_part(&anthropic_url).unwrap();
 
         assert_eq!(anthropic["image_url"]["url"], "data:image/jpeg;base64,YWJj");
         assert_eq!(mcp["image_url"]["url"], "data:image/webp;base64,ZGVm");
@@ -660,7 +609,7 @@ mod tests {
             }
         });
 
-        let mapped = chat_media_part_from_tool_part(&part, ToolMediaScope::AllSupported).unwrap();
+        let mapped = chat_media_part_from_tool_part(&part).unwrap();
 
         assert_eq!(mapped["image_url"]["url"], "data:image/png;base64,YWJj");
     }
@@ -674,8 +623,8 @@ mod tests {
             "data": "aGVsbG8="
         });
 
-        assert!(chat_media_part_from_tool_part(&metadata, ToolMediaScope::AllSupported).is_none());
-        assert!(chat_media_part_from_tool_part(&non_image, ToolMediaScope::AllSupported).is_none());
+        assert!(chat_media_part_from_tool_part(&metadata).is_none());
+        assert!(chat_media_part_from_tool_part(&non_image).is_none());
     }
 
     #[test]
@@ -691,42 +640,8 @@ mod tests {
             }
         });
 
-        assert!(chat_media_part_from_tool_part(&data, ToolMediaScope::ImagesOnly).is_some());
-        assert!(chat_media_part_from_tool_part(&remote, ToolMediaScope::ImagesOnly).is_none());
-    }
-
-    #[test]
-    fn inline_image_scope_rejects_remote_and_malformed_data_urls() {
-        let inline = json!({
-            "type": "image_url",
-            "image_url": {"url": "data:image/png;base64,YWJj"}
-        });
-        let remote = json!({
-            "type": "image_url",
-            "image_url": {"url": "https://example.com/image.png"}
-        });
-        let missing_base64 = json!({
-            "type": "image_url",
-            "image_url": {"url": "data:image/png,YWJj"}
-        });
-        let empty_data = json!({
-            "type": "image_url",
-            "image_url": {"url": "data:image/png;base64,"}
-        });
-
-        assert!(
-            chat_media_part_from_tool_part(&inline, ToolMediaScope::InlineImagesOnly).is_some()
-        );
-        assert!(
-            chat_media_part_from_tool_part(&remote, ToolMediaScope::InlineImagesOnly).is_none()
-        );
-        assert!(
-            chat_media_part_from_tool_part(&missing_base64, ToolMediaScope::InlineImagesOnly)
-                .is_none()
-        );
-        assert!(
-            chat_media_part_from_tool_part(&empty_data, ToolMediaScope::InlineImagesOnly).is_none()
-        );
+        assert!(chat_media_part_from_tool_part(&data).is_some());
+        assert!(chat_media_part_from_tool_part(&remote).is_none());
     }
 
     #[test]
@@ -738,13 +653,7 @@ mod tests {
         let mut media = Vec::new();
 
         assert_eq!(
-            strip_and_clamp_media_from_tool_value(
-                &mut value,
-                &mut media,
-                ToolMediaScope::AllSupported,
-                &replacement,
-                "moved",
-            ),
+            strip_and_clamp_media_from_tool_value(&mut value, &mut media, &replacement, "moved",),
             0
         );
         assert!(media.is_empty());
@@ -778,13 +687,8 @@ mod tests {
         });
         let mut media = Vec::new();
 
-        let replaced = strip_and_clamp_media_from_tool_value(
-            &mut value,
-            &mut media,
-            ToolMediaScope::AllSupported,
-            &replacement,
-            "moved",
-        );
+        let replaced =
+            strip_and_clamp_media_from_tool_value(&mut value, &mut media, &replacement, "moved");
 
         assert_eq!(replaced, 1);
         assert_eq!(media.len(), 1);
@@ -836,24 +740,22 @@ mod tests {
 
         assert!(plan
             .tool_content
-            .contains("[cc-switch: omitted 20000 bytes]"));
+            .contains("[copilot-bridge-atlas: omitted 20000 bytes]"));
         assert!(!plan.tool_content.contains(&"A".repeat(64)));
         assert!(!plan.tool_content.contains("IMAGE_SENTINEL"));
         assert_eq!(plan.media_parts.len(), 1);
     }
 
     #[test]
-    fn image_only_scope_ignores_file_and_audio() {
+    fn maps_files_and_audio_for_chat() {
         let file = json!({"type": "input_file", "file_id": "file_1"});
         let audio = json!({
             "type": "input_audio",
             "input_audio": {"data": "YWJj", "format": "wav"}
         });
 
-        assert!(chat_media_part_from_tool_part(&file, ToolMediaScope::ImagesOnly).is_none());
-        assert!(chat_media_part_from_tool_part(&audio, ToolMediaScope::ImagesOnly).is_none());
-        assert!(chat_media_part_from_tool_part(&file, ToolMediaScope::AllSupported).is_some());
-        assert!(chat_media_part_from_tool_part(&audio, ToolMediaScope::AllSupported).is_some());
+        assert!(chat_media_part_from_tool_part(&file).is_some());
+        assert!(chat_media_part_from_tool_part(&audio).is_some());
     }
 
     #[test]
@@ -877,11 +779,11 @@ mod tests {
         assert!(value["data_url"]
             .as_str()
             .unwrap()
-            .starts_with("[cc-switch: omitted "));
+            .starts_with("[copilot-bridge-atlas: omitted "));
         assert!(value["raw"]
             .as_str()
             .unwrap()
-            .starts_with("[cc-switch: omitted "));
+            .starts_with("[copilot-bridge-atlas: omitted "));
     }
 
     #[test]
@@ -896,13 +798,8 @@ mod tests {
         let replacement = json!({"type": "text", "text": "moved"});
         let mut media = Vec::new();
 
-        let replaced = strip_and_clamp_media_from_tool_value(
-            &mut value,
-            &mut media,
-            ToolMediaScope::AllSupported,
-            &replacement,
-            "moved",
-        );
+        let replaced =
+            strip_and_clamp_media_from_tool_value(&mut value, &mut media, &replacement, "moved");
 
         assert_eq!(replaced, 0);
         assert!(media.is_empty());

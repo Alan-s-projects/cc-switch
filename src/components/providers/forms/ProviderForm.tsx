@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import type { AppId, ManagedAuthProvider } from "@/lib/api";
+import type { ManagedAuthProvider } from "@/lib/api";
 import type {
   Provider,
   ProviderMeta,
@@ -11,7 +11,10 @@ import type {
 } from "@/types";
 import { CodexFormFields } from "./CodexFormFields";
 import { useCopilotAuth } from "./hooks/useCopilotAuth";
-import { mapCodexCatalogModelForForm } from "@/utils/codexModelCatalog";
+import {
+  isGptModel,
+  mapCodexCatalogModelForForm,
+} from "@/utils/codexModelCatalog";
 
 export const normalizeCodexCatalogModelsForSave = (
   models: CodexCatalogModel[],
@@ -21,8 +24,9 @@ export const normalizeCodexCatalogModelsForSave = (
 
   for (const item of models) {
     const model = item.model.trim();
-    if (!model || seen.has(model)) continue;
-    seen.add(model);
+    const key = model.toLowerCase();
+    if (!isGptModel(model) || seen.has(key)) continue;
+    seen.add(key);
 
     const displayName = item.displayName?.trim();
     const rawContextWindow = String(item.contextWindow ?? "").replace(
@@ -66,15 +70,11 @@ export const normalizeCodexCatalogModelsForSave = (
 };
 
 export interface ProviderFormProps {
-  appId: AppId;
   submitLabel: string;
   onSubmit: (values: ProviderFormValues) => Promise<void> | void;
   onCancel: () => void;
   onManageAuthAccounts?: (target: ManagedAuthProvider) => void;
-  onSubmittingChange?: (value: boolean) => void;
-  onSubmitReadyChange?: (value: boolean) => void;
   initialData?: Partial<Provider>;
-  showButtons?: boolean;
 }
 
 export interface ProviderFormValues {
@@ -89,9 +89,6 @@ export function ProviderForm({
   onCancel,
   submitLabel,
   onManageAuthAccounts,
-  onSubmittingChange,
-  onSubmitReadyChange,
-  showButtons = true,
 }: ProviderFormProps) {
   const { t } = useTranslation();
   const settings = initialData?.settingsConfig ?? {
@@ -110,14 +107,10 @@ export function ProviderForm({
   );
   const [catalog, setCatalog] = useState<CodexCatalogModel[]>(() => {
     const value = settings.modelCatalog as { models?: unknown[] } | undefined;
-    return (value?.models ?? []).map(mapCodexCatalogModelForForm);
+    return (value?.models ?? [])
+      .map(mapCodexCatalogModelForForm)
+      .filter((item) => isGptModel(item.model));
   });
-  useEffect(() => {
-    onSubmittingChange?.(saving);
-  }, [saving, onSubmittingChange]);
-  useEffect(() => {
-    onSubmitReadyChange?.(true);
-  }, [onSubmitReadyChange]);
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -125,12 +118,15 @@ export function ProviderForm({
       toast.error("Sign in to GitHub Copilot first.");
       return;
     }
+    if (catalog.some((item) => item.model.trim() && !isGptModel(item.model))) {
+      toast.error("Only GPT model IDs (gpt-...) are supported.");
+      return;
+    }
     setSaving(true);
     try {
       const meta: ProviderMeta = {
         ...initialMeta,
         providerType: "github_copilot",
-        commonConfigEnabled: false,
         apiFormat: format === "auto" ? "openai_chat" : format,
         codexCopilotApiFormat: format === "auto" ? undefined : format,
         githubAccountId: accountId ?? undefined,
@@ -170,21 +166,19 @@ export function ProviderForm({
         catalogModels={catalog}
         onCatalogModelsChange={setCatalog}
       />
-      {showButtons && (
-        <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={saving}
-            onClick={onCancel}
-          >
-            {t("common.cancel")}
-          </Button>
-          <Button type="submit" disabled={saving}>
-            {saving ? t("common.saving") : submitLabel}
-          </Button>
-        </div>
-      )}
+      <div className="flex justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={saving}
+          onClick={onCancel}
+        >
+          {t("common.cancel")}
+        </Button>
+        <Button type="submit" disabled={saving}>
+          {saving ? t("common.saving") : submitLabel}
+        </Button>
+      </div>
     </form>
   );
 }

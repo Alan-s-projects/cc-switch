@@ -16,7 +16,6 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { getUsageRangePresetLabel, resolveUsageRange } from "@/lib/usageRange";
-import { getLocaleFromLanguage } from "./format";
 import type { UsageRangePreset, UsageRangeSelection } from "@/types/usage";
 
 type DraftField = "start" | "end";
@@ -109,7 +108,7 @@ export function UsageDateRangePicker({
   onApply,
   triggerLabel,
 }: UsageDateRangePickerProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [activeField, setActiveField] = useState<DraftField>("start");
   const resolvedRange = useMemo(
@@ -131,8 +130,7 @@ export function UsageDateRangePicker({
   );
   const [error, setError] = useState<string | null>(null);
 
-  const language = i18n.resolvedLanguage || i18n.language || "en";
-  const locale = getLocaleFromLanguage(language);
+  const locale = "en-US";
 
   // Reset draft when popover opens
   useEffect(() => {
@@ -228,7 +226,12 @@ export function UsageDateRangePicker({
   const handleApply = () => {
     setError(null);
     if (draftStart > draftEnd) {
-      setError(t("usage.invalidTimeRangeOrder", "开始时间不能晚于结束时间"));
+      setError(
+        t(
+          "usage.invalidTimeRangeOrder",
+          "Start time cannot be later than end time",
+        ),
+      );
       return;
     }
     onApply({
@@ -252,8 +255,8 @@ export function UsageDateRangePicker({
     const setTs = field === "start" ? setDraftStart : setDraftEnd;
     const label =
       field === "start"
-        ? t("usage.startTime", "开始时间")
-        : t("usage.endTime", "结束时间");
+        ? t("usage.startTime", "Start Time")
+        : t("usage.endTime", "End Time");
 
     return (
       <div
@@ -357,7 +360,7 @@ export function UsageDateRangePicker({
           {/* Left: date fields */}
           <div className="usage-range-fields space-y-2">
             <p className="text-xs text-muted-foreground">
-              {t("usage.customRangeHint", "支持日期与时间，最长 30 天")}
+              {t("usage.customRangeHint", "Supports both date and time")}
             </p>
             {renderField("start")}
             {renderField("end")}
@@ -375,7 +378,7 @@ export function UsageDateRangePicker({
                 }}
               />
               <span className="text-xs text-muted-foreground">
-                {t("usage.liveEndTime", "结束时间跟随当前时刻")}
+                {t("usage.liveEndTime", "End time follows current time")}
               </span>
             </label>
 
@@ -427,7 +430,7 @@ export function UsageDateRangePicker({
                 type="button"
                 className="text-sm font-medium hover:text-primary transition-colors"
                 onClick={goToToday}
-                title={t("usage.presetToday", { defaultValue: "当天" })}
+                title={t("usage.presetToday", { defaultValue: "Today" })}
               >
                 {displayMonth.toLocaleDateString(locale, {
                   year: "numeric",

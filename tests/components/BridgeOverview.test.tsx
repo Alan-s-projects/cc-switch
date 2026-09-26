@@ -28,14 +28,14 @@ vi.mock("@/lib/api/usage", () => ({
 vi.mock("@/lib/query/proxy", () => ({
   proxyKeys: { status: ["proxyStatus"], globalConfig: ["globalProxyConfig"] },
   useGlobalProxyConfig: () => ({
-    data: { listenAddress: "0.0.0.0", listenPort: 15721 },
+    data: { listenAddress: "0.0.0.0", listenPort: 15722 },
   }),
 }));
 
 const status: ProxyStatus = {
   running: true,
   address: "0.0.0.0",
-  port: 15721,
+  port: 15722,
   active_connections: 2,
   total_requests: 12,
   success_requests: 11,
@@ -112,7 +112,7 @@ describe("read-only bridge overview", () => {
     expect(
       screen.queryByRole("heading", { name: "Overview" }),
     ).not.toBeInTheDocument();
-    expect(proxy.getByText("http://127.0.0.1:15721/v1")).toBeVisible();
+    expect(proxy.getByText("http://127.0.0.1:15722/v1")).toBeVisible();
     expect(proxy.getByText("Proxy running")).toBeVisible();
     expect(await usage.findByText("$1.2500")).toBeVisible();
     expect(usage.getByText("80.0%")).toBeVisible();

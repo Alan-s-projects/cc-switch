@@ -1,17 +1,6 @@
-//! Shared builders for the OpenAI Responses SSE envelope.
-//!
-//! The two Codex streaming converters — `streaming_codex_chat` (Chat Completions SSE →
-//! Responses SSE) and `streaming_codex_anthropic` (Anthropic Messages SSE → Responses
-//! SSE) — have completely different *input* state machines but must emit the identical
-//! Responses event stream the Codex client understands. This module owns that output
-//! envelope so the two converters cannot drift when an event's shape changes: a wire fix
-//! lands here once instead of being mirrored in both files.
-//!
-//! Each function is pure — it takes primitives or a caller-built `item` `Value` and
-//! returns the exact bytes the converters previously constructed inline. Item shapes that
-//! vary per converter (including function, namespace, custom, and tool-search calls)
-//! are supplied by the caller via the generic
-//! `output_item_added` / `output_item_done` helpers.
+//! Constructors for the Responses SSE events emitted by the Chat bridge.
+//! Tool item shapes are supplied by the converter; framing and lifecycle are
+//! shared so function, namespace, custom and tool-search calls stay consistent.
 
 use bytes::Bytes;
 use serde_json::{json, Value};
@@ -240,8 +229,7 @@ pub(crate) fn reasoning_close(output_index: u32, item_id: &str, text: &str) -> (
 }
 
 /// Close a reasoning item whose completed shape is supplied by the converter.
-/// Anthropic uses this to attach opaque signed/redacted thinking in
-/// `encrypted_content` while keeping the standard Responses event lifecycle.
+/// Preserve the supplied properties while emitting the standard event lifecycle.
 pub(crate) fn reasoning_close_with_item(
     output_index: u32,
     item_id: &str,

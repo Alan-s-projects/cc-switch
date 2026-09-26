@@ -15,7 +15,6 @@ export const resetProviderState = () => {
   };
   settings = {
     showInTray: true,
-    codexConfigDir: "/default/codex",
     language: "en",
   };
   appConfigDir = null;

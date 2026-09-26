@@ -1,30 +1,11 @@
 //! SQL fragment helpers shared across usage aggregation queries.
 //!
-//! Anthropic reports `input_tokens` as fresh (cache reads counted
-//! separately); OpenAI Responses API and Google Gemini's
-//! `promptTokenCount` both include the cached portion. Any aggregation
-//! summing `input_tokens` across providers must route through
-//! [`fresh_input_sql`] to recover a consistent semantics.
-
-/// Set of `app_type` values whose stored `input_tokens` already includes
-/// `cache_read_tokens`. Aggregations subtract cache reads from these rows
-/// to recover the fresh-input semantics used by Claude.
-///
-/// Why list providers explicitly: new providers default to the
-/// Claude-style "input excludes cache" semantics, which is safer if the
-/// caller forgets to update this list. The wrong direction (a new OpenAI-
-/// style provider not added here) shows up loudly as a too-low cache hit
-/// rate, which is easier to catch than the silent over-deduction that
-/// would happen with the opposite default.
-/// 单一语义集（SSOT）：写入侧（proxy logger/calculator）、回填侧
-/// （usage_stats 成本重算）与展示侧（本文件的 SQL 归一）都必须引用这里，
-/// 防止同一语义散落多处后新增 app 时漏改（grokbuild 曾在回填侧漏掉）。
-/// 前端 `src/types/usage.ts` 的同名常量是跨语言的对应物，改动须同步。
-pub(crate) const CACHE_INCLUSIVE_APP_TYPES: &[&str] = &["codex", "gemini", "grokbuild"];
+//! OpenAI input tokens include cached tokens. Normalize Codex rows once while
+//! retaining opaque imported rows without reinterpreting their token counts.
 
 /// `app_type` 的存储 `input_tokens` 是否已包含 cache read/write。
 pub(crate) fn is_cache_inclusive_app(app_type: &str) -> bool {
-    CACHE_INCLUSIVE_APP_TYPES.contains(&app_type)
+    app_type == "codex"
 }
 
 pub(crate) const INPUT_TOKEN_SEMANTICS_LEGACY: i64 = 0;
@@ -46,19 +27,14 @@ pub fn fresh_input_sql(alias: &str) -> String {
     } else {
         format!("{alias}.")
     };
-    let app_type_list = CACHE_INCLUSIVE_APP_TYPES
-        .iter()
-        .map(|t| format!("'{t}'"))
-        .collect::<Vec<_>>()
-        .join(", ");
     format!(
         "CASE \
               WHEN {prefix}input_token_semantics = {INPUT_TOKEN_SEMANTICS_FRESH} THEN {prefix}input_tokens \
-              WHEN {prefix}app_type IN ({app_type_list}) \
+              WHEN {prefix}app_type = 'codex' \
                    AND {prefix}input_token_semantics = {INPUT_TOKEN_SEMANTICS_TOTAL} \
                    AND {prefix}input_tokens >= ({prefix}cache_read_tokens + {prefix}cache_creation_tokens) \
               THEN ({prefix}input_tokens - {prefix}cache_read_tokens - {prefix}cache_creation_tokens) \
-              WHEN {prefix}app_type IN ({app_type_list}) \
+              WHEN {prefix}app_type = 'codex' \
                    AND {prefix}input_token_semantics = {INPUT_TOKEN_SEMANTICS_LEGACY} \
                    AND {prefix}input_tokens >= {prefix}cache_read_tokens \
               THEN ({prefix}input_tokens - {prefix}cache_read_tokens) \
@@ -101,8 +77,6 @@ mod tests {
         let sql = fresh_input_sql("");
         assert!(!sql.contains("."));
         assert!(sql.contains("'codex'"));
-        assert!(sql.contains("'gemini'"));
-        assert!(sql.contains("'grokbuild'"));
     }
 
     #[test]
@@ -115,24 +89,10 @@ mod tests {
             [],
         )
         .unwrap();
-        // Gemini row: Google semantics — promptTokenCount includes cachedContentTokenCount.
+        // Unknown imported data is not reinterpreted.
         conn.execute(
             "INSERT INTO proxy_request_logs (request_id, app_type, input_tokens, cache_read_tokens)
-             VALUES ('gemini-1', 'gemini', 800, 300)",
-            [],
-        )
-        .unwrap();
-        // Grok Build uses OpenAI Responses semantics too.
-        conn.execute(
-            "INSERT INTO proxy_request_logs (request_id, app_type, input_tokens, cache_read_tokens)
-             VALUES ('grok-1', 'grokbuild', 700, 250)",
-            [],
-        )
-        .unwrap();
-        // Claude row: Anthropic semantics — input_tokens already excludes cache.
-        conn.execute(
-            "INSERT INTO proxy_request_logs (request_id, app_type, input_tokens, cache_read_tokens)
-             VALUES ('claude-1', 'claude', 200, 5000)",
+             VALUES ('legacy-1', 'legacy-import', 200, 5000)",
             [],
         )
         .unwrap();
@@ -140,8 +100,7 @@ mod tests {
         let expr = fresh_input_sql("l");
         let sql = format!("SELECT COALESCE(SUM({expr}), 0) FROM proxy_request_logs l");
         let total: i64 = conn.query_row(&sql, [], |r| r.get(0)).unwrap();
-        // Codex: 400; Gemini: 500; Grok Build: 450; Claude: 200 unchanged.
-        assert_eq!(total, 400 + 500 + 450 + 200);
+        assert_eq!(total, 400 + 200);
     }
 
     #[test]

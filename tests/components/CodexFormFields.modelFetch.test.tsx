@@ -81,7 +81,8 @@ describe("Copilot model catalog import", () => {
   it("filters models by Copilot transport and imports them into the bridge catalog", async () => {
     vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
       model("gpt-6-astra"),
-      model("chat-only", "/chat/completions"),
+      model("gpt-chat-only", "/chat/completions"),
+      model("other-model"),
     ]);
     const input = props({ copilotApiFormat: "openai_responses" });
     render(<Harness {...input} />);
@@ -89,7 +90,8 @@ describe("Copilot model catalog import", () => {
     await waitFor(() =>
       expect(screen.getAllByDisplayValue("gpt-6-astra")[0]).toBeVisible(),
     );
-    expect(screen.queryByDisplayValue("chat-only")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("gpt-chat-only")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("other-model")).not.toBeInTheDocument();
     expect(copilotGetModelsForAccount).toHaveBeenCalledWith("account-a");
   });
 
@@ -122,6 +124,50 @@ describe("Copilot model catalog import", () => {
         }),
       ]),
     );
+  });
+
+  it("keeps saved reasoning choices on refresh, matching model IDs without case sensitivity", async () => {
+    vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
+      {
+        ...model("gpt-6-astra"),
+        supports_parallel_tool_calls: true,
+        supports_vision: true,
+        reasoning_efforts: ["low", "medium", "high"],
+      },
+      { ...model("gpt-6-luna"), reasoning_efforts: ["low", "high"] },
+    ]);
+    const input = props({
+      catalogModels: [
+        {
+          model: "GPT-6-ASTRA",
+          supportsParallelToolCalls: false,
+          inputModalities: ["text"],
+          reasoningLevels: ["low", "high", "ultra"],
+          defaultReasoningLevel: "ultra",
+        },
+      ],
+    });
+    render(<Harness {...input} />);
+    fireEvent.click(fetchButton());
+    await waitFor(() =>
+      expect(input.onCatalogModelsChange).toHaveBeenCalledWith([
+        expect.objectContaining({
+          model: "gpt-6-astra",
+          supportsParallelToolCalls: true,
+          inputModalities: ["text", "image"],
+          reasoningLevels: ["low", "high", "ultra"],
+          defaultReasoningLevel: "ultra",
+        }),
+        expect.objectContaining({
+          model: "gpt-6-luna",
+          reasoningLevels: ["low", "high"],
+          defaultReasoningLevel: undefined,
+        }),
+      ]),
+    );
+    expect(
+      screen.getAllByRole("combobox", { name: "Reasoning levels" })[0],
+    ).toHaveTextContent("low, high, ultra");
   });
 
   it("discards results from an account that is no longer selected", async () => {
@@ -186,7 +232,7 @@ describe("Copilot model catalog import", () => {
     fireEvent.click(fetchButton());
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        "No models support the selected protocol. Try Automatic.",
+        "No GPT models support the selected protocol. Try Automatic.",
       ),
     );
   });

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   flattenModels,
   formatPrice,
@@ -11,318 +10,124 @@ import {
   toModelPricing,
 } from "@/lib/modelsDevPricing";
 
-describe("normalizeModelIdForPricing", () => {
-  it("keeps already-normalized ids unchanged", () => {
-    expect(normalizeModelIdForPricing("claude-opus-4-5")).toBe(
-      "claude-opus-4-5",
+describe("GPT pricing IDs", () => {
+  it("normalizes provider prefixes and transport/context suffixes", () => {
+    expect(normalizeModelIdForPricing("gpt-6-astra")).toBe("gpt-6-astra");
+    expect(normalizeModelIdForPricing("openai/GPT-6-ASTRA")).toBe(
+      "gpt-6-astra",
     );
-  });
-
-  it("strips the vendor prefix before the last slash", () => {
-    expect(normalizeModelIdForPricing("z-ai/glm-4.7")).toBe("glm-4.7");
-    expect(normalizeModelIdForPricing("clarifai/main/models/mm-poly-8b")).toBe(
-      "mm-poly-8b",
+    expect(normalizeModelIdForPricing("gpt-6-astra:priority")).toBe(
+      "gpt-6-astra",
     );
-  });
-
-  it("lowercases the id", () => {
-    expect(normalizeModelIdForPricing("MiniMaxAI/MiniMax-M2.1")).toBe(
-      "minimax-m2.1",
+    expect(normalizeModelIdForPricing("gpt-6-astra@2026")).toBe(
+      "gpt-6-astra-2026",
     );
-  });
-
-  it("truncates colon suffixes", () => {
-    expect(normalizeModelIdForPricing("claude-sonnet-4-thinking:8192")).toBe(
-      "claude-sonnet-4-thinking",
-    );
-  });
-
-  it("maps @ to -", () => {
-    expect(normalizeModelIdForPricing("claude-sonnet-4@20250514")).toBe(
-      "claude-sonnet-4-20250514",
-    );
-  });
-
-  it("strips the [1m] context marker", () => {
-    expect(normalizeModelIdForPricing("claude-sonnet-4-5[1m]")).toBe(
-      "claude-sonnet-4-5",
-    );
-  });
-
-  it("combines all rules", () => {
-    expect(normalizeModelIdForPricing("Vendor/Claude-Sonnet-4@2025:free")).toBe(
-      "claude-sonnet-4-2025",
-    );
+    expect(normalizeModelIdForPricing("gpt-6-astra[1m]")).toBe("gpt-6-astra");
   });
 });
 
 describe("formatPrice", () => {
-  it("formats integers without a decimal point", () => {
+  it("formats finite positive prices without exponent notation", () => {
     expect(formatPrice(5)).toBe("5");
-    expect(formatPrice(25)).toBe("25");
-  });
-
-  it("trims trailing zeros", () => {
     expect(formatPrice(0.5)).toBe("0.5");
-    expect(formatPrice(6.25)).toBe("6.25");
     expect(formatPrice(1.0395)).toBe("1.0395");
-  });
-
-  it("keeps up to six decimal places", () => {
     expect(formatPrice(0.000001)).toBe("0.000001");
-    expect(formatPrice(0.0000004)).toBe("0");
-  });
-
-  it("returns 0 for zero, negative and non-finite values", () => {
-    expect(formatPrice(0)).toBe("0");
-    expect(formatPrice(-1)).toBe("0");
-    expect(formatPrice(NaN)).toBe("0");
-    expect(formatPrice(Infinity)).toBe("0");
-  });
-
-  it("never produces exponent notation", () => {
-    // 后端 Decimal::from_str 不接受科学计数法
-    expect(formatPrice(1e-8)).toBe("0");
-    expect(formatPrice(1e21)).toBe("0");
-    for (const value of [5, 0.5, 0.000123, 123456.789]) {
-      expect(formatPrice(value)).toMatch(/^\d+(\.\d+)?$/);
-    }
+    for (const price of [0, -1, NaN, Infinity, 1e21, 1e-8])
+      expect(formatPrice(price)).toBe("0");
   });
 });
 
-describe("flattenModels", () => {
-  it("flattens providers, fills defaults and sorts by release date desc", () => {
-    const entries = flattenModels({
-      acme: {
-        id: "acme",
-        name: "Acme AI",
-        models: {
-          "old-model": {
-            id: "old-model",
-            name: "Old Model",
-            release_date: "2024-01-01",
-            cost: { input: 1, output: 2 },
-          },
-          "new-model": {
-            id: "new-model",
-            name: "New Model",
-            release_date: "2025-06-01",
-            cost: { input: 3, output: 6, cache_read: 0.3, cache_write: 3.75 },
-          },
-          "free-model": {
-            id: "free-model",
-            name: "No Cost Model",
-          },
-        },
-      },
-      bare: {
-        models: {
-          "Vendor/Some-Model:free": {
-            release_date: "2025-01",
-            cost: { input: 0.1 },
-          },
-        },
-      },
-    });
-
-    expect(entries.map((e) => e.key)).toEqual([
-      "acme/new-model",
-      "bare/Vendor/Some-Model:free",
-      "acme/old-model",
-    ]);
-
-    const newModel = entries[0];
-    expect(newModel.normalizedId).toBe("new-model");
-    expect(newModel.cacheRead).toBe(0.3);
-    expect(newModel.cacheWrite).toBe(3.75);
-
-    // 没有 name 的 provider 用 id 兜底；缺失的成本字段补 0
-    const bareModel = entries[1];
-    expect(bareModel.providerName).toBe("bare");
-    expect(bareModel.normalizedId).toBe("some-model");
-    expect(bareModel.output).toBe(0);
-    expect(bareModel.cacheRead).toBe(0);
-
-    // 完全没有定价的模型被过滤
-    expect(entries.some((e) => e.modelId === "free-model")).toBe(false);
-  });
-
-  it("filters deprecated and non-text output models while keeping multimodal input models", () => {
-    const entries = flattenModels({
-      acme: {
-        models: {
-          "multimodal-chat": {
-            name: "Multimodal Chat",
-            modalities: {
-              input: ["text", "image", "audio", "video"],
-              output: ["text"],
-            },
-            cost: { input: 1, output: 2 },
-          },
-          "legacy-chat": {
-            status: "deprecated",
-            modalities: { output: ["text"] },
-            cost: { input: 1, output: 2 },
-          },
-          "speech-model": {
-            modalities: { output: ["audio"] },
-            cost: { input: 1, output: 2 },
-          },
-          "mixed-output-model": {
-            modalities: { output: ["text", "audio"] },
-            cost: { input: 1, output: 2 },
-          },
-          "movie-generator": {
-            modalities: { output: ["video"] },
-            cost: { input: 1, output: 2 },
-          },
-          "fallback-video-model": {
-            cost: { input: 1, output: 2 },
-          },
-        },
-      },
-    });
-
-    expect(entries.map((entry) => entry.modelId)).toEqual(["multimodal-chat"]);
-  });
-
-  it("selects a bounded canonical set of common model families", () => {
-    const openAiModels = Object.fromEntries(
-      Array.from({ length: 7 }, (_, index) => {
-        const version = index + 1;
-        return [
-          `gpt-${version}`,
-          {
-            name: `GPT ${version}`,
-            release_date: `2025-0${version}-01`,
-            cost: { input: version, output: version * 2 },
-          },
-        ];
-      }),
-    );
+describe("GPT pricing selection", () => {
+  it("imports only canonical OpenAI GPT prices, preserving cache prices and date order", () => {
     const entries = flattenModels({
       openai: {
         name: "OpenAI",
         models: {
-          ...openAiModels,
-          "gpt-image-1": {
+          "gpt-old": { release_date: "2025-01-01", cost: { input: 1 } },
+          "gpt-new": {
+            name: "GPT New",
             release_date: "2026-01-01",
-            cost: { input: 1, output: 2 },
+            cost: { input: 3, output: 6, cache_read: 0.3 },
           },
+          "gpt-unpriced": { name: "No price" },
+          "other-model": { cost: { input: 1, output: 2 } },
         },
       },
-      aggregator: {
-        name: "Aggregator",
-        models: {
-          "gpt-7": {
-            release_date: "2026-02-01",
-            cost: { input: 9, output: 18 },
-          },
-        },
-      },
-      anthropic: {
-        name: "Anthropic",
-        models: {
-          "claude-sonnet-5": {
-            release_date: "2026-06-01",
-            cost: { input: 3, output: 15 },
-          },
-        },
-      },
-      deepseek: {
-        name: "DeepSeek",
-        models: {
-          "deepseek-chat": {
-            release_date: "2025-12-01",
-            cost: { input: 0.3, output: 1.2 },
-          },
-        },
-      },
-      xiaomi: {
-        name: "Xiaomi",
-        models: {
-          "mimo-v2.5": {
-            release_date: "2026-04-01",
-            cost: { input: 0.2, output: 1 },
-          },
-          "mimo-v2.5-tts": {
-            release_date: "2026-05-01",
-            cost: { input: 0.1, output: 0.5 },
-          },
-        },
-      },
-      longcat: {
-        name: "LongCat",
-        models: {
-          "LongCat-2.0": {
-            release_date: "2026-03-01",
-            cost: { input: 0.4, output: 1.6 },
-          },
-        },
-      },
+      relay: { models: { "gpt-new": { cost: { input: 90, output: 180 } } } },
     });
-
-    const common = getCommonModelKeys(entries);
-    expect(common.has("openai/gpt-image-1")).toBe(false);
-    expect(common.has("aggregator/gpt-7")).toBe(false);
-    expect(common.has("openai/gpt-7")).toBe(true);
-    expect(common.has("openai/gpt-1")).toBe(false);
-    expect(common.has("anthropic/claude-sonnet-5")).toBe(true);
-    expect(common.has("deepseek/deepseek-chat")).toBe(true);
-    expect(common.has("xiaomi/mimo-v2.5")).toBe(true);
-    expect(common.has("xiaomi/mimo-v2.5-tts")).toBe(false);
-    expect(common.has("longcat/LongCat-2.0")).toBe(true);
+    expect(entries.map((entry) => entry.key)).toEqual([
+      "openai/gpt-new",
+      "openai/gpt-old",
+    ]);
+    expect(entries[0]).toMatchObject({
+      providerName: "OpenAI",
+      cacheRead: 0.3,
+      cacheWrite: 0,
+    });
+    expect(entries[1]).toMatchObject({ output: 0, cacheRead: 0 });
   });
 
-  it("combines common and explicit selections and deduplicates normalized ids", () => {
+  it("keeps image-capable GPT input models but excludes deprecated or non-text outputs", () => {
     const entries = flattenModels({
       openai: {
         models: {
-          "gpt-5": {
-            name: "GPT-5 Official",
-            release_date: "2025-08-01",
+          "GPT-6-ASTRA": {
+            modalities: { input: ["text", "image"], output: ["text"] },
             cost: { input: 1, output: 2 },
           },
-        },
-      },
-      relay: {
-        models: {
-          "vendor/GPT-5": {
-            name: "GPT-5 Relay",
-            release_date: "2025-07-01",
-            cost: { input: 9, output: 18 },
+          "gpt-legacy": { status: "deprecated", cost: { input: 1, output: 2 } },
+          "gpt-speech": {
+            modalities: { output: ["audio"] },
+            cost: { input: 1, output: 2 },
           },
-          "custom-model": {
-            name: "Custom",
-            release_date: "2025-06-01",
-            cost: { input: 0.5, output: 1 },
+          "gpt-mixed": {
+            modalities: { output: ["text", "audio"] },
+            cost: { input: 1, output: 2 },
           },
+          "gpt-image-1": { cost: { input: 1, output: 2 } },
         },
       },
     });
+    expect(entries.map((entry) => entry.normalizedId)).toEqual(["gpt-6-astra"]);
+  });
+
+  it("bounds common models while allowing an explicit older GPT and excluding removed providers", () => {
+    const entries = flattenModels({
+      openai: {
+        models: Object.fromEntries(
+          Array.from({ length: 7 }, (_, index) => [
+            `gpt-${index + 1}`,
+            {
+              release_date: `2025-0${index + 1}-01`,
+              cost: { input: index + 1, output: 2 },
+            },
+          ]),
+        ),
+      },
+    });
+    const common = getCommonModelKeys(entries);
+    expect(common.size).toBe(6);
+    expect(common.has("openai/gpt-7")).toBe(true);
+    expect(common.has("openai/gpt-1")).toBe(false);
     const selected = resolveModelsDevSelection(entries, {
       autoSyncEnabled: true,
       includeCommonModels: true,
-      selectedModelKeys: ["relay/vendor/GPT-5", "relay/custom-model"],
-      excludedCommonModelKeys: ["openai/gpt-5"],
+      selectedModelKeys: ["openai/gpt-1", "relay/other-model"],
+      excludedCommonModelKeys: ["openai/gpt-7"],
       lastSyncAt: null,
       lastSyncError: null,
     });
-
-    expect(selected.map((entry) => entry.key)).toEqual([
-      "relay/vendor/GPT-5",
-      "relay/custom-model",
+    expect(selected.map((entry) => entry.modelId)).toEqual([
+      "gpt-6",
+      "gpt-5",
+      "gpt-4",
+      "gpt-3",
+      "gpt-2",
+      "gpt-1",
     ]);
-
-    const pricing = toModelPricing([
-      entries.find((entry) => entry.key === "openai/gpt-5")!,
-      entries.find((entry) => entry.key === "relay/vendor/GPT-5")!,
+    const canonical = entries[0];
+    expect(toModelPricing([canonical, { ...canonical, input: 999 }])).toEqual([
+      expect.objectContaining({ modelId: "gpt-7", inputCostPerMillion: "7" }),
     ]);
-    expect(pricing).toHaveLength(1);
-    expect(pricing[0]).toMatchObject({
-      modelId: "gpt-5",
-      displayName: "GPT-5 Official",
-      inputCostPerMillion: "1",
-    });
   });
 });

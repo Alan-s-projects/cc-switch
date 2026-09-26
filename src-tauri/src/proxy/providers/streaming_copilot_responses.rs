@@ -7,9 +7,9 @@
 
 use crate::proxy::{
     content_encoding::get_content_encoding,
-    hyper_client::ProxyResponse,
     response_processor::strip_entity_headers_for_rebuilt_body,
     sse::{append_utf8_safe, strip_sse_field, take_sse_block},
+    upstream_response::ProxyResponse,
 };
 use bytes::Bytes;
 use futures::{Stream, StreamExt};

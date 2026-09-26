@@ -48,7 +48,7 @@ vi.mock("@/lib/modelsDevAutoSync", () => ({
 import { ModelsDevAutoSyncPanel } from "@/components/usage/ModelsDevAutoSyncPanel";
 
 const state = {
-  configPath: "C:/Users/test/.cc-switch/model-pricing.json",
+  configPath: "C:/Users/test/.copilot-bridge-atlas/model-pricing.json",
   config: {
     autoSyncEnabled: false,
     includeCommonModels: true,
@@ -92,20 +92,15 @@ describe("ModelsDevAutoSyncPanel", () => {
           openai: {
             name: "OpenAI",
             models: {
+              "gpt-6-luna": {
+                name: "GPT-6 Luna",
+                release_date: "2026-09-01",
+                cost: { input: 1, output: 2 },
+              },
               "gpt-5": {
                 name: "GPT-5",
                 release_date: "2025-08-01",
                 cost: { input: 1, output: 2 },
-              },
-            },
-          },
-          deepseek: {
-            name: "DeepSeek",
-            models: {
-              "deepseek-chat": {
-                name: "DeepSeek Chat",
-                release_date: "2025-12-01",
-                cost: { input: 0.3, output: 1.2 },
               },
             },
           },
@@ -215,7 +210,7 @@ describe("ModelsDevAutoSyncPanel", () => {
       await screen.findByText("usage.modelsDevAutoSync.configureTitle"),
     ).toBeInTheDocument();
     expect(await screen.findByText("GPT-5")).toBeInTheDocument();
-    expect(screen.getByText("DeepSeek Chat")).toBeInTheDocument();
+    expect(screen.getByText("GPT-6 Luna")).toBeInTheDocument();
     expect(
       screen.getByText("usage.modelsDevAutoSync.selectedCount:2"),
     ).toBeInTheDocument();

@@ -6,14 +6,15 @@ describe("ProviderForm Codex catalog helpers", () => {
   it("normalizes catalog rows and removes empty or duplicate models", () => {
     expect(
       normalizeCodexCatalogModelsForSave([
-        { model: " deepseek-v4-flash ", displayName: " DeepSeek " },
-        { model: "deepseek-v4-flash", displayName: "Duplicate" },
+        { model: " gpt-6-astra ", displayName: " GPT-6 Astra " },
+        { model: "GPT-6-ASTRA", displayName: "Duplicate" },
         { model: "", displayName: "Empty" },
-        { model: "kimi-k2", contextWindow: "128000 tokens" },
+        { model: "other-model", displayName: "Unsupported" },
+        { model: "gpt-6-luna", contextWindow: "128000 tokens" },
       ]),
     ).toEqual([
-      { model: "deepseek-v4-flash", displayName: "DeepSeek" },
-      { model: "kimi-k2", contextWindow: 128000 },
+      { model: "gpt-6-astra", displayName: "GPT-6 Astra" },
+      { model: "gpt-6-luna", contextWindow: 128000 },
     ]);
   });
 
@@ -21,18 +22,18 @@ describe("ProviderForm Codex catalog helpers", () => {
     expect(
       normalizeCodexCatalogModelsForSave([
         {
-          model: "MiniMax-M3",
-          displayName: "MiniMax-M3",
+          model: "GPT-6-ASTRA",
+          displayName: "GPT-6-ASTRA",
           contextWindow: 1000000,
           supportsParallelToolCalls: true,
           inputModalities: ["text", "image"],
           baseInstructions:
-            "  You are Codex, a coding agent based on MiniMax-M3.  ",
+            "  You are Codex, a coding agent based on GPT-6-ASTRA.  ",
         },
         // false must be preserved (not dropped as falsy); empty modalities dropped;
         // empty/whitespace baseInstructions dropped
         {
-          model: "mimo-v2.5-pro",
+          model: "gpt-6-luna",
           supportsParallelToolCalls: false,
           inputModalities: [],
           baseInstructions: "   ",
@@ -40,14 +41,14 @@ describe("ProviderForm Codex catalog helpers", () => {
       ]),
     ).toEqual([
       {
-        model: "MiniMax-M3",
-        displayName: "MiniMax-M3",
+        model: "GPT-6-ASTRA",
+        displayName: "GPT-6-ASTRA",
         contextWindow: 1000000,
         supportsParallelToolCalls: true,
         inputModalities: ["text", "image"],
-        baseInstructions: "You are Codex, a coding agent based on MiniMax-M3.",
+        baseInstructions: "You are Codex, a coding agent based on GPT-6-ASTRA.",
       },
-      { model: "mimo-v2.5-pro", supportsParallelToolCalls: false },
+      { model: "gpt-6-luna", supportsParallelToolCalls: false },
     ]);
   });
 
@@ -55,42 +56,40 @@ describe("ProviderForm Codex catalog helpers", () => {
     expect(
       normalizeCodexCatalogModelsForSave([
         {
-          model: "deepseek-v4-flash",
-          displayName: "DeepSeek V4 Flash",
+          model: "gpt-6-astra",
+          displayName: "GPT-6 Astra",
           reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"],
           defaultReasoningLevel: " xhigh ",
         },
         // empty levels / whitespace default are dropped
         {
-          model: "plain-model",
+          model: "gpt-test",
           reasoningLevels: [],
           defaultReasoningLevel: "   ",
         },
       ]),
     ).toEqual([
       {
-        model: "deepseek-v4-flash",
-        displayName: "DeepSeek V4 Flash",
+        model: "gpt-6-astra",
+        displayName: "GPT-6 Astra",
         reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"],
         defaultReasoningLevel: "xhigh",
       },
-      { model: "plain-model" },
+      { model: "gpt-test" },
     ]);
   });
 
   it("round-trips reasoning levels through load and save without loss", () => {
-    // load→save 回环：加载映射（mapCodexCatalogModelForForm）与保存归一化
-    // （normalizeCodexCatalogModelsForSave）各锁半边时，回环丢字段两边都测不出——
-    // 而编辑保存丢表会让依赖逐模型档位的功能（zen 钳制）静默失效且 UI 无可察觉。
+    // Load and save must preserve each GPT model's explicit reasoning list.
     const stored = [
       {
-        model: "glm-5.2",
-        displayName: "GLM 5.2",
+        model: "gpt-6-luna",
+        displayName: "GPT-6 Luna",
         reasoningLevels: ["high", "max"],
       },
       // 手写/旧数据可能是 snake_case，加载侧兼容后保存侧同样要留住
-      { model: "deepseek-v4-flash", reasoning_levels: ["low", "high", "max"] },
-      { model: "glm-5.1" }, // toggle 型：无表，全程不得凭空造表
+      { model: "gpt-6-astra", reasoning_levels: ["low", "high", "max"] },
+      { model: "gpt-test" }, // toggle 型：无表，全程不得凭空造表
     ];
 
     const roundTripped = normalizeCodexCatalogModelsForSave(
@@ -99,12 +98,12 @@ describe("ProviderForm Codex catalog helpers", () => {
 
     expect(roundTripped).toEqual([
       {
-        model: "glm-5.2",
-        displayName: "GLM 5.2",
+        model: "gpt-6-luna",
+        displayName: "GPT-6 Luna",
         reasoningLevels: ["high", "max"],
       },
-      { model: "deepseek-v4-flash", reasoningLevels: ["low", "high", "max"] },
-      { model: "glm-5.1" },
+      { model: "gpt-6-astra", reasoningLevels: ["low", "high", "max"] },
+      { model: "gpt-test" },
     ]);
   });
 
@@ -112,8 +111,8 @@ describe("ProviderForm Codex catalog helpers", () => {
     // 手编 JSON 里的 " high " 不得原样落库/发给上游。
     expect(
       normalizeCodexCatalogModelsForSave([
-        { model: "glm-5.2", reasoningLevels: [" high ", "max"] },
+        { model: "gpt-6-luna", reasoningLevels: [" high ", "max"] },
       ]),
-    ).toEqual([{ model: "glm-5.2", reasoningLevels: ["high", "max"] }]);
+    ).toEqual([{ model: "gpt-6-luna", reasoningLevels: ["high", "max"] }]);
   });
 });

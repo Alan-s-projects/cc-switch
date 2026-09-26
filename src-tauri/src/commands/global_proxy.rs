@@ -103,12 +103,10 @@ pub async fn test_proxy_url(url: String) -> Result<ProxyTestResult, String> {
         .build()
         .map_err(|e| format!("Failed to build client: {e}"))?;
 
-    // 使用多个测试目标，提高兼容性
-    // 优先使用 httpbin（专门用于 HTTP 测试），回退到其他公共端点
+    // Probe the two services needed by the bridge, without an inference request.
     let test_urls = [
-        "https://httpbin.org/get",
-        "https://www.google.com",
-        "https://api.anthropic.com",
+        "https://api.githubcopilot.com",
+        "https://api.github.com",
     ];
 
     let mut last_error = None;
@@ -155,28 +153,6 @@ pub async fn test_proxy_url(url: String) -> Result<ProxyTestResult, String> {
         latency_ms: latency,
         error: Some(error_msg),
     })
-}
-
-/// 获取当前出站代理状态
-///
-/// 返回当前是否启用了出站代理以及代理 URL。
-#[tauri::command]
-pub fn get_upstream_proxy_status() -> UpstreamProxyStatus {
-    let url = http_client::get_current_proxy_url();
-    UpstreamProxyStatus {
-        enabled: url.is_some(),
-        proxy_url: url,
-    }
-}
-
-/// 出站代理状态信息
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpstreamProxyStatus {
-    /// 是否启用代理
-    pub enabled: bool,
-    /// 代理 URL
-    pub proxy_url: Option<String>,
 }
 
 /// 检测到的代理信息

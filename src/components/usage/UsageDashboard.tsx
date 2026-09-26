@@ -5,11 +5,7 @@ import { UsageTrendChart } from "./UsageTrendChart";
 import { RequestLogTable } from "./RequestLogTable";
 import { ProviderStatsTable } from "./ProviderStatsTable";
 import { ModelStatsTable } from "./ModelStatsTable";
-import {
-  type AppType,
-  type AppTypeFilter,
-  type UsageRangeSelection,
-} from "@/types/usage";
+import { type UsageRangeSelection } from "@/types/usage";
 import { motion } from "framer-motion";
 import {
   BarChart3,
@@ -17,9 +13,8 @@ import {
   Activity,
   RefreshCw,
   Coins,
-  LayoutGrid,
 } from "lucide-react";
-import { ProviderIcon } from "@/components/ProviderIcon";
+import { CodexIcon } from "@/components/BrandIcons";
 import {
   Select,
   SelectContent,
@@ -37,13 +32,9 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { PricingConfigPanel } from "@/components/usage/PricingConfigPanel";
-import { cn } from "@/lib/utils";
-import { getLocaleFromLanguage } from "./format";
 import { getUsageRangePresetLabel, resolveUsageRange } from "@/lib/usageRange";
 import { UsageDateRangePicker } from "./UsageDateRangePicker";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-
-const APP_FILTER_OPTIONS: AppTypeFilter[] = ["codex"];
 
 const DEFAULT_REFRESH_INTERVAL_MS = 30000;
 const REFRESH_INTERVAL_OPTIONS_MS = [0, 5000, 10000, 30000, 60000] as const;
@@ -56,17 +47,6 @@ const isRefreshIntervalOption = (
 
 const normalizeRefreshInterval = (value: number | undefined) =>
   isRefreshIntervalOption(value) ? value : DEFAULT_REFRESH_INTERVAL_MS;
-
-// 与 AppSwitcher 的 appIconName 保持一致（codex 复用 openai 图标）
-const APP_FILTER_ICON: Record<AppType, string> = {
-  claude: "claude",
-  codex: "openai",
-  gemini: "gemini",
-  grokbuild: "grok",
-  opencode: "opencode",
-  pi: "pi",
-  mcode: "minimax",
-};
 
 // Select 的 "all" 哨兵和用户自定义名称同处一个值域——真有来源/模型叫 "all"
 // 就会撞名（重复 value、选中即清空筛选）。动态选项统一加前缀编码隔离值域。
@@ -84,10 +64,10 @@ export function UsageDashboard({
   refreshIntervalMs: savedRefreshIntervalMs,
   onRefreshIntervalChange,
 }: UsageDashboardProps = {}) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [range, setRange] = useState<UsageRangeSelection>({ preset: "today" });
-  const [appType, setAppType] = useState<AppTypeFilter>("codex");
+  const appType = "codex";
   const [providerName, setProviderName] = useState<string | undefined>(
     undefined,
   );
@@ -100,15 +80,6 @@ export function UsageDashboard({
     setRefreshIntervalMs(normalizeRefreshInterval(savedRefreshIntervalMs));
   }, [savedRefreshIntervalMs]);
 
-  // 切应用时清掉下游筛选，避免留下一个在新范围内查无数据的"幽灵"组合；
-  // 切 Provider 同理清掉模型（模型选项随 Provider 级联）。
-  const changeAppType = (next: AppTypeFilter) => {
-    setAppType(next);
-    if (next !== appType) {
-      setProviderName(undefined);
-      setModel(undefined);
-    }
-  };
   const changeProviderName = (next: string | undefined) => {
     setProviderName(next);
     if (next !== providerName) {
@@ -139,8 +110,7 @@ export function UsageDashboard({
     }
   };
 
-  const language = i18n.resolvedLanguage || i18n.language || "en";
-  const locale = getLocaleFromLanguage(language);
+  const locale = "en-US";
   const resolvedRange = useMemo(() => resolveUsageRange(range), [range]);
   const rangeLabel = useMemo(() => {
     if (range.preset !== "custom") {
@@ -152,7 +122,7 @@ export function UsageDashboard({
     );
 
     if (range.liveEndTime) {
-      return `${startStr} → ${t("usage.liveEndTimeNow", "现在")}`;
+      return `${startStr} → ${t("usage.liveEndTimeNow", "Now")}`;
     }
 
     const endStr = new Date(resolvedRange.endDate * 1000).toLocaleString(
@@ -216,35 +186,11 @@ export function UsageDashboard({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center p-1 bg-muted/30 rounded-lg border border-border/50">
-            {APP_FILTER_OPTIONS.map((type) => {
-              const label = t(`usage.appFilter.${type}`);
-              return (
-                <button
-                  key={type}
-                  type="button"
-                  onClick={() => changeAppType(type)}
-                  title={label}
-                  aria-label={label}
-                  className={cn(
-                    "flex h-8 items-center justify-center px-2.5 rounded-md transition-all",
-                    appType === type
-                      ? "bg-background text-primary shadow-sm"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
-                  )}
-                >
-                  {type === "all" ? (
-                    <LayoutGrid className="h-4 w-4" />
-                  ) : (
-                    <ProviderIcon
-                      icon={APP_FILTER_ICON[type]}
-                      name={label}
-                      size={16}
-                    />
-                  )}
-                </button>
-              );
-            })}
+          <div
+            title="Codex"
+            className="flex h-10 items-center rounded-lg border border-border/50 bg-muted/30 px-3"
+          >
+            <CodexIcon size={16} />
           </div>
 
           <Select
@@ -334,7 +280,7 @@ export function UsageDashboard({
 
       <UsageHero
         range={range}
-        appType={appType === "all" ? undefined : appType}
+        appType={appType}
         providerName={providerName}
         model={model}
         refreshIntervalMs={refreshIntervalMs}

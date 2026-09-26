@@ -16,12 +16,12 @@ describe("Copilot model catalog field preservation", () => {
         modelCatalog: {
           models: [
             {
-              model: "MiniMax-M3",
-              displayName: "MiniMax-M3",
+              model: "gpt-6-astra",
+              displayName: "gpt-6-astra",
               contextWindow: 1000000,
               supportsParallelToolCalls: true,
               inputModalities: ["text", "image"],
-              baseInstructions: "You are Codex, based on MiniMax-M3.",
+              baseInstructions: "You are Codex, based on gpt-6-astra.",
             },
           ],
         },
@@ -34,12 +34,12 @@ describe("Copilot model catalog field preservation", () => {
 
     expect(models).toEqual([
       {
-        model: "MiniMax-M3",
-        displayName: "MiniMax-M3",
+        model: "gpt-6-astra",
+        displayName: "gpt-6-astra",
         contextWindow: 1000000,
         supportsParallelToolCalls: true,
         inputModalities: ["text", "image"],
-        baseInstructions: "You are Codex, based on MiniMax-M3.",
+        baseInstructions: "You are Codex, based on gpt-6-astra.",
       },
     ]);
   });
@@ -52,12 +52,12 @@ describe("Copilot model catalog field preservation", () => {
         modelCatalog: {
           models: [
             {
-              model: "mimo-v2.5-pro",
-              display_name: "MiMo V2.5 Pro",
+              model: "gpt-6-luna",
+              display_name: "GPT-6 Luna",
               context_window: 262144,
               supports_parallel_tool_calls: false,
               input_modalities: ["text"],
-              base_instructions: "You are MiMo, developed by Xiaomi.",
+              base_instructions: "You are Codex, based on GPT-6 Luna.",
             },
           ],
         },
@@ -70,12 +70,12 @@ describe("Copilot model catalog field preservation", () => {
 
     expect(models).toEqual([
       {
-        model: "mimo-v2.5-pro",
-        displayName: "MiMo V2.5 Pro",
+        model: "gpt-6-luna",
+        displayName: "GPT-6 Luna",
         contextWindow: 262144,
         supportsParallelToolCalls: false,
         inputModalities: ["text"],
-        baseInstructions: "You are MiMo, developed by Xiaomi.",
+        baseInstructions: "You are Codex, based on GPT-6 Luna.",
       },
     ]);
   });

@@ -72,11 +72,9 @@ fn refresh_catalog(provider: &Provider) -> Result<(), AppError> {
         .get("config")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    if let Some(catalog) = crate::codex_config::codex_model_catalog_from_settings(
-        &provider.settings_config,
-        config,
-        crate::codex_config::CodexCatalogToolProfile::Copilot,
-    )? {
+    if let Some(catalog) =
+        crate::codex_config::codex_model_catalog_from_settings(&provider.settings_config, config)?
+    {
         crate::config::write_json_file(&catalog_path(), &catalog)?;
     } else {
         match std::fs::remove_file(catalog_path()) {
@@ -100,9 +98,7 @@ fn ensure_copilot_entry(db: &Database) -> Result<(), AppError> {
             "config": "model_provider = \"copilot\"\n[model_providers.copilot]\nbase_url = \"https://api.githubcopilot.com\"\nwire_api = \"responses\"\n",
             "modelCatalog": { "models": [] }
         }),
-        None,
     );
-    provider.category = Some("third_party".into());
     provider.meta = Some(crate::ProviderMeta {
         provider_type: Some("github_copilot".into()),
         ..Default::default()
@@ -160,15 +156,45 @@ fn merge_live_capabilities(
                     .filter(|limit| *limit > 0);
                 row["contextWindow"] = json!(current.map_or(limit, |current| current.min(limit)));
             }
-            if let Some(levels) = &model.reasoning_efforts {
+            // Editable reasoning choices take precedence over upstream defaults.
+            // Normalize a usable legacy alias into the canonical key so an empty
+            // or invalid camelCase value cannot mask it in the catalog parser.
+            let levels = ["reasoningLevels", "reasoning_levels"]
+                .into_iter()
+                .find_map(|key| {
+                    row.get(key)?
+                        .as_array()
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::trim)
+                                .filter(|level| !level.is_empty())
+                                .map(str::to_owned)
+                                .collect::<Vec<_>>()
+                        })
+                        .filter(|levels| !levels.is_empty())
+                })
+                .or_else(|| {
+                    model
+                        .reasoning_efforts
+                        .clone()
+                        .filter(|levels| !levels.is_empty())
+                });
+            if let Some(levels) = levels {
                 row["reasoningLevels"] = json!(levels);
-                if row
-                    .get("defaultReasoningLevel")
-                    .and_then(Value::as_str)
-                    .is_some_and(|default| !levels.iter().any(|level| level == default))
-                {
-                    row.as_object_mut().unwrap().remove("defaultReasoningLevel");
-                }
+            }
+            if let Some(default) = ["defaultReasoningLevel", "default_reasoning_level"]
+                .into_iter()
+                .find_map(|key| {
+                    row.get(key)?
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|level| !level.is_empty())
+                        .map(str::to_owned)
+                })
+            {
+                row["defaultReasoningLevel"] = json!(default);
             }
         }
     }
@@ -344,9 +370,24 @@ fn setup_setting_defaults(current: &toml_edit::DocumentMut) -> Vec<SetupSettingD
     // Documented file-level defaults, not an inference about the running app:
     // https://learn.chatgpt.com/docs/config-file/config-sample
     [
-        ("approvalPolicy", "approval_policy", Some("on-request"), "\"on-request\""),
-        ("sandboxMode", "sandbox_mode", Some("read-only"), "\"read-only\""),
-        ("reasoning", "model_reasoning_effort", None, "Model default (unset)"),
+        (
+            "approvalPolicy",
+            "approval_policy",
+            Some("on-request"),
+            "\"on-request\"",
+        ),
+        (
+            "sandboxMode",
+            "sandbox_mode",
+            Some("read-only"),
+            "\"read-only\"",
+        ),
+        (
+            "reasoning",
+            "model_reasoning_effort",
+            None,
+            "Model default (unset)",
+        ),
     ]
     .into_iter()
     .filter_map(|(option, key, default, default_value)| {
@@ -380,12 +421,14 @@ fn config_uses_endpoint(current: &toml_edit::DocumentMut, endpoint: &str) -> boo
         .and_then(|provider| provider.get("base_url"))
         .and_then(toml_edit::Item::as_str)
         .or_else(|| {
-            (provider == "openai").then(|| {
-                profile
-                    .and_then(|profile| profile.get("openai_base_url"))
-                    .or_else(|| current.get("openai_base_url"))
-                    .and_then(toml_edit::Item::as_str)
-            }).flatten()
+            (provider == "openai")
+                .then(|| {
+                    profile
+                        .and_then(|profile| profile.get("openai_base_url"))
+                        .or_else(|| current.get("openai_base_url"))
+                        .and_then(toml_edit::Item::as_str)
+                })
+                .flatten()
         });
     let normalize = |raw: &str| {
         let mut url = url::Url::parse(raw.trim().trim_end_matches('/')).ok()?;
@@ -397,7 +440,9 @@ fn config_uses_endpoint(current: &toml_edit::DocumentMut, endpoint: &str) -> boo
     let Some(expected) = normalize(endpoint) else {
         return false;
     };
-    configured_url.and_then(normalize).is_some_and(|url| url == expected)
+    configured_url
+        .and_then(normalize)
+        .is_some_and(|url| url == expected)
 }
 
 fn set_connection_value(
@@ -542,7 +587,7 @@ fn setup_suggestion(
                         .map(|_| id.to_string())
                 })
             })
-            .unwrap_or_else(|| "cc-switch".to_string())
+            .unwrap_or_else(|| "copilot-bridge-atlas".to_string())
     };
     let configured = active == id
         && previous_url
@@ -651,7 +696,11 @@ fn setup_suggestion(
                 );
             }
             for (enabled, key, default) in [
-                (recommendations.approval_policy, "approval_policy", "on-request"),
+                (
+                    recommendations.approval_policy,
+                    "approval_policy",
+                    "on-request",
+                ),
                 (recommendations.sandbox_mode, "sandbox_mode", "read-only"),
             ] {
                 if enabled && doc.contains_key(key) {
@@ -709,7 +758,10 @@ fn normalize_preview_config_path(raw: &str) -> Result<PathBuf, String> {
     let raw = raw
         .strip_prefix('"')
         .and_then(|path| path.strip_suffix('"'))
-        .or_else(|| raw.strip_prefix('\'').and_then(|path| path.strip_suffix('\'')))
+        .or_else(|| {
+            raw.strip_prefix('\'')
+                .and_then(|path| path.strip_suffix('\''))
+        })
         .unwrap_or(raw)
         .trim();
     let path = PathBuf::from(raw);
@@ -733,9 +785,8 @@ fn setup_suggestion_from_file(
     catalog: Option<&Path>,
     recommendations: Option<&SetupRecommendations>,
 ) -> Result<CodexSetupSuggestion, String> {
-    let read_error = |error: std::io::Error| {
-        format!("Cannot read TOML file {}: {error}", path.display())
-    };
+    let read_error =
+        |error: std::io::Error| format!("Cannot read TOML file {}: {error}", path.display());
     // Read and inspect the same open file. Existence describes this snapshot,
     // including an existing empty file, rather than a later filesystem check.
     let (text, exists) = match std::fs::File::open(path) {
@@ -754,7 +805,10 @@ fn setup_suggestion_from_file(
             (String::new(), false)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("Selected TOML file does not exist: {}", path.display()));
+            return Err(format!(
+                "Selected TOML file does not exist: {}",
+                path.display()
+            ));
         }
         Err(error) => return Err(read_error(error)),
     };
@@ -808,6 +862,41 @@ pub async fn get_codex_setup_suggestion(
 mod tests {
     use super::*;
 
+    struct TestHome {
+        previous: Option<std::ffi::OsString>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl TestHome {
+        fn new() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("COPILOT_BRIDGE_ATLAS_TEST_HOME");
+            std::env::set_var("COPILOT_BRIDGE_ATLAS_TEST_HOME", directory.path());
+            let fixture = Self {
+                previous,
+                _dir: directory,
+            };
+            let app_dir = fixture._dir.path().join(".copilot-bridge-atlas");
+            std::fs::create_dir_all(&app_dir).unwrap();
+            // Prevent the legacy Windows HOME fallback from escaping the fixture.
+            std::fs::write(app_dir.join("copilot-bridge-atlas.db"), []).unwrap();
+            assert_eq!(crate::config::get_app_config_dir(), app_dir);
+            crate::settings::reload_settings().unwrap();
+            fixture
+        }
+    }
+
+    impl Drop for TestHome {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("COPILOT_BRIDGE_ATLAS_TEST_HOME", previous);
+            } else {
+                std::env::remove_var("COPILOT_BRIDGE_ATLAS_TEST_HOME");
+            }
+            let _ = crate::settings::reload_settings();
+        }
+    }
+
     fn assert_diff_snapshots(lines: &[ConfigDiffLine], current: &str, proposed: &str) {
         for line in lines {
             assert!(matches!(
@@ -844,15 +933,15 @@ mod tests {
         for (text, expected) in [
             ("", false),
             ("model_provider = 'openai'\n", false),
-            ("model_provider = 'custom'\n[model_providers.custom]\nbase_url = 'http://localhost:15721/v1/'\n", true),
+            ("model_provider = 'custom'\n[model_providers.custom]\nbase_url = 'http://localhost:15722/v1/'\n", true),
             ("model_provider = 'custom'\n[model_providers.custom]\nbase_url = 'http://127.0.0.1:4142/v1'\n", false),
-            ("model_provider = 'custom'\n[model_providers.custom]\nbase_url = 'http://127.0.0.1:15721/other'\n", false),
-            ("model_provider = 'custom'\nprofile = 'official'\n[model_providers.custom]\nbase_url = 'http://127.0.0.1:15721/v1'\n[profiles.official]\nmodel_provider = 'openai'\n", false),
-            ("model_provider = 'openai'\nprofile = 'work'\n[model_providers.atlas]\nbase_url = 'http://127.0.0.1:15721/v1'\n[profiles.work]\nmodel_provider = 'atlas'\n", true),
-            ("openai_base_url = 'http://127.0.0.1:15721/v1'\n", true),
+            ("model_provider = 'custom'\n[model_providers.custom]\nbase_url = 'http://127.0.0.1:15722/other'\n", false),
+            ("model_provider = 'custom'\nprofile = 'official'\n[model_providers.custom]\nbase_url = 'http://127.0.0.1:15722/v1'\n[profiles.official]\nmodel_provider = 'openai'\n", false),
+            ("model_provider = 'openai'\nprofile = 'work'\n[model_providers.atlas]\nbase_url = 'http://127.0.0.1:15722/v1'\n[profiles.work]\nmodel_provider = 'atlas'\n", true),
+            ("openai_base_url = 'http://127.0.0.1:15722/v1'\n", true),
         ] {
             let current = text.parse::<toml_edit::DocumentMut>().unwrap();
-            assert_eq!(config_uses_endpoint(&current, "http://127.0.0.1:15721/v1"), expected, "{text}");
+            assert_eq!(config_uses_endpoint(&current, "http://127.0.0.1:15722/v1"), expected, "{text}");
         }
     }
 
@@ -889,18 +978,33 @@ model_reasoning_effort = "medium"
         std::fs::write(&path, text).unwrap();
         let original = text.parse::<toml_edit::DocumentMut>().unwrap();
         let baseline =
-            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15721/v1", None, None)
+            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None)
                 .unwrap();
         let cases: [(serde_json::Value, &[(&str, Option<&str>)]); 7] = [
             (json!({}), &[]),
-            (json!({"context1m": false, "approvalPolicy": false, "sandboxMode": false, "reasoning": false}), &[]),
-            (json!({"context1m": true}), &[
-                ("model_context_window", Some("1000000")),
-                ("model_auto_compact_token_limit", Some("900000")),
-            ]),
-            (json!({"approvalPolicy": true}), &[("approval_policy", Some("\"on-request\""))]),
-            (json!({"sandboxMode": true}), &[("sandbox_mode", Some("\"read-only\""))]),
-            (json!({"reasoning": true}), &[("model_reasoning_effort", None)]),
+            (
+                json!({"context1m": false, "approvalPolicy": false, "sandboxMode": false, "reasoning": false}),
+                &[],
+            ),
+            (
+                json!({"context1m": true}),
+                &[
+                    ("model_context_window", Some("1000000")),
+                    ("model_auto_compact_token_limit", Some("900000")),
+                ],
+            ),
+            (
+                json!({"approvalPolicy": true}),
+                &[("approval_policy", Some("\"on-request\""))],
+            ),
+            (
+                json!({"sandboxMode": true}),
+                &[("sandbox_mode", Some("\"read-only\""))],
+            ),
+            (
+                json!({"reasoning": true}),
+                &[("model_reasoning_effort", None)],
+            ),
             (
                 json!({"context1m": true, "approvalPolicy": true, "sandboxMode": true, "reasoning": true}),
                 &[
@@ -917,7 +1021,7 @@ model_reasoning_effort = "medium"
             let preview = setup_suggestion_from_file(
                 &path,
                 true,
-                "http://127.0.0.1:15721/v1",
+                "http://127.0.0.1:15722/v1",
                 None,
                 Some(&recommendations),
             )
@@ -953,17 +1057,33 @@ model_reasoning_effort = "medium"
                     "approval_policy",
                     "sandbox_mode",
                 ] {
-                    if let Some((_, expected)) = changes.iter().find(|(changed, _)| *changed == key) {
-                        assert_eq!(setup_setting_value(&proposed, key).as_deref(), *expected, "{key}");
+                    if let Some((_, expected)) = changes.iter().find(|(changed, _)| *changed == key)
+                    {
+                        assert_eq!(
+                            setup_setting_value(&proposed, key).as_deref(),
+                            *expected,
+                            "{key}"
+                        );
                     } else {
-                        assert_eq!(proposed[key].to_string(), original[key].to_string(), "{key}");
+                        assert_eq!(
+                            proposed[key].to_string(),
+                            original[key].to_string(),
+                            "{key}"
+                        );
                     }
                 }
                 for key in [
-                    "model", "notify",
-                    "disable_response_storage", "profiles", "custom",
+                    "model",
+                    "notify",
+                    "disable_response_storage",
+                    "profiles",
+                    "custom",
                 ] {
-                    assert_eq!(proposed[key].to_string(), original[key].to_string(), "{key}");
+                    assert_eq!(
+                        proposed[key].to_string(),
+                        original[key].to_string(),
+                        "{key}"
+                    );
                 }
             }
             assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
@@ -977,7 +1097,7 @@ model_reasoning_effort = "medium"
         let text = "model = 'gpt-6-astra'\n[profiles.keep]\nmodel_reasoning_effort = 'high'\n";
         std::fs::write(&path, text).unwrap();
         let baseline =
-            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15721/v1", None, None)
+            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None)
                 .unwrap();
         let recommendations = SetupRecommendations {
             context_1m: false,
@@ -988,7 +1108,7 @@ model_reasoning_effort = "medium"
         let preview = setup_suggestion_from_file(
             &path,
             true,
-            "http://127.0.0.1:15721/v1",
+            "http://127.0.0.1:15722/v1",
             None,
             Some(&recommendations),
         )
@@ -1011,7 +1131,8 @@ model_reasoning_effort = "medium"
             {"slug": "gpt-6-astra", "context_window": 1_050_000, "max_context_window": 1_050_000},
             {"slug": "gpt-6-luna", "context_window": 872_000, "max_context_window": 1_000_000},
             {"slug": "invalid-limit", "context_window": 0},
-        ]}).to_string();
+        ]})
+        .to_string();
         std::fs::write(&catalog, &catalog_text).unwrap();
         let recommendations = SetupRecommendations {
             context_1m: true,
@@ -1026,18 +1147,42 @@ model_reasoning_effort = "medium"
             let text = format!("model = '{model}'\n");
             std::fs::write(&path, &text).unwrap();
             let preview = setup_suggestion_from_file(
-                &path, true, "http://127.0.0.1:15721/v1", Some(&catalog), Some(&recommendations),
-            ).unwrap();
+                &path,
+                true,
+                "http://127.0.0.1:15722/v1",
+                Some(&catalog),
+                Some(&recommendations),
+            )
+            .unwrap();
             assert_eq!(preview.context_preset.copilot_model_limit, limit);
             assert!(preview.context_preset.current_context_window.is_none());
-            assert!(preview.context_preset.current_auto_compact_token_limit.is_none());
+            assert!(preview
+                .context_preset
+                .current_auto_compact_token_limit
+                .is_none());
             for (config, lines, expected_window, expected_compact) in [
-                (&preview.copilot_config, &preview.copilot_lines, window, compact),
-                (&preview.openai_config, &preview.openai_lines, 1_000_000, 900_000),
+                (
+                    &preview.copilot_config,
+                    &preview.copilot_lines,
+                    window,
+                    compact,
+                ),
+                (
+                    &preview.openai_config,
+                    &preview.openai_lines,
+                    1_000_000,
+                    900_000,
+                ),
             ] {
                 let proposed = config.parse::<toml_edit::DocumentMut>().unwrap();
-                assert_eq!(proposed["model_context_window"].as_integer(), Some(expected_window));
-                assert_eq!(proposed["model_auto_compact_token_limit"].as_integer(), Some(expected_compact));
+                assert_eq!(
+                    proposed["model_context_window"].as_integer(),
+                    Some(expected_window)
+                );
+                assert_eq!(
+                    proposed["model_auto_compact_token_limit"].as_integer(),
+                    Some(expected_compact)
+                );
                 assert!(expected_compact < expected_window);
                 assert_diff_snapshots(lines, &text, config);
             }
@@ -1047,13 +1192,24 @@ model_reasoning_effort = "medium"
         let profiled = "model = 'gpt-6-astra'\nprofile = 'luna'\n[profiles.luna]\nmodel = 'gpt-6-luna'\nmodel_reasoning_effort = 'high'\n";
         std::fs::write(&path, profiled).unwrap();
         let preview = setup_suggestion_from_file(
-            &path, true, "http://127.0.0.1:15721/v1", Some(&catalog), Some(&recommendations),
-        ).unwrap();
+            &path,
+            true,
+            "http://127.0.0.1:15722/v1",
+            Some(&catalog),
+            Some(&recommendations),
+        )
+        .unwrap();
         assert_eq!(preview.context_preset.model.as_deref(), Some("gpt-6-luna"));
         assert_eq!(preview.context_preset.copilot_context_window, 872_000);
-        let proposed = preview.copilot_config.parse::<toml_edit::DocumentMut>().unwrap();
+        let proposed = preview
+            .copilot_config
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
         assert_eq!(proposed["model_context_window"].as_integer(), Some(872_000));
-        assert_eq!(proposed["model_auto_compact_token_limit"].as_integer(), Some(784_800));
+        assert_eq!(
+            proposed["model_auto_compact_token_limit"].as_integer(),
+            Some(784_800)
+        );
         assert_eq!(
             proposed["profiles"].to_string(),
             profiled.parse::<toml_edit::DocumentMut>().unwrap()["profiles"].to_string()
@@ -1068,7 +1224,9 @@ approval_policy = 'never' # Keep this comment
 sandbox_mode = 'danger-full-access'
 model_reasoning_effort = 'ultra'
 notify = ['keep']
-"#.parse::<toml_edit::DocumentMut>().unwrap();
+"#
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
         let defaults = setup_setting_defaults(&current);
         assert_eq!(
             serde_json::to_value(defaults).unwrap(),
@@ -1100,11 +1258,18 @@ notify = ["unchanged"]
             ..Default::default()
         };
         let preview = setup_suggestion(
-            text, Path::new("config.toml"), true, "http://127.0.0.1:15721/v1",
-            None, Some(&recommendations),
-        ).unwrap();
+            text,
+            Path::new("config.toml"),
+            true,
+            "http://127.0.0.1:15722/v1",
+            None,
+            Some(&recommendations),
+        )
+        .unwrap();
         assert_eq!(preview.setting_defaults.len(), 1);
-        assert!(preview.setting_defaults[0].current_value.contains("granular"));
+        assert!(preview.setting_defaults[0]
+            .current_value
+            .contains("granular"));
         for config in [&preview.copilot_config, &preview.openai_config] {
             assert!(config.contains("model_context_window = 1_000_000 # Keep numeric formatting"));
             assert!(config.contains("model_auto_compact_token_limit = 900_000"));
@@ -1121,27 +1286,38 @@ notify = ["unchanged"]
             ("config.toml", "model = 'default-model'\n"),
             ("settings.json", r#"{"codexConfigDir":"unchanged"}"#),
             ("auth.json", r#"{"OPENAI_API_KEY":"unchanged"}"#),
-            ("first.toml", "# First file\nmodel_reasoning_effort = 'low'\n"),
-            ("second file.TOML", "# Second file\r\nmodel_reasoning_effort = 'high'\r\n"),
+            (
+                "first.toml",
+                "# First file\nmodel_reasoning_effort = 'low'\n",
+            ),
+            (
+                "second file.TOML",
+                "# Second file\r\nmodel_reasoning_effort = 'high'\r\n",
+            ),
         ];
         for (name, contents) in files {
             std::fs::write(directory.path().join(name), contents).unwrap();
         }
-        for ((name, text), effort, quote) in [
-            (files[3], "low", '"'),
-            (files[4], "high", '\''),
-        ] {
+        for ((name, text), effort, quote) in [(files[3], "low", '"'), (files[4], "high", '\'')] {
             let path = directory.path().join(name);
             let selected =
                 normalize_preview_config_path(&format!("  {quote}{}{quote}  ", path.display()))
                     .unwrap();
             assert_eq!(selected, path);
-            let preview =
-                setup_suggestion_from_file(&selected, true, "http://127.0.0.1:15721/v1", None, None)
-                    .unwrap();
+            let preview = setup_suggestion_from_file(
+                &selected,
+                true,
+                "http://127.0.0.1:15722/v1",
+                None,
+                None,
+            )
+            .unwrap();
             assert!(preview.config_exists);
             assert_eq!(preview.config_path, selected.to_string_lossy());
-            assert_eq!(serde_json::to_value(&preview).unwrap()["configExists"], true);
+            assert_eq!(
+                serde_json::to_value(&preview).unwrap()["configExists"],
+                true
+            );
             for (config, lines) in [
                 (&preview.copilot_config, &preview.copilot_lines),
                 (&preview.openai_config, &preview.openai_lines),
@@ -1157,7 +1333,10 @@ notify = ["unchanged"]
                 contents
             );
         }
-        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), files.len());
+        assert_eq!(
+            std::fs::read_dir(directory.path()).unwrap().count(),
+            files.len()
+        );
     }
 
     #[test]
@@ -1165,21 +1344,32 @@ notify = ["unchanged"]
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("missing-parent").join("config.toml");
         let preview =
-            setup_suggestion_from_file(&path, false, "http://127.0.0.1:15721/v1", None, None).unwrap();
+            setup_suggestion_from_file(&path, false, "http://127.0.0.1:15722/v1", None, None)
+                .unwrap();
         assert!(!preview.config_exists);
-        assert_eq!(serde_json::to_value(&preview).unwrap()["configExists"], false);
+        assert_eq!(
+            serde_json::to_value(&preview).unwrap()["configExists"],
+            false
+        );
         assert_diff_snapshots(&preview.copilot_lines, "", &preview.copilot_config);
-        assert!(setup_suggestion_from_file(&path, true, "http://127.0.0.1:15721/v1", None, None)
-            .unwrap_err()
-            .contains("does not exist"));
+        assert!(
+            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None)
+                .unwrap_err()
+                .contains("does not exist")
+        );
         assert!(!path.parent().unwrap().exists());
 
         let empty = directory.path().join("empty.toml");
         std::fs::write(&empty, "").unwrap();
         for explicit in [true, false] {
-            let preview =
-                setup_suggestion_from_file(&empty, explicit, "http://127.0.0.1:15721/v1", None, None)
-                    .unwrap();
+            let preview = setup_suggestion_from_file(
+                &empty,
+                explicit,
+                "http://127.0.0.1:15722/v1",
+                None,
+                None,
+            )
+            .unwrap();
             assert!(preview.config_exists);
             assert_diff_snapshots(&preview.copilot_lines, "", &preview.copilot_config);
             assert_eq!(std::fs::read_to_string(&empty).unwrap(), "");
@@ -1188,7 +1378,13 @@ notify = ["unchanged"]
 
     #[test]
     fn invalid_preview_paths_and_files_fail_without_rewriting_them() {
-        for path in ["", "\"\"", "relative/config.toml", "~/config.toml", "C:config.toml"] {
+        for path in [
+            "",
+            "\"\"",
+            "relative/config.toml",
+            "~/config.toml",
+            "C:config.toml",
+        ] {
             assert!(normalize_preview_config_path(path).is_err(), "{path}");
         }
         let directory = tempfile::tempdir().unwrap();
@@ -1198,20 +1394,26 @@ notify = ["unchanged"]
 
         let folder = directory.path().join("folder.toml");
         std::fs::create_dir(&folder).unwrap();
-        assert!(setup_suggestion_from_file(&folder, true, "http://localhost/v1", None, None).is_err());
+        assert!(
+            setup_suggestion_from_file(&folder, true, "http://localhost/v1", None, None).is_err()
+        );
 
         let broken = directory.path().join("broken.toml");
         std::fs::write(&broken, "broken = [").unwrap();
-        assert!(setup_suggestion_from_file(&broken, true, "http://localhost/v1", None, None)
-            .unwrap_err()
-            .contains("invalid"));
+        assert!(
+            setup_suggestion_from_file(&broken, true, "http://localhost/v1", None, None)
+                .unwrap_err()
+                .contains("invalid")
+        );
         assert_eq!(std::fs::read_to_string(&broken).unwrap(), "broken = [");
 
         let unreadable = directory.path().join("not-utf8.toml");
         std::fs::write(&unreadable, [0xff_u8]).unwrap();
-        assert!(setup_suggestion_from_file(&unreadable, true, "http://localhost/v1", None, None)
-            .unwrap_err()
-            .contains("Cannot read TOML file"));
+        assert!(
+            setup_suggestion_from_file(&unreadable, true, "http://localhost/v1", None, None)
+                .unwrap_err()
+                .contains("Cannot read TOML file")
+        );
         assert_eq!(std::fs::read(&unreadable).unwrap(), [0xff_u8]);
     }
 
@@ -1253,7 +1455,10 @@ notify = ["unchanged"]
         let proposed = format!("before\n{}new\n", "same\n".repeat(10));
         let (_, lines) = config_diff(&current, &proposed);
         assert_diff_snapshots(&lines, &current, &proposed);
-        assert_eq!(lines.iter().filter(|line| line.kind == "context").count(), 11);
+        assert_eq!(
+            lines.iter().filter(|line| line.kind == "context").count(),
+            11
+        );
     }
 
     #[test]
@@ -1263,7 +1468,6 @@ notify = ["unchanged"]
             "legacy".into(),
             "Old provider".into(),
             serde_json::json!({}),
-            None,
         );
         db.save_provider("codex", &old).unwrap();
         ensure_copilot_entry(&db).unwrap();
@@ -1294,11 +1498,10 @@ notify = ["unchanged"]
                 "config": "keep the stored template",
                 "modelCatalog": {"models": [
                     {"model": "gpt-6-astra", "supportsParallelToolCalls": false, "inputModalities": ["text", "image"], "contextWindow": 1048576},
-                    {"model": "gpt-6-luna", "inputModalities": ["text"], "contextWindow": 1000000, "defaultReasoningLevel": "ultra"},
+                    {"model": "gpt-6-luna", "inputModalities": ["text"], "contextWindow": 1000000, "reasoningLevels": ["low", "high", "ultra"], "defaultReasoningLevel": "ultra"},
                     {"model": "custom-alias", "inputModalities": ["text"]}
                 ]}
             }),
-            None,
         );
         let models = [
             CopilotModel {
@@ -1324,7 +1527,8 @@ notify = ["unchanged"]
         assert_eq!(rows[0]["contextWindow"], 1048576);
         assert_eq!(rows[1]["contextWindow"], 872000);
         assert_eq!(rows[1]["inputModalities"], json!(["text", "image"]));
-        assert!(rows[1].get("defaultReasoningLevel").is_none());
+        assert_eq!(rows[1]["reasoningLevels"], json!(["low", "high", "ultra"]));
+        assert_eq!(rows[1]["defaultReasoningLevel"], "ultra");
         assert_eq!(
             rows[2],
             json!({"model": "custom-alias", "inputModalities": ["text"]})
@@ -1334,6 +1538,184 @@ notify = ["unchanged"]
             "keep the stored template"
         );
         assert!(!merge_live_capabilities(&mut provider, &models));
+    }
+
+    #[test]
+    fn refresh_preserves_legacy_reasoning_and_prefers_usable_canonical_fields() {
+        use crate::proxy::providers::copilot_auth::CopilotModel;
+        use serde_json::json;
+        let models = [CopilotModel {
+            id: "gpt-6-astra".into(),
+            reasoning_efforts: Some(vec!["low".into(), "medium".into()]),
+            ..Default::default()
+        }];
+        for (canonical_levels, canonical_default) in [
+            (None, None),
+            (Some(json!([])), Some(json!(""))),
+            (Some(json!("invalid")), Some(json!(false))),
+            (Some(json!([null, 4, " "])), Some(json!(null))),
+            (Some(json!(["high", "max"])), Some(json!("max"))),
+        ] {
+            let mut row = json!({
+                "model": "gpt-6-astra",
+                "reasoning_levels": ["low", "ultra"],
+                "default_reasoning_level": "ultra"
+            });
+            let expected_levels = if canonical_levels == Some(json!(["high", "max"])) {
+                json!(["high", "max"])
+            } else {
+                json!(["low", "ultra"])
+            };
+            let expected_default = if canonical_default == Some(json!("max")) {
+                "max"
+            } else {
+                "ultra"
+            };
+            if let Some(levels) = canonical_levels {
+                row["reasoningLevels"] = levels;
+            }
+            if let Some(default) = canonical_default {
+                row["defaultReasoningLevel"] = default;
+            }
+            let mut provider = Provider::with_id(
+                "copilot".into(),
+                "Copilot".into(),
+                json!({"modelCatalog": {"models": [row]}}),
+            );
+            merge_live_capabilities(&mut provider, &models);
+            let saved = &provider.settings_config["modelCatalog"]["models"][0];
+            assert_eq!(saved["reasoningLevels"], expected_levels);
+            assert_eq!(saved["defaultReasoningLevel"], expected_default);
+            assert!(!merge_live_capabilities(&mut provider, &models));
+        }
+    }
+
+    #[test]
+    fn refresh_initializes_unset_reasoning_without_forcing_a_default() {
+        use crate::proxy::providers::copilot_auth::CopilotModel;
+        use serde_json::json;
+        let mut provider = Provider::with_id(
+            "copilot".into(),
+            "Copilot".into(),
+            json!({"modelCatalog": {"models": [
+                {"model": "gpt-6-astra"},
+                {"model": "gpt-6-luna", "reasoningLevels": []}
+            ]}}),
+        );
+        let models = ["gpt-6-astra", "gpt-6-luna"].map(|id| CopilotModel {
+            id: id.into(),
+            reasoning_efforts: Some(vec!["low".into(), "high".into()]),
+            ..Default::default()
+        });
+        assert!(merge_live_capabilities(&mut provider, &models));
+        for row in provider.settings_config["modelCatalog"]["models"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(row["reasoningLevels"], json!(["low", "high"]));
+            assert!(row.get("defaultReasoningLevel").is_none());
+        }
+        assert!(!merge_live_capabilities(&mut provider, &models));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn saved_reasoning_survives_database_reopen_and_startup_refresh() {
+        use crate::proxy::providers::copilot_auth::CopilotModel;
+        use serde_json::{json, Value};
+        use std::sync::Arc;
+
+        let fixture = TestHome::new();
+        let client_dir = fixture._dir.path().join(".codex");
+        std::fs::create_dir_all(client_dir.join("skills")).unwrap();
+        let files = [
+            (
+                "config.toml",
+                "# unchanged\nmodel_reasoning_effort = 'medium'\n",
+            ),
+            ("auth.json", r#"{"OPENAI_API_KEY":"keep-local-auth"}"#),
+            ("AGENTS.md", "Keep my instructions"),
+            ("skills/SKILL.md", "Keep my skill"),
+        ];
+        for (name, contents) in files {
+            std::fs::write(client_dir.join(name), contents).unwrap();
+        }
+        let provider_id = {
+            let db = Arc::new(Database::init().unwrap());
+            let state = AppState::new(db.clone());
+            initialize(&state).unwrap();
+            let id = current(&db).unwrap();
+            let mut provider = db.get_provider_by_id(&id, "codex").unwrap().unwrap();
+            provider.settings_config["modelCatalog"] = json!({"models": [{
+                "model": "GPT-6-LUNA",
+                "contextWindow": 1000000,
+                "supportsParallelToolCalls": false,
+                "inputModalities": ["text"],
+                "reasoningLevels": ["low", "high", "ultra"],
+                "defaultReasoningLevel": "ultra"
+            }]});
+            save(&db, &provider).unwrap();
+            id
+        };
+        let models = [CopilotModel {
+            id: "gpt-6-luna".into(),
+            context_window: Some(872000),
+            supports_parallel_tool_calls: Some(true),
+            supports_vision: Some(true),
+            reasoning_efforts: Some(vec!["low".into(), "medium".into(), "high".into()]),
+            ..Default::default()
+        }];
+
+        // Reopen the actual database and run startup initialization twice: once
+        // after the user's save and once after the live capabilities refresh.
+        for restart in 0..2 {
+            crate::settings::reload_settings().unwrap();
+            let db = Arc::new(Database::init().unwrap());
+            let state = AppState::new(db.clone());
+            initialize(&state).unwrap();
+            let mut provider = db
+                .get_provider_by_id(&provider_id, "codex")
+                .unwrap()
+                .unwrap();
+            let changed = merge_live_capabilities(&mut provider, &models);
+            assert_eq!(changed, restart == 0);
+            if changed {
+                save(&db, &provider).unwrap();
+            }
+            let saved = db
+                .get_provider_by_id(&provider_id, "codex")
+                .unwrap()
+                .unwrap();
+            let row = &saved.settings_config["modelCatalog"]["models"][0];
+            assert_eq!(row["reasoningLevels"], json!(["low", "high", "ultra"]));
+            assert_eq!(row["defaultReasoningLevel"], "ultra");
+            assert_eq!(row["contextWindow"], 872000);
+            assert_eq!(row["supportsParallelToolCalls"], true);
+            assert_eq!(row["inputModalities"], json!(["text", "image"]));
+
+            assert!(catalog_path().starts_with(fixture._dir.path().join(".copilot-bridge-atlas")));
+            let catalog: Value =
+                serde_json::from_str(&std::fs::read_to_string(catalog_path()).unwrap()).unwrap();
+            let entry = &catalog["models"][0];
+            let levels = entry["supported_reasoning_levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|level| level["effort"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(levels, ["low", "high", "ultra"]);
+            assert_eq!(entry["default_reasoning_level"], "ultra");
+        }
+        for (name, contents) in files {
+            assert_eq!(
+                std::fs::read_to_string(client_dir.join(name)).unwrap(),
+                contents,
+                "{name}"
+            );
+        }
+        assert!(!client_dir
+            .join("copilot-bridge-atlas-model-catalog.json")
+            .exists());
     }
 
     #[test]
@@ -1361,9 +1743,14 @@ command = "unchanged"
         let path = dir.path().join("config.toml");
         let catalog = dir.path().join("atlas-models.json");
         std::fs::write(&path, text).unwrap();
-        let preview =
-            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15721/v1", Some(&catalog), None)
-                .unwrap();
+        let preview = setup_suggestion_from_file(
+            &path,
+            true,
+            "http://127.0.0.1:15722/v1",
+            Some(&catalog),
+            None,
+        )
+        .unwrap();
         assert!(preview.config_exists);
         let proposed = preview
             .copilot_config
@@ -1372,7 +1759,7 @@ command = "unchanged"
         assert_eq!(proposed["model_provider"].as_str(), Some("bridge"));
         assert_eq!(
             proposed["model_providers"]["bridge"]["base_url"].as_str(),
-            Some("http://127.0.0.1:15721/v1")
+            Some("http://127.0.0.1:15722/v1")
         );
         for key in [
             "auth",
@@ -1419,7 +1806,7 @@ command = "unchanged"
             &preview.copilot_config,
             &path,
             true,
-            "http://127.0.0.1:15721/v1",
+            "http://127.0.0.1:15722/v1",
             Some(&catalog),
             None,
         )
@@ -1430,7 +1817,10 @@ command = "unchanged"
             &preview.copilot_config,
             &second.copilot_config,
         );
-        assert!(second.copilot_lines.iter().all(|line| line.kind == "context"));
+        assert!(second
+            .copilot_lines
+            .iter()
+            .all(|line| line.kind == "context"));
         assert_eq!(std::fs::read_to_string(path).unwrap(), text);
     }
 
@@ -1440,9 +1830,9 @@ command = "unchanged"
             "model_provider = 'custom'\nmodel_providers = { custom = { base_url = 'http://old/v1', env_key = 'OLD' } }\n",
             "model_provider = 'new'\nmodel_providers = { old = { base_url = 'http://old/v1' } }\n",
             "model_provider = 'missing'\n",
-            "model_provider = 'openai'\n[model_providers.openai]\nbase_url = 'http://127.0.0.1:15721/v1'\n",
+            "model_provider = 'openai'\n[model_providers.openai]\nbase_url = 'http://127.0.0.1:15722/v1'\n",
         ] {
-            let preview = setup_suggestion(text, Path::new("config.toml"), false, "http://127.0.0.1:15721/v1", None, None).unwrap();
+            let preview = setup_suggestion(text, Path::new("config.toml"), false, "http://127.0.0.1:15722/v1", None, None).unwrap();
             let doc = preview.copilot_config.parse::<toml_edit::DocumentMut>().unwrap();
             let id = doc["model_provider"].as_str().unwrap();
             assert_ne!(id, "openai");
@@ -1459,7 +1849,7 @@ model_provider = "my-copilot"
 model = "gpt-6-astra"
 model_auto_compact_token_limit = 900000
 [model_providers.my-copilot]
-base_url = "http://127.0.0.1:15721/v1"
+base_url = "http://127.0.0.1:15722/v1"
 experimental_bearer_token = "private-token"
 [mcp_servers.example]
 command = "keep-me"
@@ -1468,7 +1858,8 @@ command = "keep-me"
         let path = temp.path().join("config.toml");
         std::fs::write(&path, text).unwrap();
         let result =
-            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15721/v1", None, None).unwrap();
+            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None)
+                .unwrap();
         assert!(result.configured);
         let parsed = result.suggestion.parse::<toml_edit::DocumentMut>().unwrap();
         assert_eq!(parsed["model_provider"].as_str(), Some("my-copilot"));
@@ -1483,20 +1874,39 @@ command = "keep-me"
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
         for text in ["", "model_provider = \"openai\"\n"] {
-            let result = setup_suggestion(text, &path, false, "http://127.0.0.1:15721/v1", None, None).unwrap();
+            let result =
+                setup_suggestion(text, &path, false, "http://127.0.0.1:15722/v1", None, None)
+                    .unwrap();
             assert_diff_snapshots(&result.copilot_lines, text, &result.copilot_config);
             assert_diff_snapshots(&result.openai_lines, text, &result.openai_config);
             assert!(!result.configured);
-            assert!(result.suggestion.contains("model_provider = \"cc-switch\""));
+            assert!(result
+                .suggestion
+                .contains("model_provider = \"copilot-bridge-atlas\""));
             assert!(!path.exists());
         }
-        assert!(setup_suggestion("broken = [", &path, false, "http://localhost/v1", None, None).is_err());
+        assert!(setup_suggestion(
+            "broken = [",
+            &path,
+            false,
+            "http://localhost/v1",
+            None,
+            None
+        )
+        .is_err());
         assert!(!path.exists());
-        let official = "model_provider = \"openai\"\n[model_providers.copilot]\nbase_url = \"http://127.0.0.1:15721/v1\"\n";
+        let official = "model_provider = \"openai\"\n[model_providers.copilot]\nbase_url = \"http://127.0.0.1:15722/v1\"\n";
         assert!(
-            !setup_suggestion(official, &path, false, "http://127.0.0.1:15721/v1", None, None)
-                .unwrap()
-                .configured
+            !setup_suggestion(
+                official,
+                &path,
+                false,
+                "http://127.0.0.1:15722/v1",
+                None,
+                None
+            )
+            .unwrap()
+            .configured
         );
     }
 
@@ -1507,7 +1917,7 @@ command = "keep-me"
             assert!(require_codex(app).is_err());
         }
         let mut provider =
-            Provider::with_id("test".into(), "test".into(), serde_json::json!({}), None);
+            Provider::with_id("test".into(), "test".into(), serde_json::json!({}));
         assert!(require_copilot(&provider).is_err());
         provider.meta = Some(
             serde_json::from_value(serde_json::json!({
@@ -1521,33 +1931,8 @@ command = "keep-me"
     #[tokio::test]
     #[serial_test::serial]
     async fn provider_and_proxy_lifecycle_leave_client_files_unchanged() {
-        struct TestHome {
-            previous: Option<std::ffi::OsString>,
-            _dir: tempfile::TempDir,
-        }
-        impl Drop for TestHome {
-            fn drop(&mut self) {
-                if let Some(previous) = &self.previous {
-                    std::env::set_var("CC_SWITCH_TEST_HOME", previous);
-                } else {
-                    std::env::remove_var("CC_SWITCH_TEST_HOME");
-                }
-                let _ = crate::settings::reload_settings();
-            }
-        }
-        let directory = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("CC_SWITCH_TEST_HOME");
-        std::env::set_var("CC_SWITCH_TEST_HOME", directory.path());
-        let fixture = TestHome {
-            previous,
-            _dir: directory,
-        };
-        let app_dir = fixture._dir.path().join(".cc-switch");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        // Prevent the legacy Windows HOME fallback from escaping the test directory.
-        std::fs::write(app_dir.join("cc-switch.db"), []).unwrap();
-        assert_eq!(crate::config::get_app_config_dir(), app_dir);
-        crate::settings::reload_settings().unwrap();
+        let fixture = TestHome::new();
+        let app_dir = fixture._dir.path().join(".copilot-bridge-atlas");
         let client_dir = fixture._dir.path().join(".codex");
         std::fs::create_dir_all(client_dir.join("skills")).unwrap();
         let files = [
@@ -1568,7 +1953,6 @@ command = "keep-me"
                 "config": "model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://api.githubcopilot.com\"\n",
                 "modelCatalog": {"models": [{"model": "gpt-6-astra", "contextWindow": 1048576}]}
             }),
-            None,
         );
         provider.meta = Some(
             serde_json::from_value(serde_json::json!({
@@ -1586,12 +1970,19 @@ command = "keep-me"
         other.id = "copilot-b".into();
         db.save_provider("codex", &other).unwrap();
         // Old takeover data must never cause a restore or rewrite in this build.
-        db.save_live_backup("codex", r#"{"config":"old configuration"}"#)
-            .await
+        db.conn
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE proxy_live_backup (app_type TEXT PRIMARY KEY, original_config TEXT);
+             INSERT INTO proxy_live_backup VALUES ('codex', 'old configuration');",
+            )
             .unwrap();
         let mut settings = crate::settings::get_settings();
         settings.language = Some("ja".into());
-        settings.unify_codex_session_history = true;
+        settings
+            .legacy_options
+            .insert("retiredFeature".into(), serde_json::json!(true));
         crate::commands::save_settings(settings).await.unwrap();
         assert_eq!(
             crate::settings::get_settings().language.as_deref(),
@@ -1600,7 +1991,6 @@ command = "keep-me"
         crate::commands::sync_support::run_post_import_sync(&state).unwrap();
         let mut config = db.get_proxy_config().await.unwrap();
         config.listen_port = 0;
-        config.live_takeover_active = true;
         db.update_proxy_config(config).await.unwrap();
         let info = state.proxy_service.start().await.unwrap();
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
@@ -1657,7 +2047,17 @@ command = "keep-me"
         state.proxy_service.update_config(&updated).await.unwrap();
         state.proxy_service.stop().await.unwrap();
         assert!(save(&db, &other).is_err());
-        assert!(db.has_any_live_backup().await.unwrap());
+        let original_backup: String = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT original_config FROM proxy_live_backup WHERE app_type = 'codex'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(original_backup, "old configuration");
         for (name, contents) in files {
             assert_eq!(
                 std::fs::read_to_string(client_dir.join(name)).unwrap(),
@@ -1665,6 +2065,8 @@ command = "keep-me"
                 "{name}"
             );
         }
-        assert!(!client_dir.join("cc-switch-model-catalog.json").exists());
+        assert!(!client_dir
+            .join("copilot-bridge-atlas-model-catalog.json")
+            .exists());
     }
 }

@@ -30,7 +30,6 @@ import {
   formatOutputTokensPerSecond,
   fmtInt,
   fmtUsd,
-  getLocaleFromLanguage,
   parseFiniteNumber,
 } from "./format";
 
@@ -53,7 +52,7 @@ export function RequestLogTable({
   refreshIntervalMs,
   onRangeChange,
 }: RequestLogTableProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
 
   // 应用/Provider/模型筛选已上移到 Dashboard 顶栏（全局生效）；
   // 这里只保留日志特有的状态码筛选。
@@ -106,8 +105,7 @@ export function RequestLogTable({
     setPageInput("");
   };
 
-  const language = i18n.resolvedLanguage || i18n.language || "en";
-  const locale = getLocaleFromLanguage(language);
+  const locale = "en-US";
 
   return (
     <div className="space-y-4">
@@ -289,7 +287,7 @@ export function RequestLogTable({
                             }`}
                           >
                             {unpriced
-                              ? t("usage.unpriced", "未定价")
+                              ? t("usage.unpriced", "Unpriced")
                               : fmtUsd(log.totalCostUsd, 4)}
                           </div>
                           {parseFiniteNumber(log.costMultiplier) != null &&

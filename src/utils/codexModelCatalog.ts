@@ -1,10 +1,11 @@
 import type { CodexCatalogModel } from "@/types";
 
+export const isGptModel = (model: string): boolean =>
+  /^gpt-.+/i.test(model.trim());
+
 export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
-  // 隐藏字段（原生 Responses profile 用）不在行 UI 暴露，但必须 load→save
-  // 原样保留，否则编辑保存 MiMo/MiniMax 等会丢官方 base_instructions、
-  // 并行工具、图像模态。DB SSOT 为 camelCase、live 反解兜底可能为 snake_case，
-  // 双格式兼容（与 displayName/contextWindow 一致）。
+  // Preserve saved capabilities and reasoning preferences through load/save.
+  // Accept both saved camelCase fields and catalog snake_case fields.
   const supportsParallelToolCalls =
     typeof item?.supportsParallelToolCalls === "boolean"
       ? item.supportsParallelToolCalls

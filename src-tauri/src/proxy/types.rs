@@ -7,50 +7,16 @@ pub struct ProxyConfig {
     pub listen_address: String,
     /// 监听端口
     pub listen_port: u16,
-    /// 最大重试次数
-    pub max_retries: u8,
-    /// 请求超时时间（秒）- 已废弃，保留兼容
-    pub request_timeout: u64,
     /// 是否启用日志
     pub enable_logging: bool,
-    /// 是否正在接管 Live 配置
-    #[serde(default)]
-    pub live_takeover_active: bool,
-    /// 流式首字超时（秒）- 等待首个数据块的最大时间，范围 1-120 秒，默认 60 秒
-    #[serde(default = "default_streaming_first_byte_timeout")]
-    pub streaming_first_byte_timeout: u64,
-    /// 流式静默超时（秒）- 两个数据块之间的最大间隔，范围 60-600 秒，填 0 禁用（防止中途卡住）
-    #[serde(default = "default_streaming_idle_timeout")]
-    pub streaming_idle_timeout: u64,
-    /// 非流式总超时（秒）- 非流式请求的总超时时间，范围 60-1200 秒，默认 600 秒（10 分钟）
-    #[serde(default = "default_non_streaming_timeout")]
-    pub non_streaming_timeout: u64,
-}
-
-fn default_streaming_first_byte_timeout() -> u64 {
-    60
-}
-
-fn default_streaming_idle_timeout() -> u64 {
-    120
-}
-
-fn default_non_streaming_timeout() -> u64 {
-    600
 }
 
 impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             listen_address: "127.0.0.1".to_string(),
-            listen_port: 15721, // 使用较少占用的高位端口
-            max_retries: 3,
-            request_timeout: 600,
+            listen_port: 15722, // 使用较少占用的高位端口
             enable_logging: true,
-            live_takeover_active: false,
-            streaming_first_byte_timeout: 60,
-            streaming_idle_timeout: 120,
-            non_streaming_timeout: 600,
         }
     }
 }
@@ -92,7 +58,7 @@ pub struct ProxyStatus {
 /// 活跃的代理目标信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveTarget {
-    pub app_type: String, // "Claude" | "Codex" | "Gemini"
+    pub app_type: String, // "codex"
     pub provider_name: String,
     pub provider_id: String,
 }
@@ -105,42 +71,7 @@ pub struct ProxyServerInfo {
     pub started_at: String,
 }
 
-/// 各应用的接管状态（是否改写该应用的 Live 配置指向本地代理）
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ProxyTakeoverStatus {
-    pub claude: bool,
-    pub codex: bool,
-    pub gemini: bool,
-    pub grokbuild: bool,
-    pub opencode: bool,
-    pub openclaw: bool,
-}
-
-/// Provider健康状态
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderHealth {
-    pub provider_id: String,
-    pub app_type: String,
-    pub is_healthy: bool,
-    pub consecutive_failures: u32,
-    pub last_success_at: Option<String>,
-    pub last_failure_at: Option<String>,
-    pub last_error: Option<String>,
-    pub updated_at: String,
-}
-
-/// Live 配置备份记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LiveBackup {
-    /// 应用类型 (claude/codex/gemini)
-    pub app_type: String,
-    /// 原始配置 JSON
-    pub original_config: String,
-    /// 备份时间
-    pub backed_up_at: String,
-}
-
-/// 全局代理配置（统一字段，三行镜像）
+/// Global listener configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalProxyConfig {
@@ -154,36 +85,6 @@ pub struct GlobalProxyConfig {
     pub enable_logging: bool,
 }
 
-/// 应用级代理配置（每个 app 独立）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppProxyConfig {
-    /// 应用类型 (claude/codex/gemini)
-    pub app_type: String,
-    /// 该 app 代理启用开关
-    pub enabled: bool,
-    /// 该 app 自动故障转移开关
-    pub auto_failover_enabled: bool,
-    /// 最大重试次数
-    pub max_retries: u32,
-    /// 流式首字超时（秒）
-    pub streaming_first_byte_timeout: u32,
-    /// 流式静默超时（秒）
-    pub streaming_idle_timeout: u32,
-    /// 非流式总超时（秒）
-    pub non_streaming_timeout: u32,
-    /// 熔断失败阈值
-    pub circuit_failure_threshold: u32,
-    /// 熔断恢复阈值
-    pub circuit_success_threshold: u32,
-    /// 熔断恢复等待时间（秒）
-    pub circuit_timeout_seconds: u32,
-    /// 错误率阈值
-    pub circuit_error_rate_threshold: f64,
-    /// 计算错误率的最小请求数
-    pub circuit_min_requests: u32,
-}
-
 fn default_true() -> bool {
     true
 }
@@ -192,61 +93,20 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
-/// Copilot 优化器配置
-///
-/// 存储在 settings 表中，key = "copilot_optimizer_config"
-/// 解决 Copilot 代理消耗量异常问题（Issue #1813）
+/// Copilot classification and session grouping configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopilotOptimizerConfig {
-    /// 总开关（默认开启 — 对 Copilot 用户至关重要）
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// x-initiator 请求分类（默认开启，P0 优先级）
     #[serde(default = "default_true")]
     pub request_classification: bool,
-    /// Tool result 消息合并（默认开启，P1 优先级）
-    #[serde(default = "default_true")]
-    pub tool_result_merging: bool,
-    /// Compact 请求识别（默认开启，P2 优先级）
-    #[serde(default = "default_true")]
-    pub compact_detection: bool,
-    /// 确定性 Request ID（默认开启，P3 优先级）
-    #[serde(default = "default_true")]
-    pub deterministic_request_id: bool,
-    /// Subagent 检测（默认开启）— 识别 Claude Code 子代理请求，
-    /// 设置 x-initiator=agent + x-interaction-type=conversation-subagent，避免子代理计费
-    #[serde(default = "default_true")]
-    pub subagent_detection: bool,
-    /// Warmup 小模型降级（默认开启 — 与参考实现对齐，避免探针请求消耗 premium quota）
-    #[serde(default = "default_true")]
-    pub warmup_downgrade: bool,
-    /// Warmup 降级使用的模型（默认 "gpt-5-mini"）
-    #[serde(default = "default_warmup_model")]
-    pub warmup_model: String,
-    /// 请求前主动剥离 assistant 消息里的 thinking / redacted_thinking block
-    ///
-    /// Copilot 的 OpenAI 兼容端点不接受 Anthropic thinking block。
-    #[serde(default = "default_true")]
-    pub strip_thinking: bool,
 }
-
-fn default_warmup_model() -> String {
-    "gpt-5-mini".to_string()
-}
-
 impl Default for CopilotOptimizerConfig {
     fn default() -> Self {
         Self {
             enabled: true,
             request_classification: true,
-            tool_result_merging: true,
-            compact_detection: true,
-            deterministic_request_id: true,
-            subagent_detection: true,
-            warmup_downgrade: true,
-            warmup_model: "gpt-5-mini".to_string(),
-            strip_thinking: true,
         }
     }
 }

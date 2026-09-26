@@ -1,65 +1,25 @@
-//! 数据库模块 - SQLite 数据持久化
-//!
-//! 此模块提供应用的核心数据存储功能，包括：
-//! - 供应商配置管理
-//! - MCP 服务器配置
-//! - 提示词管理
-//! - Skills 管理
-//! - 通用设置存储
-//!
-//! ## 架构设计
-//!
-//! ```text
-//! database/
-//! ├── mod.rs        - Database 结构体 + 初始化
-//! ├── schema.rs     - 表结构定义 + Schema 迁移
-//! ├── backup.rs     - SQL 导入导出 + 快照备份
-//! ├── migration.rs  - JSON → SQLite 数据迁移
-//! └── dao/          - 数据访问对象
-//!     ├── providers.rs
-//!     ├── mcp.rs
-//!     ├── prompts.rs
-//!     ├── skills.rs
-//!     └── settings.rs
-//! ```
+//! SQLite storage for the Copilot provider, proxy, usage history, and backups.
 
 pub(crate) mod backup;
 mod dao;
-mod migration;
 mod schema;
 
 #[cfg(test)]
 mod tests;
 
 // DAO 类型导出供外部使用
-pub(crate) use dao::providers_seed::{
-    is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, CODEX_OFFICIAL_PROVIDER_ID,
-    GROKBUILD_OFFICIAL_PROVIDER_ID,
-};
-pub(crate) use dao::proxy::{
-    validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
-    PRICING_SOURCE_RESPONSE,
-};
-pub use dao::FailoverQueueItem;
-pub use dao::Profile;
+pub(crate) use dao::proxy::{PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE};
 
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
-use rusqlite::{hooks::Action, Connection};
-use serde::Serialize;
+use rusqlite::Connection;
 use std::sync::Mutex;
 
 // DAO 方法通过 impl Database 提供，无需额外导出
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 19;
-
-/// 安全地序列化 JSON，避免 unwrap panic
-pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
-    serde_json::to_string(value)
-        .map_err(|e| AppError::Config(format!("JSON serialization failed: {e}")))
-}
+pub(crate) const SCHEMA_VERSION: i32 = 20;
 
 /// 安全地获取 Mutex 锁，避免 unwrap panic
 macro_rules! lock_conn {
@@ -81,21 +41,12 @@ pub struct Database {
     pub(crate) conn: Mutex<Connection>,
 }
 
-fn register_db_change_hook(conn: &Connection) {
-    conn.update_hook(Some(
-        |action: Action, _database: &str, table: &str, _row_id: i64| match action {
-            Action::SQLITE_INSERT | Action::SQLITE_UPDATE | Action::SQLITE_DELETE => {}
-            _ => {}
-        },
-    ));
-}
-
 impl Database {
     /// 初始化数据库连接并创建表
     ///
-    /// 数据库文件位于 `~/.cc-switch/cc-switch.db`
+    /// 数据库文件位于 `~/.copilot-bridge-atlas/copilot-bridge-atlas.db`
     pub fn init() -> Result<Self, AppError> {
-        let db_path = get_app_config_dir().join("cc-switch.db");
+        let db_path = get_app_config_dir().join("copilot-bridge-atlas.db");
         let db_exists = db_path.exists();
 
         // 确保父目录存在
@@ -114,12 +65,9 @@ impl Database {
             conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
-        register_db_change_hook(&conn);
-
         let db = Self {
             conn: Mutex::new(conn),
         };
-        db.create_tables()?;
 
         // Pre-migration backup: only when upgrading from an existing database
         {
@@ -188,12 +136,11 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
-        register_db_change_hook(&conn);
 
         let db = Self {
             conn: Mutex::new(conn),
         };
-        db.create_tables()?;
+        db.apply_schema_migrations()?;
         db.ensure_model_pricing_seeded()?;
 
         Ok(db)
@@ -270,23 +217,5 @@ impl Database {
         }
 
         Ok(rebuilt)
-    }
-
-    /// 检查 MCP 服务器表是否为空
-    pub fn is_mcp_table_empty(&self) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM mcp_servers", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(count == 0)
-    }
-
-    /// 检查提示词表是否为空
-    pub fn is_prompts_table_empty(&self) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM prompts", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(count == 0)
     }
 }

@@ -54,23 +54,6 @@ export const usageKeys = {
       filters?.providerName ?? null,
       filters?.model ?? null,
     ] as const,
-  summaryByApp: (
-    preset: UsageRangeSelection["preset"],
-    customStartDate: number | undefined,
-    customEndDate: number | undefined,
-    filters?: Pick<UsageScopeFilters, "providerName" | "model">,
-    liveEndTime?: boolean,
-  ) =>
-    [
-      ...usageKeys.all,
-      "summary-by-app",
-      preset,
-      customStartDate ?? 0,
-      customEndDate ?? 0,
-      liveEndTime ?? false,
-      filters?.providerName ?? null,
-      filters?.model ?? null,
-    ] as const,
   trends: (
     preset: UsageRangeSelection["preset"],
     customStartDate: number | undefined,
@@ -140,11 +123,7 @@ export const usageKeys = {
       page,
       pageSize,
     ] as const,
-  detail: (requestId: string) =>
-    [...usageKeys.all, "detail", requestId] as const,
   pricing: () => [...usageKeys.all, "pricing"] as const,
-  limits: (providerId: string, appType: string) =>
-    [...usageKeys.all, "limits", providerId, appType] as const,
 };
 
 /** 把 UI 侧的 "all" 哨兵归一成 undefined（后端语义：不过滤）。 */
@@ -179,33 +158,6 @@ export function useUsageSummary(
         effective.appType,
         effective.providerName,
         effective.model,
-      );
-    },
-    refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS,
-    refetchIntervalInBackground: options?.refetchIntervalInBackground ?? false,
-  });
-}
-
-export function useUsageSummaryByApp(
-  range: UsageRangeSelection,
-  filters?: Pick<UsageScopeFilters, "providerName" | "model">,
-  options?: UsageQueryOptions,
-) {
-  return useQuery({
-    queryKey: usageKeys.summaryByApp(
-      range.preset,
-      range.customStartDate,
-      range.customEndDate,
-      filters,
-      range.liveEndTime,
-    ),
-    queryFn: () => {
-      const { startDate, endDate } = resolveUsageRange(range);
-      return usageApi.getUsageSummaryByApp(
-        startDate,
-        endDate,
-        filters?.providerName,
-        filters?.model,
       );
     },
     refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS,
@@ -329,26 +281,10 @@ export function useRequestLogs({
   });
 }
 
-export function useRequestDetail(requestId: string) {
-  return useQuery({
-    queryKey: usageKeys.detail(requestId),
-    queryFn: () => usageApi.getRequestDetail(requestId),
-    enabled: !!requestId,
-  });
-}
-
 export function useModelPricing() {
   return useQuery({
     queryKey: usageKeys.pricing(),
     queryFn: usageApi.getModelPricing,
-  });
-}
-
-export function useProviderLimits(providerId: string, appType: string) {
-  return useQuery({
-    queryKey: usageKeys.limits(providerId, appType),
-    queryFn: () => usageApi.checkProviderLimits(providerId, appType),
-    enabled: !!providerId && !!appType,
   });
 }
 

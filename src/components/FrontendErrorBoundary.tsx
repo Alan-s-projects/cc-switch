@@ -42,13 +42,13 @@ export class FrontendErrorBoundary extends React.Component<
             <div className="space-y-1.5">
               <h1 className="text-base font-semibold">
                 {i18n.t("errors.frontendCrashTitle", {
-                  defaultValue: "界面遇到了问题",
+                  defaultValue: "Something went wrong in the interface",
                 })}
               </h1>
               <p className="text-sm leading-6 text-muted-foreground">
                 {i18n.t("errors.frontendCrashMessage", {
                   defaultValue:
-                    "已尝试将错误信息写入应用诊断日志。请重新加载界面；如果问题持续，请在提交 Issue 时附上日志。",
+                    "An attempt was made to write the error to the application diagnostic log. Reload the interface, and attach the log when opening an issue if the problem continues.",
                 })}
               </p>
             </div>
@@ -56,7 +56,7 @@ export class FrontendErrorBoundary extends React.Component<
           <Button className="w-full" onClick={() => window.location.reload()}>
             <RefreshCw className="mr-2 size-4" />
             {i18n.t("errors.reloadInterface", {
-              defaultValue: "重新加载界面",
+              defaultValue: "Reload interface",
             })}
           </Button>
         </section>

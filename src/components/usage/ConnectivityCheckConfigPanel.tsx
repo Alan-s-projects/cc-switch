@@ -91,7 +91,7 @@ export function ConnectivityCheckConfigPanel() {
         <AlertDescription>
           {t("streamCheck.connectivityNote", {
             defaultValue:
-              "连通检测仅探测供应商地址是否可达，不发送真实模型请求。收到任意响应即视为“可达”——这不代表鉴权或模型配置一定正确。",
+              'Connectivity check only probes whether the provider address is reachable; it does not send a real model request. Any response counts as "reachable" — which does not guarantee that auth or model settings are correct.',
           })}
         </AlertDescription>
       </Alert>

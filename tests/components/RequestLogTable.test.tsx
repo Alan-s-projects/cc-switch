@@ -83,7 +83,7 @@ describe("RequestLogTable", () => {
       <RequestLogTable
         range={initialRange}
         rangeLabel="Today"
-        appType="all"
+        appType="codex"
         refreshIntervalMs={0}
       />,
     );
@@ -103,7 +103,7 @@ describe("RequestLogTable", () => {
       <RequestLogTable
         range={nextRange}
         rangeLabel="Custom"
-        appType="all"
+        appType="codex"
         refreshIntervalMs={0}
       />,
     );
@@ -118,13 +118,13 @@ describe("RequestLogTable", () => {
     });
   });
 
-  it("resets pagination when the dashboard app filter changes", async () => {
+  it("resets pagination when the dashboard model filter changes", async () => {
     const range: UsageRangeSelection = { preset: "today" };
     const { rerender } = render(
       <RequestLogTable
         range={range}
         rangeLabel="Today"
-        appType="all"
+        appType="codex"
         refreshIntervalMs={0}
       />,
     );
@@ -144,7 +144,8 @@ describe("RequestLogTable", () => {
       <RequestLogTable
         range={range}
         rangeLabel="Today"
-        appType="claude"
+        appType="codex"
+        model="gpt-6-astra"
         refreshIntervalMs={0}
       />,
     );

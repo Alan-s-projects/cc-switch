@@ -36,7 +36,6 @@ export function CopilotSettingsPanel({ onCancel }: { onCancel: () => void }) {
     <>
       <ProviderForm
         key={provider.id}
-        appId="codex"
         initialData={provider}
         submitLabel={t("common.save")}
         onCancel={onCancel}

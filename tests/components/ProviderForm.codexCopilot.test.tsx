@@ -36,13 +36,11 @@ function renderForm(meta?: ProviderMeta) {
   render(
     <QueryClientProvider client={createTestQueryClient()}>
       <ProviderForm
-        appId="codex"
         submitLabel="save"
         onSubmit={onSubmit}
         onCancel={vi.fn()}
         initialData={{
           name: "GitHub Copilot",
-          category: "third_party",
           settingsConfig: { auth: {}, config, modelCatalog: { models } },
           meta: meta ?? { providerType: "github_copilot" },
         }}

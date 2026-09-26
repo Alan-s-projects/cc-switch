@@ -54,12 +54,12 @@ describe("managed auth status failures", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "无法加载 GitHub Copilot 账号状态，请重试。",
+      "Failed to load GitHub Copilot account status",
     );
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(onAccountSelect).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(authMocks.refetchCopilot).toHaveBeenCalledTimes(1);
   });
 });

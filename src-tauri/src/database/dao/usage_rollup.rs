@@ -187,6 +187,7 @@ mod tests {
     use super::compute_local_midnight_cutoff;
     use crate::database::Database;
     use crate::error::AppError;
+    use crate::services::sql_helpers::{INPUT_TOKEN_SEMANTICS_FRESH, INPUT_TOKEN_SEMANTICS_TOTAL};
     use chrono::{Local, TimeZone};
 
     fn local_dt(
@@ -243,7 +244,7 @@ mod tests {
                         request_id, provider_id, app_type, model,
                         input_tokens, output_tokens, total_cost_usd,
                         latency_ms, status_code, created_at
-                    ) VALUES (?1, 'p1', 'claude', 'claude-3', 100, 50, '0.01', 100, 200, ?2)",
+                    ) VALUES (?1, 'p1', 'codex', 'gpt-6-astra', 100, 50, '0.01', 100, 200, ?2)",
                     rusqlite::params![format!("old-{i}"), old_ts + i as i64],
                 )?;
             }
@@ -253,7 +254,7 @@ mod tests {
                         request_id, provider_id, app_type, model,
                         input_tokens, output_tokens, total_cost_usd,
                         latency_ms, status_code, created_at
-                    ) VALUES (?1, 'p1', 'claude', 'claude-3', 200, 100, '0.02', 150, 200, ?2)",
+                    ) VALUES (?1, 'p1', 'codex', 'gpt-6-astra', 200, 100, '0.02', 150, 200, ?2)",
                     rusqlite::params![format!("recent-{i}"), recent_ts + i as i64],
                 )?;
             }
@@ -265,7 +266,7 @@ mod tests {
         // Verify rollup data
         let conn = crate::database::lock_conn!(db.conn);
         let count: i64 = conn.query_row(
-            "SELECT request_count FROM usage_daily_rollups WHERE app_type = 'claude'",
+            "SELECT request_count FROM usage_daily_rollups WHERE app_type = 'codex'",
             [],
             |row| row.get(0),
         )?;
@@ -293,7 +294,7 @@ mod tests {
                     request_id, provider_id, app_type, model, request_model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     total_cost_usd, latency_ms, status_code, created_at, data_source
-                ) VALUES (?1, 'openai', 'codex', 'gpt-5.4', 'gpt-5.4', 100, 20, 10, 0, '0.10', 100, 200, ?2, 'proxy')",
+                ) VALUES (?1, 'copilot', 'codex', 'gpt-5.4', 'gpt-5.4', 100, 20, 10, 0, '0.10', 100, 200, ?2, 'proxy')",
                 rusqlite::params!["codex-proxy-old", old_ts],
             )?;
             conn.execute(
@@ -328,7 +329,7 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         let (provider_id, request_count, input_tokens, output_tokens, cache_read_tokens) = &rows[0];
-        assert_eq!(provider_id, "openai");
+        assert_eq!(provider_id, "copilot");
         assert_eq!(*request_count, 1);
         assert_eq!(*input_tokens, 90, "rollup stores normalized fresh input");
         assert_eq!(*output_tokens, 20);
@@ -385,20 +386,20 @@ mod tests {
 
         {
             let conn = crate::database::lock_conn!(db.conn);
-            // 路由接管行：model 是真实上游模型，request_model 是客户端别名。
-            // 同 model 下两个不同别名必须各自成行，prune 后映射关系仍可审计。
+            // Pinned and unpinned GPT request IDs can share an upstream model.
+            // Preserve the original request IDs in separate history buckets.
             for (i, request_model) in [
-                ("a", "claude-sonnet-4-6"),
-                ("b", "claude-sonnet-4-6"),
-                ("c", "claude-haiku-4-5"),
+                ("a", "gpt-6-astra"),
+                ("b", "gpt-6-astra"),
+                ("c", "gpt-6-astra-2026-09-01"),
             ] {
                 conn.execute(
                     "INSERT INTO proxy_request_logs (
                         request_id, provider_id, app_type, model, request_model,
                         input_tokens, output_tokens, total_cost_usd,
                         latency_ms, status_code, created_at
-                    ) VALUES (?1, 'p1', 'claude', 'kimi-k2', ?2, 100, 50, '0.01', 100, 200, ?3)",
-                    rusqlite::params![format!("takeover-{i}"), request_model, old_ts],
+                    ) VALUES (?1, 'p1', 'codex', 'gpt-6-astra', ?2, 100, 50, '0.01', 100, 200, ?3)",
+                    rusqlite::params![format!("request-alias-{i}"), request_model, old_ts],
                 )?;
             }
         }
@@ -409,7 +410,7 @@ mod tests {
         let conn = crate::database::lock_conn!(db.conn);
         let mut stmt = conn.prepare(
             "SELECT request_model, request_count FROM usage_daily_rollups
-             WHERE model = 'kimi-k2' ORDER BY request_model",
+             WHERE model = 'gpt-6-astra' ORDER BY request_model",
         )?;
         let rows = stmt
             .query_map([], |row| {
@@ -420,8 +421,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                ("claude-haiku-4-5".to_string(), 1),
-                ("claude-sonnet-4-6".to_string(), 2),
+                ("gpt-6-astra".to_string(), 2),
+                ("gpt-6-astra-2026-09-01".to_string(), 1),
             ]
         );
         Ok(())
@@ -435,13 +436,14 @@ mod tests {
 
         {
             let conn = crate::database::lock_conn!(db.conn);
-            // request 计价模式下 pricing_model 与 model 分叉，必须各自成行
+            // Preserve whether the recorded price used the requested base ID
+            // or the dated GPT response ID, together with its historical cost.
             conn.execute(
                 "INSERT INTO proxy_request_logs (
                     request_id, provider_id, app_type, model, request_model, pricing_model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
-                ) VALUES ('pm-a', 'p1', 'claude', 'kimi-k2', 'claude-sonnet-4-6', 'kimi-k2',
+                ) VALUES ('pm-a', 'p1', 'codex', 'gpt-6-astra-2026-09-01', 'gpt-6-astra', 'gpt-6-astra-2026-09-01',
                           100, 50, '0.01', 100, 200, ?1)",
                 rusqlite::params![old_ts],
             )?;
@@ -450,7 +452,7 @@ mod tests {
                     request_id, provider_id, app_type, model, request_model, pricing_model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
-                ) VALUES ('pm-b', 'p1', 'claude', 'kimi-k2', 'claude-sonnet-4-6', 'claude-sonnet-4-6',
+                ) VALUES ('pm-b', 'p1', 'codex', 'gpt-6-astra-2026-09-01', 'gpt-6-astra', 'gpt-6-astra',
                           100, 50, '0.30', 100, 200, ?1)",
                 rusqlite::params![old_ts],
             )?;
@@ -462,7 +464,7 @@ mod tests {
         let conn = crate::database::lock_conn!(db.conn);
         let mut stmt = conn.prepare(
             "SELECT pricing_model, total_cost_usd FROM usage_daily_rollups
-             WHERE model = 'kimi-k2' ORDER BY pricing_model",
+             WHERE model = 'gpt-6-astra-2026-09-01' ORDER BY pricing_model",
         )?;
         let rows = stmt
             .query_map([], |row| {
@@ -471,8 +473,10 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()?;
 
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].0, "claude-sonnet-4-6");
-        assert_eq!(rows[1].0, "kimi-k2");
+        assert_eq!(rows[0].0, "gpt-6-astra");
+        assert_eq!(rows[1].0, "gpt-6-astra-2026-09-01");
+        assert!((rows[0].1.parse::<f64>().unwrap() - 0.30).abs() < 1e-9);
+        assert!((rows[1].1.parse::<f64>().unwrap() - 0.01).abs() < 1e-9);
         Ok(())
     }
 
@@ -539,18 +543,21 @@ mod tests {
             conn.execute(
                 "INSERT INTO usage_daily_rollups
                     (date, app_type, provider_id, model, request_count, success_count,
-                     input_tokens, output_tokens, total_cost_usd, avg_latency_ms)
-                 VALUES (?1, 'claude', 'p1', 'claude-3', 10, 10, 1000, 500, '0.10', 100)",
-                [&date_str],
+                     input_tokens, output_tokens, cache_read_tokens, input_token_semantics,
+                     total_cost_usd, avg_latency_ms)
+                 VALUES (?1, 'codex', 'p1', 'gpt-6-astra', 10, 10, 1000, 500, 500, ?2, '0.10', 100)",
+                rusqlite::params![date_str, INPUT_TOKEN_SEMANTICS_FRESH],
             )?;
+            // Existing rollup input is already fresh. New request input includes
+            // 20 cached tokens: 120 total becomes 100 fresh exactly once.
             for i in 0..3 {
                 conn.execute(
                     "INSERT INTO proxy_request_logs (
                         request_id, provider_id, app_type, model,
-                        input_tokens, output_tokens, total_cost_usd,
+                        input_tokens, output_tokens, cache_read_tokens, input_token_semantics, total_cost_usd,
                         latency_ms, status_code, created_at
-                    ) VALUES (?1, 'p1', 'claude', 'claude-3', 100, 50, '0.01', 200, 200, ?2)",
-                    rusqlite::params![format!("merge-{i}"), old_ts + i as i64],
+                    ) VALUES (?1, 'p1', 'codex', 'gpt-6-astra', 120, 50, 20, ?3, '0.01', 200, 200, ?2)",
+                    rusqlite::params![format!("merge-{i}"), old_ts + i as i64, INPUT_TOKEN_SEMANTICS_TOTAL],
                 )?;
             }
         }
@@ -559,14 +566,17 @@ mod tests {
         assert_eq!(deleted, 3);
 
         let conn = crate::database::lock_conn!(db.conn);
-        let (count, input): (i64, i64) = conn.query_row(
-            "SELECT request_count, input_tokens FROM usage_daily_rollups
-             WHERE app_type = 'claude' AND provider_id = 'p1'",
+        let (count, input, cached, output, semantics): (i64, i64, i64, i64, i64) = conn.query_row(
+            "SELECT request_count, input_tokens, cache_read_tokens, output_tokens, input_token_semantics
+             FROM usage_daily_rollups WHERE app_type = 'codex' AND provider_id = 'p1'",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )?;
         assert_eq!(count, 13, "10 existing + 3 new");
         assert_eq!(input, 1300, "1000 existing + 300 new");
+        assert_eq!(cached, 560, "500 existing + 60 new");
+        assert_eq!(output, 650, "500 existing + 150 new");
+        assert_eq!(semantics, INPUT_TOKEN_SEMANTICS_FRESH);
         Ok(())
     }
 }

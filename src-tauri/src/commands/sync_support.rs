@@ -30,7 +30,7 @@ pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError>
         Ok(())
     } else {
         Err(AppError::Message(format!(
-            "部分导入后同步失败: {}",
+            "Post-import synchronization failed: {}",
             failures.join("; ")
         )))
     }
@@ -39,7 +39,6 @@ pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError>
 fn post_sync_warning<E: std::fmt::Display>(err: E) -> String {
     AppError::localized(
         "sync.post_operation_sync_failed",
-        format!("后置同步状态失败: {err}"),
         format!("Post-operation synchronization failed: {err}"),
     )
     .to_string()

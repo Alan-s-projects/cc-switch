@@ -35,12 +35,6 @@ pub async fn pick_directory(
 }
 
 #[tauri::command]
-pub async fn get_app_config_path() -> Result<String, String> {
-    let config_path = config::get_app_config_path();
-    Ok(config_path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
 pub async fn open_app_config_folder(handle: AppHandle) -> Result<bool, String> {
     let config_dir = config::get_app_config_dir();
 

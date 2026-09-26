@@ -24,11 +24,11 @@ import {
 } from "@/lib/modelsDevAutoSync";
 
 const state = {
-  configPath: "C:/Users/test/.cc-switch/model-pricing.json",
+  configPath: "C:/Users/test/.copilot-bridge-atlas/model-pricing.json",
   config: {
     autoSyncEnabled: true,
     includeCommonModels: true,
-    selectedModelKeys: ["relay/custom-model"],
+    selectedModelKeys: ["openai/gpt-6-luna"],
     excludedCommonModelKeys: [],
     lastSyncAt: null,
     lastSyncError: null,
@@ -47,19 +47,15 @@ describe("syncModelsDevPricing", () => {
         json: async () => ({
           openai: {
             models: {
+              "gpt-6-luna": {
+                name: "GPT-6 Luna",
+                release_date: "2025-07-01",
+                cost: { input: 0.5, output: 1 },
+              },
               "gpt-5": {
                 name: "GPT-5",
                 release_date: "2025-08-01",
                 cost: { input: 1, output: 2 },
-              },
-            },
-          },
-          relay: {
-            models: {
-              "custom-model": {
-                name: "Custom Model",
-                release_date: "2025-07-01",
-                cost: { input: 0.5, output: 1 },
               },
             },
           },
@@ -113,7 +109,7 @@ describe("syncModelsDevPricing", () => {
     expect(updateModelPricingBatch).toHaveBeenCalledWith([
       expect.objectContaining({ modelId: "gpt-5", inputCostPerMillion: "1" }),
       expect.objectContaining({
-        modelId: "custom-model",
+        modelId: "gpt-6-luna",
         inputCostPerMillion: "0.5",
       }),
     ]);
@@ -157,14 +153,14 @@ describe("syncModelsDevPricing", () => {
       config: {
         ...state.config,
         includeCommonModels: false,
-        selectedModelKeys: ["relay/custom-model"],
+        selectedModelKeys: ["openai/gpt-6-luna"],
       },
     });
 
     await syncModelsDevPricing();
 
     expect(updateModelPricingBatch).toHaveBeenCalledWith([
-      expect.objectContaining({ modelId: "custom-model" }),
+      expect.objectContaining({ modelId: "gpt-6-luna" }),
     ]);
   });
 
@@ -175,7 +171,7 @@ describe("syncModelsDevPricing", () => {
         ...state.config,
         autoSyncEnabled: false,
         includeCommonModels: false,
-        selectedModelKeys: ["relay/custom-model"],
+        selectedModelKeys: ["openai/gpt-6-luna"],
         lastSyncAt: Date.now(),
       },
     });
@@ -184,7 +180,7 @@ describe("syncModelsDevPricing", () => {
 
     expect(result.skipped).toBe(false);
     expect(updateModelPricingBatch).toHaveBeenCalledWith([
-      expect.objectContaining({ modelId: "custom-model" }),
+      expect.objectContaining({ modelId: "gpt-6-luna" }),
     ]);
   });
 

@@ -76,7 +76,7 @@ export const handlers = [
     success({
       running: false,
       address: "127.0.0.1",
-      port: 15721,
+      port: 15722,
       active_connections: 0,
       total_requests: 0,
       success_requests: 0,
@@ -96,12 +96,9 @@ export const handlers = [
     success({
       proxyEnabled: false,
       listenAddress: "127.0.0.1",
-      listenPort: 15721,
+      listenPort: 15722,
       enableLogging: true,
     }),
-  ),
-  ...["get_migration_result", "is_portable_mode", "get_auto_launch_status"].map(
-    (command) => http.post(`${root}/${command}`, () => success(false)),
   ),
   ...["restart_app", "update_tray_menu", "set_auto_launch"].map((command) =>
     http.post(`${root}/${command}`, () => success(true)),

@@ -12,12 +12,7 @@ import {
 } from "recharts";
 import { useUsageTrends } from "@/lib/query/usage";
 import { Loader2 } from "lucide-react";
-import {
-  fmtInt,
-  fmtUsd,
-  getLocaleFromLanguage,
-  parseFiniteNumber,
-} from "./format";
+import { fmtInt, fmtUsd, parseFiniteNumber } from "./format";
 import { resolveUsageRange } from "@/lib/usageRange";
 import type { UsageRangeSelection } from "@/types/usage";
 
@@ -163,7 +158,7 @@ export function UsageTrendChart({
   model,
   refreshIntervalMs,
 }: UsageTrendChartProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { startDate, endDate } = resolveUsageRange(range);
   const { data: trends, isLoading } = useUsageTrends(
     range,
@@ -175,8 +170,7 @@ export function UsageTrendChart({
 
   const durationSeconds = Math.max(endDate - startDate, 0);
   const isHourly = durationSeconds <= 24 * 60 * 60;
-  const language = i18n.resolvedLanguage || i18n.language || "en";
-  const dateLocale = getLocaleFromLanguage(language);
+  const dateLocale = "en-US";
   const tokenTickFormatter = useMemo(
     () => createUsageTrendTokenTickFormatter(dateLocale),
     [dateLocale],
@@ -236,7 +230,7 @@ export function UsageTrendChart({
     <div className="rounded-xl border border-border/50 bg-card/40 p-6 backdrop-blur-sm">
       <div className="mb-6 flex items-center justify-between">
         <h3 className="text-lg font-semibold">
-          {t("usage.trends", "使用趋势")}
+          {t("usage.trends", "Usage Trends")}
         </h3>
         <p className="text-sm text-muted-foreground">{rangeLabel}</p>
       </div>
@@ -315,7 +309,7 @@ export function UsageTrendChart({
               yAxisId="tokens"
               type="monotone"
               dataKey="inputTokens"
-              name={t("usage.inputTokens", "输入 Tokens")}
+              name={t("usage.inputTokens", "Input")}
               stroke="#3b82f6"
               fillOpacity={1}
               fill="url(#colorInput)"
@@ -325,7 +319,7 @@ export function UsageTrendChart({
               yAxisId="tokens"
               type="monotone"
               dataKey="outputTokens"
-              name={t("usage.outputTokens", "输出 Tokens")}
+              name={t("usage.outputTokens", "Output")}
               stroke="#22c55e"
               fillOpacity={1}
               fill="url(#colorOutput)"
@@ -335,7 +329,7 @@ export function UsageTrendChart({
               yAxisId="tokens"
               type="monotone"
               dataKey="cacheCreationTokens"
-              name={t("usage.cacheCreationTokens", "缓存创建")}
+              name={t("usage.cacheCreationTokens", "Cache Creation")}
               stroke="#f97316"
               fillOpacity={1}
               fill="url(#colorCacheCreation)"
@@ -345,7 +339,7 @@ export function UsageTrendChart({
               yAxisId="tokens"
               type="monotone"
               dataKey="cacheReadTokens"
-              name={t("usage.cacheReadTokens", "缓存命中")}
+              name={t("usage.cacheReadTokens", "Cache Hit")}
               stroke="#a855f7"
               fillOpacity={1}
               fill="url(#colorCacheRead)"
@@ -355,7 +349,7 @@ export function UsageTrendChart({
               yAxisId="cost"
               type="monotone"
               dataKey="cost"
-              name={t("usage.cost", "成本")}
+              name={t("usage.cost", "Cost")}
               stroke="#f43f5e"
               fill="none"
               strokeWidth={2}

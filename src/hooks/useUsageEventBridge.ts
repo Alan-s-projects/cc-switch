@@ -9,7 +9,7 @@ import { useWindowActive } from "@/lib/windowActivity";
  * UsageDashboard 相关查询，让用户无需等待 30s 轮询周期。
  *
  * 后端在 `proxy_request_logs` 写入新行时会 emit 该事件（200ms 防抖合并），
- * 来源覆盖代理日志、Claude/Codex/Gemini 会话同步、启动归档。
+ * Proxy usage changes invalidate the active dashboard queries.
  *
  * 该 hook 只挂在 UsageDashboard 上，避免在主界面其他位置无意义触发。
  */
