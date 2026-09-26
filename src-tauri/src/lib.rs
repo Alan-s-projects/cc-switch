@@ -1,6 +1,5 @@
 #![warn(unused_crate_dependencies)]
 
-mod app_store;
 mod auto_launch;
 mod codex_config;
 mod commands;
@@ -162,7 +161,6 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(window_state_flags())
@@ -171,8 +169,7 @@ pub fn run() {
         .setup(|app| {
             let _ = rustls::crypto::ring::default_provider().install_default();
 
-            // 预先刷新 Store 覆盖配置，确保后续路径读取正确（日志/数据库等）
-            app_store::initialize_app_config_dir_override(app.handle());
+            crate::config::initialize_legacy_app_config_dir(&app.path().app_data_dir()?);
             panic_hook::init_app_config_dir(crate::config::get_app_config_dir());
 
             // 初始化日志（输出到 <app_config_dir>/logs/copilot-bridge-atlas.log）
@@ -215,10 +212,6 @@ pub fn run() {
                 log::set_max_level(log::LevelFilter::Info);
                 log::info!("=== Copilot Bridge Atlas v{} started ===", env!("CARGO_PKG_VERSION"));
             }
-
-            // 首次读取覆盖路径时 logger 尚未可用；此处重放一次，
-            // 让 Store 损坏或路径无效等启动警告能够真正落盘。
-            let _ = app_store::initialize_app_config_dir_override(app.handle());
 
             set_windows_app_user_model_id(app.handle());
 
@@ -420,7 +413,6 @@ pub fn run() {
             commands::get_providers,
             commands::get_current_provider,
             commands::update_provider,
-            commands::pick_directory,
             commands::open_external,
             commands::get_init_error,
             commands::open_app_config_folder,
@@ -428,21 +420,14 @@ pub fn run() {
             commands::save_settings,
             commands::get_log_config,
             commands::set_log_config,
-            commands::restart_app,
             commands::check_for_updates,
             commands::copy_text_to_clipboard,
-            commands::get_app_config_dir_override,
-            commands::set_app_config_dir_override,
-            commands::export_config_to_file,
-            commands::import_config_from_file,
-            commands::save_file_dialog,
-            commands::open_file_dialog,
             commands::create_db_backup,
             commands::list_db_backups,
             commands::restore_db_backup,
             commands::rename_db_backup,
             commands::delete_db_backup,
-            commands::sync_current_providers_live,
+            commands::import_config_from_file,
             update_tray_menu,
             commands::set_auto_launch,
             commands::start_proxy_server,
@@ -458,13 +443,13 @@ pub fn run() {
             commands::get_usage_trends,
             commands::get_provider_stats,
             commands::get_model_stats,
+            commands::get_unpriced_model_usage,
             commands::get_request_logs,
             commands::get_model_pricing,
             commands::update_model_pricing,
             commands::delete_model_pricing,
+            commands::reset_model_pricing_to_defaults,
             commands::stream_check_provider,
-            commands::get_stream_check_config,
-            commands::save_stream_check_config,
             commands::get_global_proxy_url,
             commands::set_global_proxy_url,
             commands::test_proxy_url,

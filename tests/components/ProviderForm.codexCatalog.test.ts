@@ -79,6 +79,20 @@ describe("ProviderForm Codex catalog helpers", () => {
     ]);
   });
 
+  it("round-trips a disabled model while omitting the default enabled state", () => {
+    const disabled = { model: "gpt-6-luna", enabled: false };
+    expect(
+      normalizeCodexCatalogModelsForSave([
+        mapCodexCatalogModelForForm(disabled),
+      ]),
+    ).toEqual([disabled]);
+    expect(
+      normalizeCodexCatalogModelsForSave([
+        mapCodexCatalogModelForForm({ model: "gpt-6-astra", enabled: true }),
+      ]),
+    ).toEqual([{ model: "gpt-6-astra" }]);
+  });
+
   it("round-trips reasoning levels through load and save without loss", () => {
     // Load and save must preserve each GPT model's explicit reasoning list.
     const stored = [
@@ -105,6 +119,23 @@ describe("ProviderForm Codex catalog helpers", () => {
       { model: "gpt-6-astra", reasoningLevels: ["low", "high", "max"] },
       { model: "gpt-test" },
     ]);
+  });
+
+  it("preserves a disabled Copilot model through load and save", () => {
+    const stored = {
+      model: "gpt-6-luna",
+      displayName: "GPT-6 Luna",
+      enabled: false,
+    };
+
+    expect(
+      normalizeCodexCatalogModelsForSave([mapCodexCatalogModelForForm(stored)]),
+    ).toEqual([stored]);
+    expect(
+      normalizeCodexCatalogModelsForSave([
+        mapCodexCatalogModelForForm({ model: "gpt-6-astra", enabled: true }),
+      ]),
+    ).toEqual([{ model: "gpt-6-astra" }]);
   });
 
   it("trims reasoning level values on save", () => {

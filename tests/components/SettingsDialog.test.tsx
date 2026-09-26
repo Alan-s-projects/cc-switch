@@ -1,426 +1,175 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import "@testing-library/jest-dom";
-import { createContext, useContext, type ComponentProps } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createContext, useContext, type ReactNode } from "react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 
-const toastSuccessMock = vi.fn();
-const toastErrorMock = vi.fn();
-
-vi.mock("sonner", () => ({
-  toast: {
-    success: (...args: unknown[]) => toastSuccessMock(...args),
-    error: (...args: unknown[]) => toastErrorMock(...args),
-  },
+const mocks = vi.hoisted(() => ({
+  autoSaveSettings: vi.fn(),
+  t: vi.fn(
+    (key: string, options?: { defaultValue?: string }) =>
+      options?.defaultValue ?? key,
+  ),
 }));
 
-const tMock = vi.fn((key: string) => key);
 vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: tMock }),
+  useTranslation: () => ({ t: mocks.t }),
 }));
-
-interface SettingsMock {
-  settings: any;
-  isLoading: boolean;
-  isSaving: boolean;
-  appConfigDir?: string;
-  resolvedDirs: Record<string, string>;
-  requiresRestart: boolean;
-  updateAppConfigDir: ReturnType<typeof vi.fn>;
-  browseAppConfigDir: ReturnType<typeof vi.fn>;
-  resetAppConfigDir: ReturnType<typeof vi.fn>;
-  saveSettings: ReturnType<typeof vi.fn>;
-  autoSaveSettings: ReturnType<typeof vi.fn>;
-  acknowledgeRestart: ReturnType<typeof vi.fn>;
-}
-
-const createSettingsMock = (overrides: Partial<SettingsMock> = {}) => {
-  const base: SettingsMock = {
-    settings: {
-      showInTray: true,
-      launchOnStartup: true,
-      language: "en",
-    },
+vi.mock("@/hooks/useSettings", () => ({
+  useSettings: () => ({
+    settings: { showInTray: true, launchOnStartup: false },
     isLoading: false,
     isSaving: false,
-    appConfigDir: "/app-config",
-    resolvedDirs: {
-      appConfig: "/app-config",
-    },
-    requiresRestart: false,
-    updateAppConfigDir: vi.fn(),
-    browseAppConfigDir: vi.fn(),
-    resetAppConfigDir: vi.fn(),
-    saveSettings: vi.fn().mockResolvedValue({ requiresRestart: false }),
-    autoSaveSettings: vi.fn().mockResolvedValue({ requiresRestart: false }),
-    acknowledgeRestart: vi.fn(),
-  };
-
-  return { ...base, ...overrides };
-};
-
-interface ImportExportMock {
-  selectedFile: string;
-  status: string;
-  errorMessage: string | null;
-  backupId: string | null;
-  isImporting: boolean;
-  selectImportFile: ReturnType<typeof vi.fn>;
-  importConfig: ReturnType<typeof vi.fn>;
-  exportConfig: ReturnType<typeof vi.fn>;
-  clearSelection: ReturnType<typeof vi.fn>;
-}
-
-const createImportExportMock = (overrides: Partial<ImportExportMock> = {}) => {
-  const base: ImportExportMock = {
-    selectedFile: "",
-    status: "idle",
-    errorMessage: null,
-    backupId: null,
-    isImporting: false,
-    selectImportFile: vi.fn(),
-    importConfig: vi.fn(),
-    exportConfig: vi.fn(),
-    clearSelection: vi.fn(),
-  };
-
-  return { ...base, ...overrides };
-};
-
-let settingsMock = createSettingsMock();
-let importExportMock = createImportExportMock();
-const useImportExportSpy = vi.fn();
-let lastUseImportExportOptions: Record<string, unknown> | undefined;
-
-vi.mock("@/hooks/useSettings", () => ({
-  useSettings: () => settingsMock,
+    autoSaveSettings: mocks.autoSaveSettings,
+  }),
 }));
-
-vi.mock("@/hooks/useImportExport", () => ({
-  useImportExport: (options?: Record<string, unknown>) =>
-    useImportExportSpy(options),
-}));
-
-vi.mock("@/lib/api", () => ({
-  settingsApi: {
-    restart: vi.fn().mockResolvedValue(true),
-  },
-}));
-
-const TabsContext = createContext<{
-  value: string;
-  onValueChange?: (value: string) => void;
-}>({
-  value: "general",
-});
-
-vi.mock("@/components/ui/dialog", () => ({
-  Dialog: ({ open, children }: any) =>
-    open ? <div data-testid="dialog-root">{children}</div> : null,
-  DialogContent: ({ children }: any) => <div>{children}</div>,
-  DialogHeader: ({ children }: any) => <div>{children}</div>,
-  DialogFooter: ({ children }: any) => <div>{children}</div>,
-  DialogTitle: ({ children }: any) => <h2>{children}</h2>,
-  DialogDescription: ({ children }: any) => <div>{children}</div>,
-}));
-
-vi.mock("@/components/ui/tabs", () => {
-  return {
-    Tabs: ({ value, onValueChange, children }: any) => (
-      <TabsContext.Provider value={{ value, onValueChange }}>
-        <div data-testid="tabs">{children}</div>
-      </TabsContext.Provider>
-    ),
-    TabsList: ({ children }: any) => <div>{children}</div>,
-    TabsTrigger: ({ value, children }: any) => {
-      const ctx = useContext(TabsContext);
-      return (
-        <button type="button" onClick={() => ctx.onValueChange?.(value)}>
-          {children}
-        </button>
-      );
-    },
-    TabsContent: ({ value, children }: any) => {
-      const ctx = useContext(TabsContext);
-      if (ctx.value !== value) return null;
-      return <div data-testid={`tab-${value}`}>{children}</div>;
-    },
-  };
-});
-
 vi.mock("@/components/settings/ThemeSettings", () => ({
-  ThemeSettings: () => <div>theme-settings</div>,
+  ThemeSettings: () => <div>Theme settings</div>,
 }));
-
 vi.mock("@/components/settings/WindowSettings", () => ({
-  WindowSettings: ({ onChange }: any) => (
-    <button onClick={() => onChange({ launchOnStartup: false })}>
-      window-settings
+  WindowSettings: ({
+    onChange,
+  }: {
+    onChange: (updates: { launchOnStartup: boolean }) => Promise<boolean>;
+  }) => (
+    <button onClick={() => onChange({ launchOnStartup: true })}>
+      Toggle startup
     </button>
   ),
 }));
-vi.mock("@/components/settings/CopilotSettingsPanel", () => ({
-  CopilotSettingsPanel: ({ onCancel }: { onCancel: () => void }) => (
-    <div>
-      copilot-settings
-      <button onClick={onCancel}>cancel-copilot</button>
-    </div>
-  ),
+vi.mock("@/components/settings/ProxyTabContent", () => ({
+  ProxyTabContent: () => <div>Proxy settings</div>,
 }));
-
-vi.mock("@/components/settings/DirectorySettings", () => ({
-  DirectorySettings: ({
-    onBrowseAppConfig,
-    onResetAppConfig,
-    onAppConfigChange,
-  }: any) => (
+vi.mock("@/components/settings/BackupListSection", () => ({
+  BackupListSection: ({
+    onSettingsChange,
+  }: {
+    onSettingsChange: (updates: { backupRetainCount: number }) => void;
+  }) => (
     <div>
-      <button onClick={() => onBrowseAppConfig()}>browse-app-config</button>
-      <button onClick={() => onResetAppConfig()}>reset-app-config</button>
-      <button onClick={() => onAppConfigChange("/app/new")}>
-        change-app-config
+      <button onClick={() => onSettingsChange({ backupRetainCount: 7 })}>
+        Change backup retention
       </button>
     </div>
   ),
 }));
-
+vi.mock("@/components/settings/LogConfigPanel", () => ({
+  LogConfigPanel: () => <div>Log settings</div>,
+}));
+vi.mock("@/components/settings/AuthCenterPanel", () => ({
+  AuthCenterPanel: () => <div>Auth settings</div>,
+}));
+vi.mock("@/components/settings/CopilotSettingsPanel", () => ({
+  CopilotSettingsPanel: () => <div>Copilot settings</div>,
+}));
 vi.mock("@/components/settings/AboutSection", () => ({
-  AboutSection: () => <div>about</div>,
+  AboutSection: () => <div>About</div>,
+}));
+const TabsContext = createContext<{
+  value: string;
+  onValueChange?: (value: string) => void;
+}>({ value: "general" });
+
+vi.mock("@/components/ui/tabs", () => ({
+  Tabs: ({
+    value,
+    onValueChange,
+    children,
+  }: {
+    value: string;
+    onValueChange: (value: string) => void;
+    children: ReactNode;
+  }) => (
+    <TabsContext.Provider value={{ value, onValueChange }}>
+      {children}
+    </TabsContext.Provider>
+  ),
+  TabsList: ({ children }: { children: ReactNode }) => <nav>{children}</nav>,
+  TabsTrigger: ({
+    value,
+    children,
+  }: {
+    value: string;
+    children: ReactNode;
+  }) => {
+    const tabs = useContext(TabsContext);
+    return (
+      <button type="button" onClick={() => tabs.onValueChange?.(value)}>
+        {children}
+      </button>
+    );
+  },
+  TabsContent: ({
+    value,
+    children,
+  }: {
+    value: string;
+    children: ReactNode;
+  }) => {
+    const tabs = useContext(TabsContext);
+    return tabs.value === value ? <div>{children}</div> : null;
+  },
 }));
 
-let settingsApi: any;
-
-const renderSettingsPage = (
-  props?: Partial<ComponentProps<typeof SettingsPage>>,
-) => {
-  const client = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-    },
-  });
-  return render(
-    <QueryClientProvider client={client}>
-      <SettingsPage onOpenChange={vi.fn()} {...props} />
-    </QueryClientProvider>,
+beforeEach(() => {
+  mocks.autoSaveSettings.mockReset().mockResolvedValue(true);
+  mocks.t.mockImplementation(
+    (key: string, options?: { defaultValue?: string }) =>
+      options?.defaultValue ?? key,
   );
-};
+});
 
-describe("SettingsPage Component", () => {
-  beforeEach(async () => {
-    tMock.mockImplementation((key: string) => key);
-    settingsMock = createSettingsMock();
-    importExportMock = createImportExportMock();
-    useImportExportSpy.mockReset();
-    useImportExportSpy.mockImplementation(
-      (options?: Record<string, unknown>) => {
-        lastUseImportExportOptions = options;
-        return importExportMock;
-      },
-    );
-    lastUseImportExportOptions = undefined;
-    toastSuccessMock.mockReset();
-    toastErrorMock.mockReset();
-    settingsApi = (await import("@/lib/api")).settingsApi;
-    settingsApi.restart.mockClear();
-  });
+describe("SettingsPage", () => {
+  it("autosaves general preferences when they change", async () => {
+    render(<SettingsPage />);
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+    fireEvent.click(screen.getByRole("button", { name: "Toggle startup" }));
 
-  it("should not render form content when loading", () => {
-    settingsMock = createSettingsMock({ settings: null, isLoading: true });
-
-    renderSettingsPage();
-
-    expect(screen.queryByText("theme-settings")).not.toBeInTheDocument();
-    // 加载状态下显示 spinner 而不是表单内容
-    expect(document.querySelector(".animate-spin")).toBeInTheDocument();
-  });
-
-  it("disables Advanced Save while directory discovery is still loading", () => {
-    settingsMock = createSettingsMock({ isLoading: true });
-    renderSettingsPage();
-    fireEvent.click(screen.getByText("settings.tabAdvanced"));
-    const save = screen.getByRole("button", { name: /common\.save/ });
-    expect(save).toBeDisabled();
-    fireEvent.click(save);
-    expect(settingsMock.saveSettings).not.toHaveBeenCalled();
-  });
-
-  it("should render general and advanced tabs and trigger child callbacks", async () => {
-    const onOpenChange = vi.fn();
-    // 设置 selectedFile 后，按钮显示 settings.import（可执行导入）
-    importExportMock = createImportExportMock({
-      selectedFile: "/tmp/config.json",
-    });
-
-    renderSettingsPage({ onOpenChange });
-
-    expect(screen.getByText("theme-settings")).toBeInTheDocument();
-    for (const name of [
-      "settings.tabGeneral",
-      "settings.tabProxy",
-      "settings.tabAuth",
-      "Copilot",
-      "settings.tabAdvanced",
-      "About",
-    ]) {
-      expect(screen.getByRole("button", { name })).toBeVisible();
-    }
-    expect(
-      screen.queryByRole("button", { name: "usage.title" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "settings.tabAuth" })
-        .nextElementSibling,
-    ).toBe(screen.getByRole("button", { name: "Copilot" }));
-    expect(
-      screen.getByRole("button", { name: "settings.tabAdvanced" })
-        .nextElementSibling,
-    ).toBe(screen.getByRole("button", { name: "About" }));
-    expect(screen.queryByText("about")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "About" }));
-    expect(screen.getByText("about")).toBeVisible();
-    expect(screen.queryByText("theme-settings")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Copilot" }));
-    expect(screen.getByText("copilot-settings")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "cancel-copilot" }));
     await waitFor(() =>
-      expect(screen.getByText("theme-settings")).toBeVisible(),
+      expect(mocks.autoSaveSettings).toHaveBeenCalledWith({
+        launchOnStartup: true,
+      }),
+    );
+  });
+
+  it("keeps Backup & Restore, removes duplicate and customization panels, and has no global Save button", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+    await user.click(
+      screen.getByRole("button", { name: "settings.tabAdvanced" }),
     );
 
-    fireEvent.click(screen.getByText("window-settings"));
-    expect(settingsMock.autoSaveSettings).toHaveBeenCalledWith({
-      launchOnStartup: false,
+    const backupTrigger = screen.getByRole("button", {
+      name: /Backup & Restore/,
     });
-
-    fireEvent.click(screen.getByText("settings.tabAdvanced"));
+    await user.click(backupTrigger);
     expect(
-      screen.queryByText("settings.advanced.cloudSync.title"),
+      await screen.findByRole("heading", { name: "Backup & Restore" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", {
+        name: /settings\.advanced\.logConfig\.title/,
+      }),
+    );
+    expect(screen.getByText("Log settings")).toBeVisible();
+    expect(
+      screen.queryByText("settings.advanced.configDir.title"),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText("settings.advanced.data.title"));
-
-    // 有文件时，点击导入按钮执行 importConfig
-    fireEvent.click(screen.getByRole("button", { name: /settings\.import/ }));
-    expect(importExportMock.importConfig).toHaveBeenCalled();
+    expect(
+      screen.queryByText("settings.advanced.data.title"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("settings.advanced.connectivityCheck.title"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "common.save" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "settings.exportConfig" }),
+      screen.getByRole("button", { name: "Change backup retention" }),
     );
-    expect(importExportMock.exportConfig).toHaveBeenCalled();
-
-    // 清除选择按钮
-    fireEvent.click(screen.getByRole("button", { name: "common.clear" }));
-    expect(importExportMock.clearSelection).toHaveBeenCalled();
-  });
-
-  it("should reset tab content scroll position when switching settings tabs", () => {
-    const { container } = renderSettingsPage();
-    const scrollContainer = container.querySelector(
-      ".overflow-y-auto",
-    ) as HTMLDivElement | null;
-
-    expect(scrollContainer).not.toBeNull();
-
-    scrollContainer!.scrollTop = 640;
-    fireEvent.click(screen.getByText("settings.tabAdvanced"));
-
-    expect(scrollContainer!.scrollTop).toBe(0);
-  });
-
-  it("should pass onImportSuccess callback to useImportExport hook", async () => {
-    const onImportSuccess = vi.fn();
-
-    renderSettingsPage({ onImportSuccess });
-
-    expect(useImportExportSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ onImportSuccess }),
-    );
-    expect(lastUseImportExportOptions?.onImportSuccess).toBe(onImportSuccess);
-
-    if (typeof lastUseImportExportOptions?.onImportSuccess === "function") {
-      await lastUseImportExportOptions.onImportSuccess();
-    }
-    expect(onImportSuccess).toHaveBeenCalledTimes(1);
-  });
-
-  it("should call saveSettings and close dialog when clicking save", async () => {
-    const onOpenChange = vi.fn();
-    importExportMock = createImportExportMock();
-
-    renderSettingsPage({ onOpenChange });
-
-    // 保存按钮在 advanced tab 中
-    fireEvent.click(screen.getByText("settings.tabAdvanced"));
-    fireEvent.click(screen.getByRole("button", { name: /common\.save/ }));
-
-    await waitFor(() => {
-      expect(settingsMock.saveSettings).toHaveBeenCalledTimes(1);
-      expect(importExportMock.clearSelection).toHaveBeenCalledTimes(1);
-      expect(settingsMock.acknowledgeRestart).toHaveBeenCalledTimes(1);
-      expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(mocks.autoSaveSettings).toHaveBeenCalledWith({
+      backupRetainCount: 7,
     });
-  });
-
-  it("should show restart prompt and allow immediate restart after save", async () => {
-    settingsMock = createSettingsMock({
-      requiresRestart: true,
-      saveSettings: vi.fn().mockResolvedValue({ requiresRestart: true }),
-    });
-
-    renderSettingsPage();
-
-    expect(
-      await screen.findByText("settings.restartRequired"),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText("settings.restartNow"));
-
-    await waitFor(() => {
-      expect(toastSuccessMock).toHaveBeenCalledWith(
-        "settings.devModeRestartHint",
-        expect.objectContaining({ closeButton: true }),
-      );
-    });
-  });
-
-  it("should allow postponing restart and close dialog without restarting", async () => {
-    const onOpenChange = vi.fn();
-    settingsMock = createSettingsMock({ requiresRestart: true });
-
-    renderSettingsPage({ onOpenChange });
-
-    expect(
-      await screen.findByText("settings.restartRequired"),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText("settings.restartLater"));
-
-    await waitFor(() => {
-      expect(onOpenChange).toHaveBeenCalledWith(false);
-      expect(settingsMock.acknowledgeRestart).toHaveBeenCalledTimes(1);
-    });
-
-    expect(settingsApi.restart).not.toHaveBeenCalled();
-    expect(toastSuccessMock).not.toHaveBeenCalled();
-    expect(toastErrorMock).not.toHaveBeenCalled();
-  });
-
-  it("should trigger Atlas data-directory callbacks inside advanced tab", () => {
-    renderSettingsPage();
-
-    fireEvent.click(screen.getByText("settings.tabAdvanced"));
-    fireEvent.click(screen.getByText("settings.advanced.configDir.title"));
-
-    fireEvent.click(screen.getByText("browse-app-config"));
-    expect(settingsMock.browseAppConfigDir).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByText("reset-app-config"));
-    expect(settingsMock.resetAppConfigDir).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByText("change-app-config"));
-    expect(settingsMock.updateAppConfigDir).toHaveBeenCalledWith("/app/new");
   });
 });

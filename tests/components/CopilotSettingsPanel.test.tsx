@@ -44,8 +44,10 @@ vi.mock("@/components/providers/forms/ProviderForm", () => ({
     initialData,
     onSubmit,
     onManageAuthAccounts,
+    autoSave,
   }: ProviderFormProps) => (
     <>
+      <output data-testid="auto-save">{String(autoSave)}</output>
       <output data-testid="settings">
         {JSON.stringify(initialData?.settingsConfig)}
       </output>
@@ -86,7 +88,8 @@ describe("Copilot provider editing", () => {
     mocks.updateTray.mockReset().mockResolvedValue(undefined);
   });
   it("preserves stored models and account binding without importing live configuration", async () => {
-    render(<CopilotSettingsPanel onCancel={vi.fn()} />);
+    render(<CopilotSettingsPanel />);
+    expect(screen.getByTestId("auto-save")).toHaveTextContent("true");
     expect(screen.getByTestId("settings")).toHaveTextContent("gpt-6-astra");
     fireEvent.click(screen.getByRole("button", { name: "save" }));
     await waitFor(() =>
@@ -100,8 +103,7 @@ describe("Copilot provider editing", () => {
   });
 
   it("keeps draft fields while managing accounts and closes the account panel when leaving the tab", async () => {
-    const onCancel = vi.fn();
-    const { rerender } = render(<CopilotSettingsPanel onCancel={onCancel} />);
+    const { rerender } = render(<CopilotSettingsPanel />);
     fireEvent.change(screen.getByRole("textbox", { name: "Model draft" }), {
       target: { value: "draft-model" },
     });
@@ -116,7 +118,7 @@ describe("Copilot provider editing", () => {
     await waitFor(() =>
       expect(screen.queryByText("account-panel")).not.toBeInTheDocument(),
     );
-    rerender(<CopilotSettingsPanel onCancel={onCancel} />);
+    rerender(<CopilotSettingsPanel />);
     expect(screen.queryByText("account-panel")).not.toBeInTheDocument();
   });
 });

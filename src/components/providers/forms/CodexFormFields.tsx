@@ -1,17 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import {
-  Check,
-  ChevronsUpDown,
-  Loader2,
-  Plus,
-  RefreshCw,
-  Trash2,
-} from "lucide-react";
+import { Check, ChevronsUpDown, Loader2, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -355,6 +349,25 @@ export function CodexFormFields({
         position === index ? { ...model, ...patch } : model,
       ),
     );
+  const sortedCatalogModels = catalogModels
+    .map((model, index) => ({ model, index }))
+    .sort((left, right) => {
+      const enabledOrder =
+        Number(right.model.enabled !== false) -
+        Number(left.model.enabled !== false);
+      if (enabledOrder !== 0) return enabledOrder;
+
+      const leftName =
+        left.model.displayName?.trim() || left.model.model.trim();
+      const rightName =
+        right.model.displayName?.trim() || right.model.model.trim();
+      return (
+        leftName.localeCompare(rightName, "en-US", {
+          numeric: true,
+          sensitivity: "base",
+        }) || left.model.model.localeCompare(right.model.model)
+      );
+    });
   return (
     <div className="space-y-6">
       <CopilotAuthSection
@@ -424,7 +437,8 @@ export function CodexFormFields({
           Refresh updates image and parallel-tool capabilities. New models
           default to Copilot-reported reasoning levels, or the standard set if
           none are reported. Saved choices survive refresh. Input limits cap the
-          catalog context window.
+          catalog context window. Disable a model to hide it from Codex without
+          deleting its settings or pricing.
         </p>
         {catalogModels.length === 0 && (
           <p role="status" className="text-sm text-muted-foreground">
@@ -439,9 +453,9 @@ export function CodexFormFields({
                 })}
           </p>
         )}
-        {catalogModels.map((model, index) => (
+        {sortedCatalogModels.map(({ model, index }) => (
           <div key={index} className="space-y-2 rounded-lg border p-3">
-            <div className="grid gap-2 md:grid-cols-[1fr_1fr_140px_1fr_36px]">
+            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_140px_minmax(0,1fr)_44px]">
               <Input
                 aria-label="Display name"
                 value={model.displayName ?? ""}
@@ -487,19 +501,18 @@ export function CodexFormFields({
                   updateModel(index, { defaultReasoningLevel })
                 }
               />
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                aria-label={`Remove model ${model.model || index + 1}`}
-                onClick={() =>
-                  onCatalogModelsChange(
-                    catalogModels.filter((_, position) => position !== index),
-                  )
-                }
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+              <div className="flex items-center justify-center">
+                <Switch
+                  checked={model.enabled !== false}
+                  onCheckedChange={(enabled) =>
+                    updateModel(index, { enabled: enabled ? undefined : false })
+                  }
+                  aria-label={t("codexConfig.modelAvailableInCodex", {
+                    model:
+                      model.displayName?.trim() || model.model || index + 1,
+                  })}
+                />
+              </div>
             </div>
             <p className="text-xs text-muted-foreground">
               Images:{" "}

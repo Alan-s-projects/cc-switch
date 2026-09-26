@@ -80,7 +80,7 @@ fn refresh_catalog(provider: &Provider) -> Result<(), AppError> {
         match std::fs::remove_file(catalog_path()) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(AppError::io(&catalog_path(), error)),
+            Err(error) => return Err(AppError::io(catalog_path(), error)),
         }
     }
     Ok(())
@@ -1692,7 +1692,6 @@ command = "keep-me"
             crate::settings::get_settings().language.as_deref(),
             Some("en")
         );
-        crate::commands::sync_support::run_post_import_sync(&state).unwrap();
         let mut config = db.get_proxy_config().await.unwrap();
         config.listen_port = 0;
         db.update_proxy_config(config).await.unwrap();

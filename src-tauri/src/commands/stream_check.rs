@@ -13,7 +13,7 @@ pub async fn stream_check_provider(
     provider_id: String,
 ) -> Result<StreamCheckResult, AppError> {
     crate::copilot_bridge::require_codex(&app_type)?;
-    let config = state.db.get_stream_check_config()?;
+    let config = StreamCheckConfig::default();
     let provider = state
         .db
         .get_provider_by_id(&provider_id, "codex")?
@@ -30,19 +30,6 @@ pub async fn stream_check_provider(
         .db
         .save_stream_check_log(&provider.id, &provider.name, "codex", &result);
     Ok(result)
-}
-
-#[tauri::command]
-pub fn get_stream_check_config(state: State<'_, AppState>) -> Result<StreamCheckConfig, AppError> {
-    state.db.get_stream_check_config()
-}
-
-#[tauri::command]
-pub fn save_stream_check_config(
-    state: State<'_, AppState>,
-    config: StreamCheckConfig,
-) -> Result<(), AppError> {
-    state.db.save_stream_check_config(&config)
 }
 
 async fn resolve_copilot_endpoint(

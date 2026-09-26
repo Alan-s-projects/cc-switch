@@ -5,7 +5,7 @@ use crate::services::model_pricing;
 use crate::settings;
 use crate::store::AppState;
 
-pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError> {
+pub(crate) fn run_post_restore_sync(app_state: &AppState) -> Result<(), AppError> {
     let mut failures = Vec::new();
 
     if let Err(error) = crate::copilot_bridge::initialize(app_state) {
@@ -30,7 +30,7 @@ pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError>
         Ok(())
     } else {
         Err(AppError::Message(format!(
-            "Post-import synchronization failed: {}",
+            "Post-restore synchronization failed: {}",
             failures.join("; ")
         )))
     }
@@ -52,8 +52,8 @@ pub(crate) fn post_sync_warning_from_result(
 
 pub(crate) fn attach_warning(mut value: Value, warning: Option<String>) -> Value {
     if let Some(message) = warning {
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("warning".to_string(), Value::String(message));
+        if let Some(object) = value.as_object_mut() {
+            object.insert("warning".to_string(), Value::String(message));
         }
     }
     value
@@ -72,7 +72,7 @@ pub(crate) fn success_payload_with_warning(backup_id: String, warning: Option<St
 
 #[cfg(test)]
 mod tests {
-    use super::{attach_warning, post_sync_warning_from_result};
+    use super::{attach_warning, post_sync_warning_from_result, success_payload_with_warning};
     use serde_json::json;
 
     #[test]
@@ -99,16 +99,14 @@ mod tests {
     }
 
     #[test]
-    fn attach_warning_adds_warning_without_dropping_existing_fields() {
-        let payload = json!({ "status": "downloaded" });
-        let updated = attach_warning(payload, Some("post sync warning".to_string()));
-        assert_eq!(
-            updated.get("status").and_then(|v| v.as_str()),
-            Some("downloaded")
-        );
-        assert_eq!(
-            updated.get("warning").and_then(|v| v.as_str()),
-            Some("post sync warning")
-        );
+    fn attach_warning_adds_post_import_warning_without_dropping_result_fields() {
+        let payload =
+            success_payload_with_warning("backup-1".into(), Some("post-import sync failed".into()));
+        assert_eq!(payload["success"], true);
+        assert_eq!(payload["backupId"], "backup-1");
+        assert_eq!(payload["warning"], "post-import sync failed");
+
+        let payload = attach_warning(json!({"status": "ok"}), None);
+        assert_eq!(payload, json!({"status": "ok"}));
     }
 }

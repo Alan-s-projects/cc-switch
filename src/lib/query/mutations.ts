@@ -5,7 +5,9 @@ import { providersApi, settingsApi } from "@/lib/api";
 import type { Provider, Settings } from "@/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
 
-export const useUpdateProviderMutation = () => {
+export const useUpdateProviderMutation = ({
+  showSuccessToast = true,
+}: { showSuccessToast?: boolean } = {}) => {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
   return useMutation({
@@ -19,7 +21,9 @@ export const useUpdateProviderMutation = () => {
       await queryClient.invalidateQueries({
         queryKey: ["codex-setup-suggestion"],
       });
-      toast.success(t("notifications.updateSuccess"));
+      if (showSuccessToast) {
+        toast.success(t("notifications.updateSuccess"));
+      }
     },
     onError: (error) => toast.error(extractErrorMessage(error)),
   });

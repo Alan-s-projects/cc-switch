@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import App from "@/App";
 import { createTestQueryClient } from "../utils/testQueryClient";
 const mocks = vi.hoisted(() => ({
-  autoSaveSettings: vi.fn().mockResolvedValue({ requiresRestart: false }),
+  autoSaveSettings: vi.fn().mockResolvedValue(true),
   providers: vi.fn(() => ({
     data: {
       providers: {

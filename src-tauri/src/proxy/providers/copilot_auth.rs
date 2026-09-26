@@ -1612,6 +1612,11 @@ impl CopilotAuthManager {
     }
 }
 
+fn auth_header_value(value: &str) -> Result<http::HeaderValue, ProxyError> {
+    http::HeaderValue::from_str(value)
+        .map_err(|error| ProxyError::AuthError(format!("Invalid authentication header: {error}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2211,9 +2216,4 @@ mod tests {
         let account = GitHubAccount::from(&data);
         assert_eq!(account.id, "company.ghe.com:99999");
     }
-}
-
-fn auth_header_value(value: &str) -> Result<http::HeaderValue, ProxyError> {
-    http::HeaderValue::from_str(value)
-        .map_err(|error| ProxyError::AuthError(format!("Invalid authentication header: {error}")))
 }

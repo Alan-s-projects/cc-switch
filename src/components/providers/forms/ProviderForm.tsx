@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Loader2 } from "lucide-react";
 import type { ManagedAuthProvider } from "@/lib/api";
 import type {
   Provider,
@@ -49,6 +50,7 @@ export const normalizeCodexCatalogModelsForSave = (
 
     normalized.push({
       model,
+      ...(item.enabled === false ? { enabled: false } : {}),
       ...(displayName ? { displayName } : {}),
       ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
       // Native Responses profile overrides (ignored by the chat/proxy profile).
@@ -70,9 +72,10 @@ export const normalizeCodexCatalogModelsForSave = (
 };
 
 export interface ProviderFormProps {
-  submitLabel: string;
+  autoSave?: boolean;
+  submitLabel?: string;
   onSubmit: (values: ProviderFormValues) => Promise<void> | void;
-  onCancel: () => void;
+  onCancel?: () => void;
   onManageAuthAccounts?: (target: ManagedAuthProvider) => void;
   initialData?: Partial<Provider>;
 }
@@ -88,6 +91,7 @@ export function ProviderForm({
   onSubmit,
   onCancel,
   submitLabel,
+  autoSave = false,
   onManageAuthAccounts,
 }: ProviderFormProps) {
   const { t } = useTranslation();
@@ -98,6 +102,20 @@ export function ProviderForm({
   };
   const initialMeta = initialData?.meta;
   const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<
+    "idle" | "saved" | "error" | "invalid" | "auth-required"
+  >("idle");
+  const [autoSaveVersion, setAutoSaveVersion] = useState(0);
+  const saveVersionRef = useRef(0);
+  const savedVersionRef = useRef(0);
+  const queuedVersionRef = useRef(0);
+  const failedVersionRef = useRef(0);
+  const pendingSavesRef = useRef(0);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const onSubmitRef = useRef(onSubmit);
+  const mountedRef = useRef(false);
+  const flushAutoSaveRef = useRef<() => void>(() => {});
+  onSubmitRef.current = onSubmit;
   const [accountId, setAccountId] = useState<string | null>(
     initialMeta?.authBinding?.accountId ?? initialMeta?.githubAccountId ?? null,
   );
@@ -112,8 +130,148 @@ export function ProviderForm({
       .filter((item) => isGptModel(item.model));
   });
 
+  const markChanged = useCallback(() => {
+    const nextVersion = saveVersionRef.current + 1;
+    saveVersionRef.current = nextVersion;
+    setAutoSaveVersion(nextVersion);
+    setSaveStatus("idle");
+  }, []);
+
+  const buildValues = useCallback((): ProviderFormValues => {
+    const meta: ProviderMeta = {
+      ...initialMeta,
+      providerType: "github_copilot",
+      apiFormat: format === "auto" ? "openai_chat" : format,
+      codexCopilotApiFormat: format === "auto" ? undefined : format,
+      githubAccountId: accountId ?? undefined,
+      authBinding: {
+        source: "managed_account",
+        authProvider: "github_copilot",
+        accountId: accountId ?? undefined,
+      },
+    };
+    return {
+      name: initialData?.name ?? "GitHub Copilot",
+      meta,
+      settingsConfig: JSON.stringify({
+        ...settings,
+        modelCatalog: { models: normalizeCodexCatalogModelsForSave(catalog) },
+      }),
+    };
+  }, [accountId, catalog, format, initialData?.name, initialMeta, settings]);
+
+  const enqueueAutoSave = useCallback(
+    (version: number, values: ProviderFormValues) => {
+      if (
+        version < queuedVersionRef.current ||
+        (version === queuedVersionRef.current &&
+          failedVersionRef.current !== version)
+      ) {
+        return saveQueueRef.current;
+      }
+
+      queuedVersionRef.current = version;
+      failedVersionRef.current = 0;
+      pendingSavesRef.current += 1;
+      if (mountedRef.current) {
+        setSaving(true);
+        setSaveStatus("idle");
+      }
+
+      const request = saveQueueRef.current
+        .catch(() => undefined)
+        .then(() => onSubmitRef.current(values));
+      saveQueueRef.current = request.then(
+        () => undefined,
+        () => undefined,
+      );
+      void request
+        .then(
+          () => {
+            savedVersionRef.current = Math.max(
+              savedVersionRef.current,
+              version,
+            );
+            if (mountedRef.current && saveVersionRef.current === version) {
+              setSaveStatus("saved");
+            }
+          },
+          (error) => {
+            failedVersionRef.current = version;
+            console.error(
+              "[ProviderForm] Failed to auto-save Copilot settings",
+              error,
+            );
+            if (mountedRef.current && saveVersionRef.current === version) {
+              setSaveStatus("error");
+            }
+          },
+        )
+        .finally(() => {
+          pendingSavesRef.current -= 1;
+          if (mountedRef.current) {
+            setSaving(pendingSavesRef.current > 0);
+          }
+        });
+      return request;
+    },
+    [],
+  );
+
+  flushAutoSaveRef.current = () => {
+    if (
+      !autoSave ||
+      !hasAnyAccount ||
+      saveVersionRef.current === savedVersionRef.current ||
+      catalog.some(
+        (item) => item.model.trim() && !isGptModel(item.model.trim()),
+      )
+    ) {
+      return;
+    }
+    void enqueueAutoSave(saveVersionRef.current, buildValues());
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      flushAutoSaveRef.current();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!autoSave || autoSaveVersion === savedVersionRef.current) return;
+    if (!hasAnyAccount) {
+      setSaveStatus("auth-required");
+      return;
+    }
+    if (
+      catalog.some(
+        (item) => item.model.trim() && !isGptModel(item.model.trim()),
+      )
+    ) {
+      setSaveStatus("invalid");
+      return;
+    }
+
+    const timer = window.setTimeout(
+      () => void enqueueAutoSave(autoSaveVersion, buildValues()),
+      400,
+    );
+    return () => window.clearTimeout(timer);
+  }, [
+    autoSave,
+    autoSaveVersion,
+    buildValues,
+    catalog,
+    enqueueAutoSave,
+    hasAnyAccount,
+  ]);
+
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (autoSave) return;
     if (!hasAnyAccount) {
       toast.error("Sign in to GitHub Copilot first.");
       return;
@@ -124,26 +282,7 @@ export function ProviderForm({
     }
     setSaving(true);
     try {
-      const meta: ProviderMeta = {
-        ...initialMeta,
-        providerType: "github_copilot",
-        apiFormat: format === "auto" ? "openai_chat" : format,
-        codexCopilotApiFormat: format === "auto" ? undefined : format,
-        githubAccountId: accountId ?? undefined,
-        authBinding: {
-          source: "managed_account",
-          authProvider: "github_copilot",
-          accountId: accountId ?? undefined,
-        },
-      };
-      await onSubmit({
-        name: initialData?.name ?? "GitHub Copilot",
-        meta,
-        settingsConfig: JSON.stringify({
-          ...settings,
-          modelCatalog: { models: normalizeCodexCatalogModelsForSave(catalog) },
-        }),
-      });
+      await onSubmit(buildValues());
     } catch (error) {
       toast.error(String(error));
     } finally {
@@ -159,26 +298,68 @@ export function ProviderForm({
       <CodexFormFields
         isCopilotAuthenticated={hasAnyAccount}
         selectedGitHubAccountId={accountId}
-        onGitHubAccountSelect={setAccountId}
+        onGitHubAccountSelect={(id) => {
+          setAccountId(id);
+          markChanged();
+        }}
         onManageAuthAccounts={onManageAuthAccounts}
         copilotApiFormat={format}
-        onCopilotApiFormatChange={setFormat}
+        onCopilotApiFormatChange={(value) => {
+          setFormat(value);
+          markChanged();
+        }}
         catalogModels={catalog}
-        onCatalogModelsChange={setCatalog}
+        onCatalogModelsChange={(models) => {
+          setCatalog(models);
+          markChanged();
+        }}
       />
-      <div className="flex justify-end gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={saving}
-          onClick={onCancel}
-        >
-          {t("common.cancel")}
-        </Button>
-        <Button type="submit" disabled={saving}>
-          {saving ? t("common.saving") : submitLabel}
-        </Button>
-      </div>
+      {autoSave ? (
+        <div className="flex min-h-5 justify-end text-xs text-muted-foreground">
+          {saving && (
+            <span
+              role="status"
+              aria-live="polite"
+              className="inline-flex items-center gap-1.5"
+            >
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {t("settings.saving")}
+            </span>
+          )}
+          {!saving && saveStatus === "saved" && (
+            <span role="status" aria-live="polite">
+              {t("settings.saved")}
+            </span>
+          )}
+          {!saving && saveStatus === "error" && (
+            <span role="alert">{t("settings.saveFailedGeneric")}</span>
+          )}
+          {!saving && saveStatus === "invalid" && (
+            <span role="alert">
+              Only GPT model IDs (gpt-...) are supported.
+            </span>
+          )}
+          {!saving && saveStatus === "auth-required" && (
+            <span role="alert">Sign in to GitHub Copilot to save changes.</span>
+          )}
+        </div>
+      ) : (
+        <div className="flex justify-end gap-2">
+          {onCancel && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={saving}
+              onClick={onCancel}
+            >
+              {t("common.cancel")}
+            </Button>
+          )}
+          <Button type="submit" disabled={saving}>
+            {saving ? t("common.saving") : (submitLabel ?? t("common.save"))}
+          </Button>
+        </div>
+      )}
     </form>
   );
 }

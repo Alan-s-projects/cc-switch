@@ -1,12 +1,13 @@
 //! 数据库备份和恢复
 //!
-//! 提供 SQL 导出/导入和二进制快照备份功能。
+//! 提供数据库快照备份和恢复。
 
 use super::{lock_conn, Database};
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
 use chrono::{Local, Utc};
 use rusqlite::backup::{Backup, StepResult};
+#[cfg(test)]
 use rusqlite::types::ValueRef;
 use rusqlite::Connection;
 use std::fs;
@@ -18,7 +19,9 @@ const COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER: &str = "-- Copilot Bridge Atlas SQ
 
 /// Bound combined INSERT batches while still amortizing statement parsing.
 /// A row larger than this cap is emitted alone because it cannot be split.
+#[cfg(test)]
 const INSERT_BATCH_MAX_ROWS: usize = 200;
+#[cfg(test)]
 const INSERT_BATCH_MAX_BYTES: usize = 1024 * 1024;
 
 /// Serialize every operation that observes or mutates the database-backup
@@ -92,12 +95,14 @@ pub struct BackupEntry {
 
 impl Database {
     /// 导出为 SQLite 兼容的 SQL 文本（内存字符串，完整导出）
+    #[cfg(test)]
     pub fn export_sql_string(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
         Self::dump_sql(&snapshot, &[])
     }
 
     /// 导出为 SQLite 兼容的 SQL 文本
+    #[cfg(test)]
     pub fn export_sql(&self, target_path: &Path) -> Result<(), AppError> {
         let dump = self.export_sql_string()?;
 
@@ -204,6 +209,7 @@ impl Database {
     }
 
     /// 创建内存快照以避免长时间持有数据库锁
+    #[cfg(test)]
     pub(crate) fn snapshot_to_memory(&self) -> Result<Connection, AppError> {
         let conn = lock_conn!(self.conn);
         let mut snapshot =
@@ -537,7 +543,8 @@ impl Database {
         Ok(())
     }
 
-    /// 导出数据库为 SQL 文本
+    /// 导出数据库为 SQL 文本 in the internal serialization tests.
+    #[cfg(test)]
     fn dump_sql(conn: &Connection, skip_tables: &[&str]) -> Result<String, AppError> {
         let mut output = String::new();
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -674,6 +681,7 @@ impl Database {
         Ok(output)
     }
 
+    #[cfg(test)]
     fn dump_sqlite_sequences(
         conn: &Connection,
         skip_tables: &[&str],
@@ -719,11 +727,13 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
     fn quote_identifier(identifier: &str) -> String {
         format!("\"{}\"", identifier.replace('"', "\"\""))
     }
 
     /// 获取表的列名列表
+    #[cfg(test)]
     fn get_table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, AppError> {
         let quoted_table = Self::quote_identifier(table);
         let mut stmt = conn
@@ -741,6 +751,7 @@ impl Database {
     }
 
     /// 格式化 SQL 值
+    #[cfg(test)]
     fn format_sql_value(value: ValueRef<'_>) -> Result<String, AppError> {
         match value {
             ValueRef::Null => Ok("NULL".to_string()),
@@ -760,6 +771,7 @@ impl Database {
         }
     }
 
+    #[cfg(test)]
     fn format_sql_real(value: f64) -> String {
         if value.is_nan() {
             // SQLite normalizes bound NaN values to NULL as well.
@@ -785,6 +797,7 @@ impl Database {
         literal
     }
 
+    #[cfg(test)]
     fn format_sql_blob(bytes: &[u8]) -> String {
         let mut s = String::from("X'");
         for b in bytes {

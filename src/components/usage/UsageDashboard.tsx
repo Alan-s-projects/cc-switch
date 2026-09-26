@@ -6,7 +6,13 @@ import { RequestLogTable } from "./RequestLogTable";
 import { ModelStatsTable } from "./ModelStatsTable";
 import { type UsageRangeSelection } from "@/types/usage";
 import { motion } from "framer-motion";
-import { BarChart3, ListFilter, RefreshCw, Coins } from "lucide-react";
+import {
+  AlertTriangle,
+  BarChart3,
+  Coins,
+  ListFilter,
+  RefreshCw,
+} from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -14,13 +20,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { useQueryClient } from "@tanstack/react-query";
-import { usageKeys, useModelStats } from "@/lib/query/usage";
+import {
+  usageKeys,
+  useModelStats,
+  useUnpricedModelUsage,
+} from "@/lib/query/usage";
 import { useUsageEventBridge } from "@/hooks/useUsageEventBridge";
 import { PricingConfigPanel } from "@/components/usage/PricingConfigPanel";
 import { getUsageRangePresetLabel, resolveUsageRange } from "@/lib/usageRange";
 import { UsageDateRangePicker } from "./UsageDateRangePicker";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { formatTokensShort } from "./format";
+import type { UnpricedModelUsage } from "@/types/usage";
 
 const DEFAULT_REFRESH_INTERVAL_MS = 30000;
 const REFRESH_INTERVAL_OPTIONS_MS = [0, 5000, 10000, 30000, 60000] as const;
@@ -55,6 +69,7 @@ export function UsageDashboard({
   const [range, setRange] = useState<UsageRangeSelection>({ preset: "today" });
   const appType = "codex";
   const [model, setModel] = useState<string | undefined>(undefined);
+  const [activeTab, setActiveTab] = useState("logs");
   const [refreshIntervalMs, setRefreshIntervalMs] = useState(() =>
     normalizeRefreshInterval(savedRefreshIntervalMs),
   );
@@ -116,6 +131,11 @@ export function UsageDashboard({
   const { data: modelOptionsData } = useModelStats(
     range,
     { appType },
+    optionsRefetch,
+  );
+  const unpricedUsageQuery = useUnpricedModelUsage(
+    range,
+    { appType, model },
     optionsRefetch,
   );
 
@@ -202,6 +222,39 @@ export function UsageDashboard({
         </div>
       </div>
 
+      {unpricedUsageQuery.isError ? (
+        <Alert className="border-amber-500/40 bg-amber-500/10">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+            <p>
+              {t(
+                "usage.priceCheckFailed",
+                "Could not check prices for this usage range. No missing-price result is available.",
+              )}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={unpricedUsageQuery.isFetching}
+              onClick={() => void unpricedUsageQuery.refetch()}
+            >
+              {unpricedUsageQuery.isFetching
+                ? t("common.loading", "Loading...")
+                : t("usage.retryPriceCheck", "Retry price check")}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : (
+        unpricedUsageQuery.data &&
+        unpricedUsageQuery.data.length > 0 && (
+          <UnpricedModelsAlert
+            models={unpricedUsageQuery.data}
+            onReviewPricing={() => setActiveTab("pricing")}
+          />
+        )
+      )}
+
       <UsageHero
         range={range}
         appType={appType}
@@ -218,7 +271,7 @@ export function UsageDashboard({
       />
 
       <div className="space-y-4">
-        <Tabs defaultValue="logs" className="w-full">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <div className="flex items-center justify-between mb-4">
             <TabsList className="bg-muted/50">
               <TabsTrigger value="logs" className="gap-2">
@@ -266,5 +319,100 @@ export function UsageDashboard({
         </Tabs>
       </div>
     </motion.div>
+  );
+}
+
+function UnpricedModelsAlert({
+  models,
+  onReviewPricing,
+}: {
+  models: UnpricedModelUsage[];
+  onReviewPricing: () => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <Alert className="border-amber-500/40 bg-amber-500/10">
+      <AlertTriangle className="h-4 w-4" />
+      <AlertDescription className="min-w-0 space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1">
+            <p className="font-medium">
+              {t("usage.unpricedModelsTitle", "Unpriced model usage")}
+            </p>
+            <p>
+              {t(
+                "usage.unpricedModelsMessage",
+                "No bundled or custom GPT price matches these models. Their usage cost is recorded as $0 until a matching price is added.",
+              )}
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onReviewPricing}
+          >
+            {t("usage.reviewPricing", "Review pricing")}
+          </Button>
+        </div>
+
+        <div className="space-y-2">
+          {models.map((usage) => (
+            <dl
+              key={usage.model}
+              className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 border-t border-amber-500/20 pt-2 sm:grid-cols-[minmax(0,1.6fr)_repeat(4,minmax(0,1fr))]"
+            >
+              <div className="min-w-0">
+                <dt className="text-xs text-muted-foreground">
+                  {t("usage.model", "Model")}
+                </dt>
+                <dd className="break-all font-mono text-sm font-medium">
+                  {usage.model}
+                </dd>
+                <dd className="text-xs text-muted-foreground">
+                  {t("usage.requestCount", {
+                    count: usage.requestCount,
+                    defaultValue: "{{count}} requests",
+                  })}
+                </dd>
+              </div>
+              <UnpricedMetric
+                label={t("usage.freshInput", "Fresh Input")}
+                value={formatTokensShort(usage.freshInputTokens)}
+              />
+              <UnpricedMetric
+                label={t("usage.output", "Output")}
+                value={formatTokensShort(usage.outputTokens)}
+              />
+              <UnpricedMetric
+                label={t("usage.cacheRead", "Hit")}
+                value={formatTokensShort(usage.cacheReadTokens)}
+              />
+              <UnpricedMetric
+                label={t("usage.cacheHitRate", "Cache Hit Rate")}
+                value={`${(usage.cacheHitRate * 100).toFixed(1)}%`}
+              />
+            </dl>
+          ))}
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          {t(
+            "usage.unpricedModelsCatalogNote",
+            "A client-requested GPT model may not have a row in Copilot's advertised model list. If so, Atlas cannot read a matching hidden Copilot budget price or broaden its GPT pricing rules.",
+          )}
+        </p>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function UnpricedMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="break-words text-sm font-medium tabular-nums">{value}</dd>
+    </div>
   );
 }

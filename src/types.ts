@@ -26,6 +26,8 @@ export type CodexCopilotApiFormat = "auto" | "openai_responses" | "openai_chat";
 export interface CodexCatalogModel {
   model: string;
   displayName?: string;
+  /** Defaults to enabled for catalog rows saved by earlier app versions. */
+  enabled?: boolean;
   contextWindow?: string | number;
   supportsParallelToolCalls?: boolean;
   inputModalities?: string[];

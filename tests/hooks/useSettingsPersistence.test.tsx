@@ -8,8 +8,6 @@ import type { Settings } from "@/types";
 const api = vi.hoisted(() => ({
   get: vi.fn(),
   save: vi.fn(),
-  getAppConfigDirOverride: vi.fn(),
-  setAppConfigDirOverride: vi.fn(),
   setAutoLaunch: vi.fn(),
   updateTrayMenu: vi.fn(),
 }));
@@ -48,8 +46,6 @@ beforeEach(() => {
     stored = { ...settings };
     return true;
   });
-  api.getAppConfigDirOverride.mockResolvedValue(null);
-  api.setAppConfigDirOverride.mockResolvedValue(true);
   api.setAutoLaunch.mockResolvedValue(true);
   api.updateTrayMenu.mockResolvedValue(undefined);
 });

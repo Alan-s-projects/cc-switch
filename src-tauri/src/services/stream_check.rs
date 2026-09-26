@@ -12,8 +12,7 @@ pub enum HealthStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct StreamCheckConfig {
     pub timeout_secs: u64,
     pub max_retries: u32,

@@ -40,10 +40,10 @@ const provider: Provider = {
   meta: { providerType: "github_copilot", githubAccountId: "account-1" },
 };
 
-function renderCard() {
+function renderCard(cardProvider = provider) {
   return render(
     <QueryClientProvider client={createTestQueryClient()}>
-      <CopilotCard provider={provider} />
+      <CopilotCard provider={cardProvider} />
     </QueryClientProvider>,
   );
 }
@@ -62,13 +62,14 @@ describe("Copilot account card", () => {
     });
   });
 
-  it("directs setup to Settings → Copilot and keeps connectivity available without signing in", () => {
+  it("reports a signed-out account and keeps connectivity available without signing in", () => {
     mocks.auth.accounts = [];
     renderCard();
     expect(screen.getByText("Needs setup")).toBeVisible();
     expect(
-      screen.getByText(/Open Settings → Copilot to sign in/),
+      screen.getByText("GitHub Copilot is signed out."),
     ).toBeVisible();
+    expect(screen.queryByText(/save the bridge settings/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Health check" })).toBeEnabled();
     expect(
       screen.queryByRole("button", { name: "Edit" }),
@@ -96,5 +97,35 @@ describe("Copilot account card", () => {
     await waitFor(() =>
       expect(mocks.probe.mock.calls[0]?.[0]).toBe(provider.id),
     );
+  });
+
+  it("counts only catalog models enabled for Codex", () => {
+    renderCard({
+      ...provider,
+      settingsConfig: {
+        modelCatalog: {
+          models: [
+            { model: "gpt-disabled", enabled: false },
+            { model: "gpt-enabled" },
+          ],
+        },
+      },
+    });
+    expect(
+      screen.getByText("test-user · 1 models available to Codex"),
+    ).toBeVisible();
+  });
+
+  it("asks the user to enable a catalog model when all are disabled", () => {
+    renderCard({
+      ...provider,
+      settingsConfig: {
+        modelCatalog: {
+          models: [{ model: "gpt-disabled", enabled: false }],
+        },
+      },
+    });
+    expect(screen.getByText("Needs setup")).toBeVisible();
+    expect(screen.getByText(/No models are enabled for Codex/)).toBeVisible();
   });
 });

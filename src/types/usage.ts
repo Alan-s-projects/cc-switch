@@ -77,6 +77,15 @@ export interface ModelStats {
   avgCostPerRequest: string;
 }
 
+export interface UnpricedModelUsage {
+  model: string;
+  requestCount: number;
+  freshInputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheHitRate: number;
+}
+
 export interface LogFilters {
   appType?: string;
   providerName?: string;

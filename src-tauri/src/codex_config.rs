@@ -225,6 +225,10 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
     let mut specs = Vec::new();
 
     for model_config in models {
+        if model_config.get("enabled").and_then(Value::as_bool) == Some(false) {
+            continue;
+        }
+
         let Some(model) = model_config
             .get("model")
             .and_then(|value| value.as_str())
@@ -513,15 +517,23 @@ mod tests {
     }
 
     #[test]
-    fn only_gpt_models_are_published_without_mutating_the_saved_rows() {
+    fn only_enabled_gpt_models_are_published_without_mutating_saved_rows() {
         let settings = json!({"modelCatalog": {"models": [
             {"model": "gpt-6-astra"}, {"model": "retired-model"},
-            {"model": "GPT-6-LUNA"}, {"model": ""}
+            {"model": "GPT-6-LUNA"}, {"model": "gpt-6-disabled", "enabled": false},
+            {"model": ""}
         ]}});
-        assert_eq!(codex_catalog_model_specs(&settings).len(), 2);
+        let specs = codex_catalog_model_specs(&settings);
+        assert_eq!(
+            specs
+                .iter()
+                .map(|spec| spec.model.as_str())
+                .collect::<Vec<_>>(),
+            ["gpt-6-astra", "GPT-6-LUNA"]
+        );
         assert_eq!(
             settings["modelCatalog"]["models"].as_array().unwrap().len(),
-            4
+            5
         );
     }
 

@@ -6,7 +6,6 @@ import {
   Plug,
   Loader2,
 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
 import { useProvidersQuery } from "@/lib/query";
 import { providersApi } from "@/lib/api";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
@@ -31,7 +30,6 @@ const navigation = [
 ] as const;
 
 export default function App() {
-  const queryClient = useQueryClient();
   const [view, setView] = useState<View>("provider");
   const { status } = useProxyStatus();
   const { data, isLoading, refetch } = useProvidersQuery();
@@ -74,11 +72,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", keydown);
   }, []);
 
-  const refreshData = async () => {
-    await queryClient.invalidateQueries();
-    await providersApi.updateTrayMenu();
-  };
-
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
@@ -106,10 +99,7 @@ export default function App() {
         className={`flex min-h-0 flex-1 flex-col ${view === "setup" ? "overflow-hidden" : "overflow-y-auto"}`}
       >
         {view === "settings" ? (
-          <SettingsPage
-            onOpenChange={() => setView("provider")}
-            onImportSuccess={refreshData}
-          />
+          <SettingsPage />
         ) : view === "setup" ? (
           <CodexSetupSuggestion />
         ) : view === "usage" ? (

@@ -18,7 +18,7 @@ export function UsagePage() {
       <UsageDashboard
         refreshIntervalMs={settings.usageDashboardRefreshIntervalMs}
         onRefreshIntervalChange={async (usageDashboardRefreshIntervalMs) =>
-          (await autoSaveSettings({ usageDashboardRefreshIntervalMs })) !== null
+          autoSaveSettings({ usageDashboardRefreshIntervalMs })
         }
       />
     </div>

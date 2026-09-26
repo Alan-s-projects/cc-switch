@@ -4,7 +4,7 @@
  * 提供配置全局代理的输入界面，支持用户名密码认证。
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -72,7 +72,9 @@ function mergeAuth(
 export function GlobalProxySettings() {
   const { t } = useTranslation();
   const { data: savedUrl, isLoading } = useGlobalProxyUrl();
-  const setMutation = useSetGlobalProxyUrl();
+  const { mutateAsync: saveUrl, isPending: isSaving } = useSetGlobalProxyUrl({
+    showSuccessToast: false,
+  });
   const testMutation = useTestProxy();
   const scanMutation = useScanProxies();
 
@@ -81,7 +83,17 @@ export function GlobalProxySettings() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
   const [detected, setDetected] = useState<DetectedProxy[]>([]);
+  const initialized = useRef(false);
+  const editVersion = useRef(0);
+  const queuedVersion = useRef(0);
+  const failedVersion = useRef(0);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const mounted = useRef(false);
+  const flushSave = useRef<() => void>(() => {});
 
   // 计算完整 URL（含认证信息）
   const fullUrl = useMemo(
@@ -89,21 +101,76 @@ export function GlobalProxySettings() {
     [url, username, password],
   );
 
-  // 同步远程配置
+  // Initialize once; query invalidation after an auto-save must not replace a
+  // newer local edit that is still waiting in the queue.
   useEffect(() => {
-    if (savedUrl !== undefined) {
-      const { baseUrl, username: u, password: p } = extractAuth(savedUrl || "");
-      setUrl(baseUrl);
-      setUsername(u);
-      setPassword(p);
-      setDirty(false);
-    }
+    if (savedUrl === undefined || initialized.current) return;
+    initialized.current = true;
+    const { baseUrl, username: u, password: p } = extractAuth(savedUrl || "");
+    setUrl(baseUrl);
+    setUsername(u);
+    setPassword(p);
   }, [savedUrl]);
 
-  const handleSave = async () => {
-    await setMutation.mutateAsync(fullUrl);
-    setDirty(false);
+  const markDirty = () => {
+    editVersion.current += 1;
+    setDirty(true);
+    setSaveStatus("idle");
   };
+
+  const saveCurrent = useCallback(async () => {
+    if (!dirty) return;
+    const version = editVersion.current;
+    if (
+      version < queuedVersion.current ||
+      (version === queuedVersion.current && failedVersion.current !== version)
+    ) {
+      await saveQueue.current;
+      return;
+    }
+
+    queuedVersion.current = version;
+    failedVersion.current = 0;
+    if (mounted.current) setSaveStatus("saving");
+    const request = saveQueue.current
+      .catch(() => undefined)
+      .then(() => saveUrl(fullUrl));
+    saveQueue.current = request.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    try {
+      await request;
+      if (editVersion.current === version) {
+        if (mounted.current) {
+          setDirty(false);
+          setSaveStatus("saved");
+        }
+      }
+    } catch {
+      failedVersion.current = version;
+      if (mounted.current && editVersion.current === version) {
+        setSaveStatus("error");
+      }
+    }
+  }, [dirty, fullUrl, saveUrl]);
+
+  flushSave.current = () => void saveCurrent();
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      flushSave.current();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const timer = window.setTimeout(() => void saveCurrent(), 400);
+    return () => window.clearTimeout(timer);
+  }, [dirty, fullUrl, saveCurrent]);
 
   const handleTest = async () => {
     if (fullUrl) {
@@ -121,7 +188,7 @@ export function GlobalProxySettings() {
     setUrl(baseUrl);
     setUsername(u);
     setPassword(p);
-    setDirty(true);
+    markDirty();
     setDetected([]);
   };
 
@@ -129,13 +196,7 @@ export function GlobalProxySettings() {
     setUrl("");
     setUsername("");
     setPassword("");
-    setDirty(true);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && dirty && !setMutation.isPending) {
-      handleSave();
-    }
+    markDirty();
   };
 
   // 只在首次加载且无数据时显示加载状态
@@ -161,9 +222,9 @@ export function GlobalProxySettings() {
           value={url}
           onChange={(e) => {
             setUrl(e.target.value);
-            setDirty(true);
+            markDirty();
           }}
-          onKeyDown={handleKeyDown}
+          onBlur={() => void saveCurrent()}
           className="font-mono text-sm flex-1"
         />
         <Button
@@ -201,17 +262,20 @@ export function GlobalProxySettings() {
         >
           <X className="h-4 w-4" />
         </Button>
-        <Button
-          onClick={handleSave}
-          disabled={!dirty || setMutation.isPending}
-          size="sm"
-        >
-          {setMutation.isPending && (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          )}
-          {t("common.save")}
-        </Button>
       </div>
+      {(isSaving || saveStatus !== "idle") && (
+        <p
+          role={saveStatus === "error" ? "alert" : "status"}
+          aria-live="polite"
+          className="text-xs text-muted-foreground"
+        >
+          {isSaving || saveStatus === "saving"
+            ? t("settings.saving")
+            : saveStatus === "saved"
+              ? t("settings.saved")
+              : t("settings.saveFailedGeneric")}
+        </p>
+      )}
 
       {/* 认证信息：用户名 + 密码（可选） */}
       <div className="flex gap-2">
@@ -220,9 +284,9 @@ export function GlobalProxySettings() {
           value={username}
           onChange={(e) => {
             setUsername(e.target.value);
-            setDirty(true);
+            markDirty();
           }}
-          onKeyDown={handleKeyDown}
+          onBlur={() => void saveCurrent()}
           className="font-mono text-sm flex-1"
         />
         <div className="relative flex-1">
@@ -232,9 +296,9 @@ export function GlobalProxySettings() {
             value={password}
             onChange={(e) => {
               setPassword(e.target.value);
-              setDirty(true);
+              markDirty();
             }}
-            onKeyDown={handleKeyDown}
+            onBlur={() => void saveCurrent()}
             className="font-mono text-sm pr-10"
           />
           <Button

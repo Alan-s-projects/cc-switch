@@ -1,20 +1,9 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Loader2,
-  Save,
-  FolderSearch,
-  Database,
   ScrollText,
   HardDriveDownload,
-  FlaskConical,
   Settings2,
   Network,
   KeyRound,
@@ -22,14 +11,6 @@ import {
   SlidersHorizontal,
   Info,
 } from "lucide-react";
-import { toast } from "sonner";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Accordion,
   AccordionContent,
@@ -37,70 +18,24 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
-import { settingsApi } from "@/lib/api";
 import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { WindowSettings } from "@/components/settings/WindowSettings";
-import { DirectorySettings } from "@/components/settings/DirectorySettings";
-import { ImportExportSection } from "@/components/settings/ImportExportSection";
 import { BackupListSection } from "@/components/settings/BackupListSection";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { ProxyTabContent } from "@/components/settings/ProxyTabContent";
-import { ConnectivityCheckConfigPanel } from "@/components/usage/ConnectivityCheckConfigPanel";
 import { LogConfigPanel } from "@/components/settings/LogConfigPanel";
 import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
 import { CopilotSettingsPanel } from "@/components/settings/CopilotSettingsPanel";
 import { useSettings } from "@/hooks/useSettings";
-import { useImportExport } from "@/hooks/useImportExport";
 import { useTranslation } from "react-i18next";
 import type { SettingsFormState } from "@/hooks/useSettings";
 
-interface SettingsPageProps {
-  onOpenChange: (open: boolean) => void;
-  onImportSuccess?: () => void | Promise<void>;
-}
-
-export function SettingsPage({
-  onOpenChange,
-  onImportSuccess,
-}: SettingsPageProps) {
+export function SettingsPage() {
   const { t } = useTranslation();
-  const {
-    settings,
-    isLoading,
-    isSaving,
-    appConfigDir,
-    resolvedDirs,
-    updateAppConfigDir,
-    browseAppConfigDir,
-    resetAppConfigDir,
-    saveSettings,
-    autoSaveSettings,
-    requiresRestart,
-    acknowledgeRestart,
-  } = useSettings();
-
-  const {
-    selectedFile,
-    status: importStatus,
-    errorMessage,
-    backupId,
-    isImporting,
-    selectImportFile,
-    importConfig,
-    exportConfig,
-    clearSelection,
-  } = useImportExport({ onImportSuccess });
+  const { settings, isLoading, isSaving, autoSaveSettings } = useSettings();
 
   const [activeTab, setActiveTab] = useState<string>("general");
-  const [showRestartPrompt, setShowRestartPrompt] = useState(false);
   const tabScrollContainerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (requiresRestart) {
-      setShowRestartPrompt(true);
-    }
-  }, [requiresRestart]);
 
   useLayoutEffect(() => {
     if (tabScrollContainerRef.current) {
@@ -108,53 +43,10 @@ export function SettingsPage({
     }
   }, [activeTab]);
 
-  const closeAfterSave = useCallback(() => {
-    acknowledgeRestart();
-    clearSelection();
-    onOpenChange(false);
-  }, [acknowledgeRestart, clearSelection, onOpenChange]);
-
-  const handleSave = useCallback(async () => {
-    try {
-      const result = await saveSettings();
-      if (!result) return;
-      if (result.requiresRestart) {
-        setShowRestartPrompt(true);
-        return;
-      }
-      closeAfterSave();
-    } catch (error) {
-      console.error("[SettingsPage] Failed to save settings", error);
-    }
-  }, [closeAfterSave, saveSettings]);
-
-  const handleRestartLater = useCallback(() => {
-    setShowRestartPrompt(false);
-    closeAfterSave();
-  }, [closeAfterSave]);
-
-  const handleRestartNow = useCallback(async () => {
-    setShowRestartPrompt(false);
-    if (import.meta.env.DEV) {
-      toast.success(t("settings.devModeRestartHint"), { closeButton: true });
-      closeAfterSave();
-      return;
-    }
-
-    try {
-      await settingsApi.restart();
-    } catch (error) {
-      console.error("[SettingsPage] Failed to restart app", error);
-      toast.error(t("settings.restartFailed"));
-    } finally {
-      closeAfterSave();
-    }
-  }, [closeAfterSave, t]);
-
   const handleAutoSave = useCallback(
     async (updates: Partial<SettingsFormState>): Promise<boolean> => {
       try {
-        return (await autoSaveSettings(updates)) !== null;
+        return await autoSaveSettings(updates);
       } catch (error) {
         console.error("[SettingsPage] Failed to autosave settings", error);
         return false;
@@ -163,15 +55,26 @@ export function SettingsPage({
     [autoSaveSettings],
   );
 
-  const isBusy = useMemo(() => isLoading && !settings, [isLoading, settings]);
+  const isBusy = isLoading && !settings;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pt-4">
-      <div className="mb-6 flex shrink-0 flex-col gap-1">
-        <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          Manage appearance, GitHub Copilot, and proxy settings
-        </p>
+      <div className="mb-6 flex shrink-0 items-center justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+          <p className="text-sm text-muted-foreground">
+            Manage appearance, GitHub Copilot, and proxy settings
+          </p>
+        </div>
+        {isSaving && (
+          <p
+            role="status"
+            aria-live="polite"
+            className="shrink-0 text-xs text-muted-foreground"
+          >
+            {t("settings.saving")}
+          </p>
+        )}
       </div>
       {isBusy ? (
         <div className="flex flex-1 items-center justify-center">
@@ -266,9 +169,7 @@ export function SettingsPage({
               </TabsContent>
 
               <TabsContent value="copilot" className="mt-0 pb-4">
-                <CopilotSettingsPanel
-                  onCancel={() => setActiveTab("general")}
-                />
+                <CopilotSettingsPanel />
               </TabsContent>
 
               <TabsContent value="advanced" className="space-y-6 mt-0 pb-4">
@@ -284,66 +185,6 @@ export function SettingsPage({
                       defaultValue={[]}
                       className="w-full space-y-4"
                     >
-                      <AccordionItem
-                        value="directory"
-                        className="rounded-xl glass-card overflow-hidden"
-                      >
-                        <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
-                          <div className="flex items-center gap-3">
-                            <FolderSearch className="h-5 w-5 text-primary" />
-                            <div className="text-left">
-                              <h3 className="text-base font-semibold">
-                                {t("settings.advanced.configDir.title")}
-                              </h3>
-                              <p className="text-sm text-muted-foreground font-normal">
-                                {t("settings.advanced.configDir.description")}
-                              </p>
-                            </div>
-                          </div>
-                        </AccordionTrigger>
-                        <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
-                          <DirectorySettings
-                            appConfigDir={appConfigDir}
-                            resolvedDirs={resolvedDirs}
-                            onAppConfigChange={updateAppConfigDir}
-                            onBrowseAppConfig={browseAppConfigDir}
-                            onResetAppConfig={resetAppConfigDir}
-                          />
-                        </AccordionContent>
-                      </AccordionItem>
-
-                      <AccordionItem
-                        value="data"
-                        className="rounded-xl glass-card overflow-hidden"
-                      >
-                        <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
-                          <div className="flex items-center gap-3">
-                            <Database className="h-5 w-5 text-blue-500" />
-                            <div className="text-left">
-                              <h3 className="text-base font-semibold">
-                                {t("settings.advanced.data.title")}
-                              </h3>
-                              <p className="text-sm text-muted-foreground font-normal">
-                                {t("settings.advanced.data.description")}
-                              </p>
-                            </div>
-                          </div>
-                        </AccordionTrigger>
-                        <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
-                          <ImportExportSection
-                            status={importStatus}
-                            selectedFile={selectedFile}
-                            errorMessage={errorMessage}
-                            backupId={backupId}
-                            isImporting={isImporting}
-                            onSelectFile={selectImportFile}
-                            onImport={importConfig}
-                            onExport={exportConfig}
-                            onClear={clearSelection}
-                          />
-                        </AccordionContent>
-                      </AccordionItem>
-
                       <AccordionItem
                         value="backup"
                         className="rounded-xl glass-card overflow-hidden"
@@ -378,30 +219,6 @@ export function SettingsPage({
                       </AccordionItem>
 
                       <AccordionItem
-                        value="connectivityCheck"
-                        className="rounded-xl glass-card overflow-hidden"
-                      >
-                        <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
-                          <div className="flex items-center gap-3">
-                            <FlaskConical className="h-5 w-5 text-emerald-500" />
-                            <div className="text-left">
-                              <h3 className="text-base font-semibold">
-                                {t("settings.advanced.connectivityCheck.title")}
-                              </h3>
-                              <p className="text-sm text-muted-foreground font-normal">
-                                {t(
-                                  "settings.advanced.connectivityCheck.description",
-                                )}
-                              </p>
-                            </div>
-                          </div>
-                        </AccordionTrigger>
-                        <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
-                          <ConnectivityCheckConfigPanel />
-                        </AccordionContent>
-                      </AccordionItem>
-
-                      <AccordionItem
                         value="logConfig"
                         className="rounded-xl glass-card overflow-hidden"
                       >
@@ -431,63 +248,9 @@ export function SettingsPage({
                 <AboutSection />
               </TabsContent>
             </div>
-
-            {activeTab === "advanced" && settings && (
-              <div
-                className="flex-shrink-0 pt-4 border-t border-border-default"
-                style={{ backgroundColor: "hsl(var(--background))" }}
-              >
-                <div className="px-6 flex items-center justify-end gap-3">
-                  <Button onClick={handleSave} disabled={isLoading || isSaving}>
-                    {isSaving ? (
-                      <span className="inline-flex items-center gap-2">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        {t("settings.saving")}
-                      </span>
-                    ) : (
-                      <>
-                        <Save className="mr-2 h-4 w-4" />
-                        {t("common.save")}
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </div>
-            )}
           </div>
         </Tabs>
       )}
-
-      <Dialog
-        open={showRestartPrompt}
-        onOpenChange={(open) => !open && handleRestartLater()}
-      >
-        <DialogContent zIndex="alert" className="max-w-md glass border-border">
-          <DialogHeader>
-            <DialogTitle>{t("settings.restartRequired")}</DialogTitle>
-          </DialogHeader>
-          <div className="px-6">
-            <p className="text-sm text-muted-foreground">
-              {t("settings.restartRequiredMessage")}
-            </p>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={handleRestartLater}
-              className="hover:bg-muted/50"
-            >
-              {t("settings.restartLater")}
-            </Button>
-            <Button
-              onClick={handleRestartNow}
-              className="bg-primary hover:bg-primary/90"
-            >
-              {t("settings.restartNow")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

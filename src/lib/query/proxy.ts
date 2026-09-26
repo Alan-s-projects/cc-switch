@@ -45,7 +45,9 @@ export function useGlobalProxyConfig() {
 /**
  * 更新全局代理配置
  */
-export function useUpdateGlobalProxyConfig() {
+export function useUpdateGlobalProxyConfig({
+  showSuccessToast = true,
+}: { showSuccessToast?: boolean } = {}) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
 
@@ -53,7 +55,9 @@ export function useUpdateGlobalProxyConfig() {
     mutationFn: (config: GlobalProxyConfig) =>
       proxyApi.updateGlobalProxyConfig(config),
     onSuccess: () => {
-      toast.success(t("proxy.settings.toast.saved"), { closeButton: true });
+      if (showSuccessToast) {
+        toast.success(t("proxy.settings.toast.saved"), { closeButton: true });
+      }
       queryClient.invalidateQueries({ queryKey: proxyKeys.globalConfig });
       queryClient.invalidateQueries({ queryKey: proxyKeys.status });
     },

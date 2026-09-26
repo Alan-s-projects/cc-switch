@@ -1,5 +1,3 @@
-use tauri::AppHandle;
-
 fn merge_settings_for_save(
     mut incoming: crate::settings::AppSettings,
     existing: &crate::settings::AppSettings,
@@ -19,34 +17,6 @@ pub async fn save_settings(settings: crate::settings::AppSettings) -> Result<boo
     let existing = crate::settings::get_settings();
     crate::settings::update_settings(merge_settings_for_save(settings, &existing))
         .map_err(|error| error.to_string())?;
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn restart_app(app: AppHandle) -> Result<bool, String> {
-    crate::save_window_state_before_exit(&app);
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        // Finish this instance's listener/database work before reopening with a
-        // newly selected application-data directory. Codex files are untouched.
-        crate::cleanup_before_exit(&app).await;
-        app.restart();
-    });
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn get_app_config_dir_override(app: AppHandle) -> Result<Option<String>, String> {
-    Ok(crate::app_store::read_override_from_store(&app)
-        .map(|path| path.to_string_lossy().to_string()))
-}
-
-#[tauri::command]
-pub async fn set_app_config_dir_override(
-    app: AppHandle,
-    path: Option<String>,
-) -> Result<bool, String> {
-    crate::app_store::set_app_config_dir_to_store(&app, path.as_deref())?;
     Ok(true)
 }
 

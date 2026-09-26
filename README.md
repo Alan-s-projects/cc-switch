@@ -6,11 +6,12 @@ read-only Codex configuration previews.
 
 ## Install and connect
 
-Download `Copilot-Bridge-Atlas-4.2.6-Windows-x64.msi` from
+Download `Copilot-Bridge-Atlas-4.2.9-Windows-x64.msi` from
 [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 The installer is per-user and unsigned.
 
-1. Open **Settings → Copilot**, sign in to GitHub, refresh your GPT models, and save.
+1. Open **Settings → Copilot**, sign in to GitHub, and refresh your GPT models.
+   Changes save automatically.
 2. Turn on the proxy switch. The default address is `http://127.0.0.1:15722/v1`.
 3. Open **Connect**, review the proposed TOML, copy it, and apply it yourself.
 4. Reload Codex so it loads the selected provider and generated model catalog.
@@ -43,45 +44,57 @@ or change Codex's compaction settings.
   estimated cost, cache reuse, and the latest five requests. Connection warnings
   appear above Provider. Health check measures
   endpoint reachability, without an inference or authentication test.
-- **Usage:** a compact Total Cost card above Requests on the left, Tokens on the
-  right, history, trends, model statistics, and a Cost Pricing tab for manual
-  GPT prices.
+- **Usage:** a compact summary of cost, tokens, and requests, with token and
+  request details, history, trends, model statistics, and manual GPT pricing.
+  Usage-range warnings identify GPT models without a matching bundled or custom
+  price and include fresh input, output, cache hits, and cache-hit rate.
   Historical recorded costs are preserved. Imported conversation totals are excluded.
   Token costs are estimates, not a Copilot subscription bill.
 - **Connect:** configuration detection, comparison, copying, and a context-window option.
 - **Settings:** appearance/startup, outbound networking, GitHub authentication,
-  GPT catalog/protocol choices, logs, application-data location, local backups, and About.
+  GPT catalog/protocol choices, logs, local backups, and About.
 
 Home usage updates are coalesced from request events instead of idle SQL polling.
 Status and quota polling pause while the window is inactive. Close the window to
 keep the bridge in the tray; use **Quit** to exit.
 
 The compact Usage Total Cost summary rounds to whole USD and omits a separate
-currency label. Overview's estimated daily cost keeps four decimal places.
+currency label. Overview's estimated daily cost rounds to one decimal place.
 Request logs, stored costs, and editable per-model prices retain precision.
 Average latency includes individual requests and weighted daily rollups for the
 selected range.
 
 Pricing has no models.dev downloads or automatic sync. Existing local price
-overrides are preserved; retired sync metadata remains inactive.
+overrides are stored in `%USERPROFILE%\.copilot-bridge-atlas\model-pricing.json`;
+the bundled GPT defaults are in `src-tauri/src/database/schema.rs`. Cost Pricing
+links to that source and can reset GPT overrides to bundled defaults. Resetting
+removes GPT tombstones and overrides while preserving non-GPT data, retired
+metadata, and recorded history. Custom GPT models without a bundled default
+become unpriced. A client-requested GPT model missing from Copilot's advertised
+catalog may have no matching price in Atlas, even if Copilot has hidden budget
+metadata for it; Atlas does not broaden its GPT pricing rules.
+Existing retired sync metadata remains inactive.
 New models default to Copilot-advertised reasoning levels, or the standard six
 levels if none are reported; the default reasoning level remains Auto. Refreshes
 preserve saved choices for existing models. An empty catalog explains when GitHub
 Copilot must be signed in.
+Catalog rows can be disabled to hide them from Codex without deleting their
+settings, pricing, or usage history. Enabled models sort before disabled models,
+then alphabetically by display name.
 
 ## Independent application identity
 
 - Process: `copilot-bridge-atlas.exe`
 - Application ID: `com.alansprojects.copilotbridgeatlas`
-- Data directory: `%USERPROFILE%\.copilot-bridge-atlas`
+- Default data directory: `%USERPROFILE%\.copilot-bridge-atlas`
 - Database: `copilot-bridge-atlas.db`
 - Generated catalog: `copilot-model-catalog.json` inside the data directory
 
 The app uses its own installer identity, settings, logs, startup entry, and WebView
 profile. It does not discover or reuse another application's data directory.
-Local SQL and database backups can be imported through Settings.
-An application-data directory change is saved for the next launch; choosing
-Restart Later keeps settings, backups and the open database in their current folder.
+Database backups can be restored through Settings → Backup & Restore.
+Folder selections saved by older Atlas versions are still honored on startup,
+without restoring the removed directory editor or modifying those selections.
 
 ## Develop and release
 

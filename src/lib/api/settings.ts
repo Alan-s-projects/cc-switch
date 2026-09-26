@@ -4,8 +4,8 @@ import type { Settings } from "@/types";
 export interface ConfigTransferResult {
   success: boolean;
   message: string;
-  filePath?: string;
   backupId?: string;
+  warning?: string;
 }
 
 export const settingsApi = {
@@ -17,54 +17,12 @@ export const settingsApi = {
     return await invoke("save_settings", { settings });
   },
 
-  async restart(): Promise<boolean> {
-    return await invoke("restart_app");
-  },
-
-  async checkUpdates(): Promise<void> {
-    await invoke("check_for_updates");
-  },
-
-  async selectConfigDirectory(defaultPath?: string): Promise<string | null> {
-    return await invoke("pick_directory", { defaultPath });
-  },
-
-  async openAppConfigFolder(): Promise<void> {
-    await invoke("open_app_config_folder");
-  },
-
-  async getAppConfigDirOverride(): Promise<string | null> {
-    return await invoke("get_app_config_dir_override");
-  },
-
-  async setAppConfigDirOverride(path: string | null): Promise<boolean> {
-    return await invoke("set_app_config_dir_override", { path });
-  },
-
-  async saveFileDialog(defaultName: string): Promise<string | null> {
-    return await invoke("save_file_dialog", { defaultName });
-  },
-
-  async openFileDialog(): Promise<string | null> {
-    return await invoke("open_file_dialog");
-  },
-
-  async exportConfigToFile(filePath: string): Promise<ConfigTransferResult> {
-    return await invoke("export_config_to_file", { filePath });
-  },
-
   async importConfigFromFile(filePath: string): Promise<ConfigTransferResult> {
     return await invoke("import_config_from_file", { filePath });
   },
 
-  async syncCurrentProvidersLive(): Promise<void> {
-    const result = (await invoke("sync_current_providers_live")) as {
-      success?: boolean;
-      message?: string;
-    };
-    if (!result?.success) {
-      throw new Error(result?.message || "Sync current providers failed");
-    }
+  async checkUpdates(): Promise<void> {
+    await invoke("check_for_updates");
   },
 
   async openExternal(url: string): Promise<void> {

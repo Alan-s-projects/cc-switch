@@ -13,9 +13,8 @@ pub(crate) fn validate_cost_multiplier(value: &str) -> Result<Decimal, AppError>
     if trimmed.is_empty() {
         return Err(AppError::Message("Multiplier cannot be empty".into()));
     }
-    let parsed = Decimal::from_str(trimmed).map_err(|error| {
-        AppError::Message(format!("Invalid multiplier: {value} - {error}"))
-    })?;
+    let parsed = Decimal::from_str(trimmed)
+        .map_err(|error| AppError::Message(format!("Invalid multiplier: {value} - {error}")))?;
     if parsed < Decimal::ZERO {
         return Err(AppError::Message("Multiplier cannot be negative".into()));
     }

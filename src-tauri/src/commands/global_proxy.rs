@@ -104,10 +104,7 @@ pub async fn test_proxy_url(url: String) -> Result<ProxyTestResult, String> {
         .map_err(|e| format!("Failed to build client: {e}"))?;
 
     // Probe the two services needed by the bridge, without an inference request.
-    let test_urls = [
-        "https://api.githubcopilot.com",
-        "https://api.github.com",
-    ];
+    let test_urls = ["https://api.githubcopilot.com", "https://api.github.com"];
 
     let mut last_error = None;
 

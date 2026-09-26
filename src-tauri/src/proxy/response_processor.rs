@@ -860,7 +860,11 @@ mod tests {
                     .unwrap();
                     assert_eq!(output.concat(), input.as_bytes());
                     let events = captured.lock().unwrap().take().unwrap();
-                    assert_eq!(events, [event.clone()], "{kind}, multiline={multiline}");
+                    assert_eq!(
+                        events.as_slice(),
+                        std::slice::from_ref(&event),
+                        "{kind}, multiline={multiline}"
+                    );
                     let usage = TokenUsage::from_codex_stream_events_auto(&events)
                         .expect("terminal response usage must be retained");
                     assert_eq!(usage.input_tokens, 125);

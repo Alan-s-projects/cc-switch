@@ -31,12 +31,13 @@ const models = [
   },
 ];
 
-function renderForm(meta?: ProviderMeta) {
+function renderForm(meta?: ProviderMeta, autoSave = false) {
   const onSubmit = vi.fn<(values: ProviderFormValues) => void>();
   render(
     <QueryClientProvider client={createTestQueryClient()}>
       <ProviderForm
         submitLabel="save"
+        autoSave={autoSave}
         onSubmit={onSubmit}
         onCancel={vi.fn()}
         initialData={{
@@ -122,6 +123,45 @@ describe("Codex Copilot provider form", () => {
     expect(
       screen.getAllByRole("combobox", { name: "Reasoning levels" }),
     ).toHaveLength(2);
+  });
+
+  it("saves per-model enabled state without deleting catalog rows", async () => {
+    const onSubmit = renderForm();
+    const switches = screen.getAllByRole("switch");
+    expect(switches).toHaveLength(2);
+    fireEvent.click(switches[1]);
+    fireEvent.click(screen.getByRole("button", { name: "save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const savedModels = JSON.parse(onSubmit.mock.calls[0][0].settingsConfig)
+      .modelCatalog.models;
+    expect(savedModels).toHaveLength(2);
+    expect(savedModels[0]).toMatchObject({ model: "gpt-6-astra" });
+    expect(savedModels[1]).toMatchObject({
+      model: "gpt-6-luna",
+      enabled: false,
+    });
+  });
+
+  it("auto-saves Copilot edits without showing Save or Cancel buttons", async () => {
+    const onSubmit = renderForm(undefined, true);
+    await selectFormat("openai_responses");
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(
+      screen.queryByRole("button", { name: "save" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "common.cancel" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("switch")[1]);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    const saved = onSubmit.mock.calls[1][0];
+    expect(saved.meta?.codexCopilotApiFormat).toBe("openai_responses");
+    expect(
+      JSON.parse(saved.settingsConfig).modelCatalog.models[1],
+    ).toMatchObject({ model: "gpt-6-luna", enabled: false });
   });
 
   it.each<CodexCopilotApiFormat>(["auto", "openai_chat", "openai_responses"])(

@@ -91,6 +91,18 @@ pub struct ModelStats {
     pub avg_cost_per_request: String,
 }
 
+/// Token usage for GPT models that have no matching entry in the local price table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnpricedModelUsage {
+    pub model: String,
+    pub request_count: u64,
+    pub fresh_input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_hit_rate: f64,
+}
+
 /// 请求日志过滤器
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1160,6 +1172,155 @@ impl Database {
         Ok(stats)
     }
 
+    /// Find GPT model usage in the selected range that cannot be priced.
+    ///
+    /// Price matching uses the same aliases as historical cost backfill, so
+    /// dated and reasoning-suffixed model IDs do not create false warnings.
+    pub fn get_unpriced_model_usage(
+        &self,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        app_type: Option<&str>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<Vec<UnpricedModelUsage>, AppError> {
+        let conn = lock_conn!(self.conn);
+
+        let mut detail_conditions = vec![effective_usage_log_filter("l")];
+        let mut detail_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if let Some(start) = start_date {
+            detail_conditions.push("l.created_at >= ?".into());
+            detail_params.push(Box::new(start));
+        }
+        if let Some(end) = end_date {
+            detail_conditions.push("l.created_at <= ?".into());
+            detail_params.push(Box::new(end));
+        }
+        if let Some(app_type) = app_type {
+            detail_conditions.push("l.app_type = ?".into());
+            detail_params.push(Box::new(app_type.to_string()));
+        }
+        push_provider_model_filters(
+            &mut detail_conditions,
+            &mut detail_params,
+            "l",
+            "p",
+            provider_name,
+            model,
+        );
+        let detail_where = format!("WHERE {}", detail_conditions.join(" AND "));
+        let detail_join = if provider_name.is_some() {
+            providers_join("l", "p")
+        } else {
+            String::new()
+        };
+
+        let mut rollup_conditions = vec![effective_usage_rollup_filter("r")];
+        let mut rollup_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        let rollup_bounds = compute_rollup_date_bounds(start_date, end_date)?;
+        push_rollup_date_filters(
+            &mut rollup_conditions,
+            &mut rollup_params,
+            "r.date",
+            &rollup_bounds,
+        );
+        if let Some(app_type) = app_type {
+            rollup_conditions.push("r.app_type = ?".into());
+            rollup_params.push(Box::new(app_type.to_string()));
+        }
+        push_provider_model_filters(
+            &mut rollup_conditions,
+            &mut rollup_params,
+            "r",
+            "p2",
+            provider_name,
+            model,
+        );
+        let rollup_where = format!("WHERE {}", rollup_conditions.join(" AND "));
+        let rollup_join = if provider_name.is_some() {
+            providers_join("r", "p2")
+        } else {
+            String::new()
+        };
+
+        let fresh_input_detail = fresh_input_sql("l");
+        let fresh_input_rollup = fresh_input_sql("r");
+        let detail_model = effective_model_sql("l");
+        let rollup_model = effective_model_sql("r");
+        let sql = format!(
+            "SELECT model,
+                    SUM(request_count),
+                    SUM(fresh_input_tokens),
+                    SUM(output_tokens),
+                    SUM(cache_creation_tokens),
+                    SUM(cache_read_tokens)
+             FROM (
+                SELECT {detail_model} AS model,
+                    COUNT(*) AS request_count,
+                    COALESCE(SUM({fresh_input_detail}), 0) AS fresh_input_tokens,
+                    COALESCE(SUM(l.output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(l.cache_creation_tokens), 0) AS cache_creation_tokens,
+                    COALESCE(SUM(l.cache_read_tokens), 0) AS cache_read_tokens
+                FROM proxy_request_logs l
+                {detail_join}
+                {detail_where}
+                GROUP BY {detail_model}
+                UNION ALL
+                SELECT {rollup_model},
+                    COALESCE(SUM(r.request_count), 0),
+                    COALESCE(SUM({fresh_input_rollup}), 0),
+                    COALESCE(SUM(r.output_tokens), 0),
+                    COALESCE(SUM(r.cache_creation_tokens), 0),
+                    COALESCE(SUM(r.cache_read_tokens), 0)
+                FROM usage_daily_rollups r
+                {rollup_join}
+                {rollup_where}
+                GROUP BY {rollup_model}
+             )
+             GROUP BY model
+             HAVING SUM(fresh_input_tokens + output_tokens
+                        + cache_creation_tokens + cache_read_tokens) > 0
+             ORDER BY model"
+        );
+
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = detail_params;
+        params.extend(rollup_params);
+        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(param_refs.as_slice(), |row| {
+            let fresh_input_tokens = row.get::<_, i64>(2)? as u64;
+            let output_tokens = row.get::<_, i64>(3)? as u64;
+            let cache_creation_tokens = row.get::<_, i64>(4)? as u64;
+            let cache_read_tokens = row.get::<_, i64>(5)? as u64;
+            let cacheable_input = fresh_input_tokens + cache_creation_tokens + cache_read_tokens;
+
+            Ok(UnpricedModelUsage {
+                model: row.get(0)?,
+                request_count: row.get::<_, i64>(1)? as u64,
+                fresh_input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_hit_rate: if cacheable_input > 0 {
+                    cache_read_tokens as f64 / cacheable_input as f64
+                } else {
+                    0.0
+                },
+            })
+        })?;
+        let usage = rows.collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        let mut unpriced = Vec::new();
+        for model_usage in usage {
+            if is_supported_gpt_pricing_model(&model_usage.model)
+                && find_model_pricing_row(&conn, &model_usage.model)?.is_none()
+            {
+                unpriced.push(model_usage);
+            }
+        }
+        Ok(unpriced)
+    }
+
     /// 获取请求日志列表（分页）
     pub fn get_request_logs(
         &self,
@@ -1535,6 +1696,10 @@ fn log_pricing_scope_matches(log: &RequestLogDetail, target_candidates: &[String
 pub(crate) fn is_placeholder_pricing_model(model_id: &str) -> bool {
     let normalized = model_id.trim().to_ascii_lowercase();
     normalized.is_empty() || matches!(normalized.as_str(), "unknown" | "null" | "none")
+}
+
+pub(crate) fn is_supported_gpt_pricing_model(model_id: &str) -> bool {
+    !model_pricing_candidates(model_id).is_empty()
 }
 
 fn query_model_pricing_exact(
@@ -2726,6 +2891,253 @@ mod tests {
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].model, "gpt-6-astra");
         assert_eq!(stats[0].request_count, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn unpriced_model_usage_reports_missing_prices_with_token_totals() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let start = local_ts(2026, 4, 1, 12, 0, 0);
+        let end = local_ts(2026, 4, 1, 18, 0, 0);
+
+        {
+            let conn = lock_conn!(db.conn);
+            insert_usage_log(
+                &conn,
+                "priced-alias",
+                "codex",
+                "copilot",
+                "openai/gpt-6-astra-2026-04-01-high",
+                "proxy",
+                start + 60,
+                1000,
+                50,
+                200,
+                100,
+                200,
+                "0",
+            )?;
+            insert_usage_log(
+                &conn,
+                "unpriced-model",
+                "codex",
+                "copilot",
+                "gpt-7-future-2026-04-01-high",
+                "proxy",
+                start + 120,
+                1000,
+                50,
+                200,
+                100,
+                200,
+                "0",
+            )?;
+            conn.execute(
+                "UPDATE proxy_request_logs SET input_token_semantics = ?1
+                 WHERE request_id = 'unpriced-model'",
+                [INPUT_TOKEN_SEMANTICS_TOTAL],
+            )?;
+            insert_usage_log(
+                &conn,
+                "outside-range",
+                "codex",
+                "copilot",
+                "gpt-8-outside",
+                "proxy",
+                end + 1,
+                100,
+                10,
+                0,
+                0,
+                200,
+                "0",
+            )?;
+            insert_usage_log(
+                &conn,
+                "imported-model",
+                "codex",
+                "copilot",
+                "gpt-7-imported",
+                "codex_session",
+                start + 180,
+                100,
+                10,
+                0,
+                0,
+                200,
+                "0",
+            )?;
+            insert_usage_log(
+                &conn,
+                "non-gpt-model",
+                "codex",
+                "copilot",
+                "claude-retired",
+                "proxy",
+                start + 240,
+                100,
+                10,
+                0,
+                0,
+                200,
+                "0",
+            )?;
+            insert_usage_log(
+                &conn,
+                "no-token-usage",
+                "codex",
+                "copilot",
+                "gpt-empty",
+                "proxy",
+                start + 300,
+                0,
+                0,
+                0,
+                0,
+                200,
+                "0",
+            )?;
+        }
+
+        let unpriced =
+            db.get_unpriced_model_usage(Some(start), Some(end), Some("codex"), None, None)?;
+        assert_eq!(unpriced.len(), 1);
+        assert_eq!(unpriced[0].model, "gpt-7-future-2026-04-01-high");
+        assert_eq!(unpriced[0].request_count, 1);
+        assert_eq!(unpriced[0].fresh_input_tokens, 700);
+        assert_eq!(unpriced[0].output_tokens, 50);
+        assert_eq!(unpriced[0].cache_read_tokens, 200);
+        assert!((unpriced[0].cache_hit_rate - 0.2).abs() < 0.0001);
+
+        assert!(db
+            .get_unpriced_model_usage(Some(end + 10), Some(end + 100), Some("codex"), None, None)?
+            .is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn unpriced_model_usage_uses_pricing_aliases_and_selected_range() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let start = local_ts(2026, 4, 1, 12, 0, 0);
+        let end = local_ts(2026, 4, 1, 18, 0, 0);
+
+        {
+            let conn = lock_conn!(db.conn);
+            insert_usage_log(
+                &conn,
+                "priced-alias",
+                "codex",
+                "copilot",
+                "openai/gpt-6-astra-2026-04-01-high",
+                "proxy",
+                start + 60,
+                1000,
+                50,
+                200,
+                100,
+                200,
+                "0",
+            )?;
+            insert_usage_log(
+                &conn,
+                "unpriced-model",
+                "codex",
+                "copilot",
+                "gpt-7-future-2026-04-01-high",
+                "proxy",
+                start + 120,
+                1000,
+                50,
+                200,
+                100,
+                200,
+                "0",
+            )?;
+            conn.execute(
+                "UPDATE proxy_request_logs
+                 SET request_model = 'gpt-6-astra',
+                     pricing_model = 'gpt-7-future-2026-04-01-high',
+                     input_token_semantics = ?1
+                 WHERE request_id = 'unpriced-model'",
+                [INPUT_TOKEN_SEMANTICS_TOTAL],
+            )?;
+            insert_usage_log(
+                &conn,
+                "outside-range",
+                "codex",
+                "copilot",
+                "gpt-8-outside",
+                "proxy",
+                end + 1,
+                100,
+                10,
+                0,
+                0,
+                200,
+                "0",
+            )?;
+            insert_usage_log(
+                &conn,
+                "imported-model",
+                "codex",
+                "copilot",
+                "gpt-7-imported",
+                "codex_session",
+                start + 180,
+                100,
+                10,
+                0,
+                0,
+                200,
+                "0",
+            )?;
+            insert_usage_log(
+                &conn,
+                "non-gpt-model",
+                "codex",
+                "copilot",
+                "claude-retired",
+                "proxy",
+                start + 240,
+                100,
+                10,
+                0,
+                0,
+                200,
+                "0",
+            )?;
+            insert_usage_log(
+                &conn,
+                "no-token-usage",
+                "codex",
+                "copilot",
+                "gpt-empty",
+                "proxy",
+                start + 300,
+                0,
+                0,
+                0,
+                0,
+                200,
+                "0",
+            )?;
+        }
+
+        let unpriced =
+            db.get_unpriced_model_usage(Some(start), Some(end), Some("codex"), None, None)?;
+        assert_eq!(unpriced.len(), 1);
+        assert_eq!(unpriced[0].model, "gpt-7-future-2026-04-01-high");
+        assert_eq!(unpriced[0].request_count, 1);
+        assert_eq!(unpriced[0].fresh_input_tokens, 700);
+        assert_eq!(unpriced[0].output_tokens, 50);
+        assert_eq!(unpriced[0].cache_read_tokens, 200);
+        assert!((unpriced[0].cache_hit_rate - 0.2).abs() < 0.0001);
+
+        assert!(db
+            .get_unpriced_model_usage(Some(end + 10), Some(end + 100), Some("codex"), None, None)?
+            .is_empty());
 
         Ok(())
     }

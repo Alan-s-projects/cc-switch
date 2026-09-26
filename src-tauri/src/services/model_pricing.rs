@@ -102,7 +102,7 @@ fn normalize_pricing(entry: ModelPricingInfo) -> Result<ModelPricingInfo, AppErr
     })
 }
 
-fn is_gpt_model_id(model_id: &str) -> bool {
+pub(crate) fn is_gpt_model_id(model_id: &str) -> bool {
     model_id.trim().to_ascii_lowercase().starts_with("gpt-")
 }
 
@@ -333,6 +333,30 @@ pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppErro
     Ok(())
 }
 
+/// Restore bundled GPT prices and remove GPT-only user overrides and tombstones.
+/// Non-GPT data and retired file metadata remain untouched.
+pub fn reset_model_pricing_to_defaults(db: &Database) -> Result<(), AppError> {
+    let _file_guard = file_lock()
+        .lock()
+        .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+    let mut file = read_file_unlocked()?.unwrap_or_default();
+    file.models
+        .retain(|entry| !is_gpt_model_id(&entry.model_id));
+    file.deleted_model_ids
+        .retain(|model_id| !is_gpt_model_id(model_id));
+
+    let mut conn = lock_conn!(db.conn);
+    let transaction = conn.transaction()?;
+    transaction.execute(
+        "DELETE FROM model_pricing WHERE lower(trim(model_id)) LIKE 'gpt-%'",
+        [],
+    )?;
+    Database::ensure_model_pricing_seeded_on_conn(&transaction)?;
+    write_file_unlocked(&file)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,6 +508,133 @@ mod tests {
                 .deleted_model_ids
                 .iter()
                 .any(|entry| entry == "gpt-custom-model"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn reset_restores_bundled_gpt_prices_and_preserves_non_gpt_data_and_history() {
+        with_test_home(|db, path| {
+            let edited_default = ModelPricingInfo {
+                model_id: "gpt-6-astra".into(),
+                display_name: "GPT-6 Astra custom".into(),
+                input_cost_per_million: "99".into(),
+                output_cost_per_million: "199".into(),
+                cache_read_cost_per_million: "9".into(),
+                cache_creation_cost_per_million: "19".into(),
+            };
+            update_model_pricing(db, edited_default).expect("edit default price");
+            update_model_pricing(db, sample_pricing()).expect("add custom GPT price");
+            delete_model_pricing(db, "gpt-6-luna").expect("add GPT tombstone");
+
+            let retired_entry = ModelPricingInfo {
+                model_id: "retired-model".into(),
+                display_name: "Retired model".into(),
+                input_cost_per_million: "4.2".into(),
+                output_cost_per_million: "8.4".into(),
+                cache_read_cost_per_million: "0".into(),
+                cache_creation_cost_per_million: "0".into(),
+            };
+            {
+                let mut file = read_file_unlocked()
+                    .expect("read pricing file")
+                    .expect("pricing file exists");
+                file.extra.insert(
+                    "retiredMetadata".into(),
+                    serde_json::json!({"enabled": false}),
+                );
+                file.models.push(retired_entry.clone());
+                file.deleted_model_ids.push("retired-tombstone".into());
+                write_file_unlocked(&file).expect("preserve legacy pricing metadata");
+
+                let conn = db.conn.lock().expect("lock test database");
+                conn.execute(
+                    "INSERT INTO model_pricing (
+                        model_id, display_name, input_cost_per_million, output_cost_per_million
+                    ) VALUES ('retired-model', 'Retired model', '4.2', '8.4')",
+                    [],
+                )
+                .expect("insert retired database price");
+                conn.execute(
+                    "INSERT INTO proxy_request_logs (
+                        request_id, provider_id, app_type, model, request_model,
+                        input_tokens, output_tokens, input_cost_usd, output_cost_usd,
+                        total_cost_usd, latency_ms, status_code, created_at
+                    ) VALUES (
+                        'recorded-price', 'copilot', 'codex', 'gpt-6-astra',
+                        'gpt-6-astra', 1000, 20, '0.099', '0.004', '0.103', 100, 200, 1
+                    )",
+                    [],
+                )
+                .expect("insert recorded usage cost");
+            }
+
+            reset_model_pricing_to_defaults(db).expect("reset bundled prices");
+
+            let conn = db.conn.lock().expect("lock test database");
+            let default_input: String = conn
+                .query_row(
+                    "SELECT input_cost_per_million FROM model_pricing
+                     WHERE model_id = 'gpt-6-astra'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("query restored default");
+            assert_eq!(default_input, "10");
+            assert_eq!(
+                conn.query_row(
+                    "SELECT COUNT(*) FROM model_pricing
+                     WHERE model_id = 'gpt-6-luna'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("query restored tombstoned default"),
+                1
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT COUNT(*) FROM model_pricing
+                     WHERE model_id = 'gpt-custom-model'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("query removed custom GPT price"),
+                0
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT input_cost_per_million FROM model_pricing
+                     WHERE model_id = 'retired-model'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("query preserved non-GPT price"),
+                "4.2"
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT total_cost_usd FROM proxy_request_logs
+                     WHERE request_id = 'recorded-price'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("query unchanged history"),
+                "0.103"
+            );
+            drop(conn);
+
+            let saved: serde_json::Value =
+                serde_json::from_slice(&fs::read(path).expect("read saved pricing file"))
+                    .expect("parse saved pricing file");
+            assert_eq!(
+                saved["retiredMetadata"],
+                serde_json::json!({"enabled": false})
+            );
+            assert_eq!(saved["models"], serde_json::json!([retired_entry]));
+            assert_eq!(
+                saved["deletedModelIds"],
+                serde_json::json!(["retired-tombstone"])
+            );
         });
     }
 

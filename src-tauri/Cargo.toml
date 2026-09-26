@@ -1,6 +1,6 @@
 [package]
 name = "copilot-bridge-atlas"
-version = "4.2.8"
+version = "4.2.9"
 description = "Codex GitHub Copilot bridge with usage dashboard"
 authors = ["Alan's Projects"]
 license = "MIT"
@@ -29,7 +29,6 @@ tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-store = "2"
 tauri-plugin-window-state = "2"
 dirs = "5.0"
 toml = "0.8"

@@ -36,6 +36,7 @@ export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
         : undefined;
   return {
     model: typeof item?.model === "string" ? item.model : "",
+    ...(typeof item?.enabled === "boolean" ? { enabled: item.enabled } : {}),
     displayName:
       typeof item?.displayName === "string"
         ? item.displayName

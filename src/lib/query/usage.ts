@@ -90,6 +90,24 @@ export const usageKeys = {
       filters?.providerName ?? null,
       filters?.model ?? null,
     ] as const,
+  unpricedModelUsage: (
+    preset: UsageRangeSelection["preset"],
+    customStartDate: number | undefined,
+    customEndDate: number | undefined,
+    filters?: UsageScopeFilters,
+    liveEndTime?: boolean,
+  ) =>
+    [
+      ...usageKeys.all,
+      "unpriced-model-usage",
+      preset,
+      customStartDate ?? 0,
+      customEndDate ?? 0,
+      liveEndTime ?? false,
+      filters?.appType ?? null,
+      filters?.providerName ?? null,
+      filters?.model ?? null,
+    ] as const,
   logs: (key: RequestLogsKey, page: number, pageSize: number) =>
     [
       ...usageKeys.all,
@@ -205,6 +223,35 @@ export function useModelStats(
   });
 }
 
+export function useUnpricedModelUsage(
+  range: UsageRangeSelection,
+  filters?: UsageScopeFilters,
+  options?: UsageQueryOptions,
+) {
+  const effective = normalizeScopeFilters(filters);
+  return useQuery({
+    queryKey: usageKeys.unpricedModelUsage(
+      range.preset,
+      range.customStartDate,
+      range.customEndDate,
+      effective,
+      range.liveEndTime,
+    ),
+    queryFn: () => {
+      const { startDate, endDate } = resolveUsageRange(range);
+      return usageApi.getUnpricedModelUsage(
+        startDate,
+        endDate,
+        effective.appType,
+        effective.providerName,
+        effective.model,
+      );
+    },
+    refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS,
+    refetchIntervalInBackground: options?.refetchIntervalInBackground ?? false,
+  });
+}
+
 export function useRequestLogs({
   filters,
   range,
@@ -272,6 +319,17 @@ export function useDeleteModelPricing() {
 
   return useMutation({
     mutationFn: (modelId: string) => usageApi.deleteModelPricing(modelId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: usageKeys.all });
+    },
+  });
+}
+
+export function useResetModelPricingToDefaults() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: usageApi.resetModelPricingToDefaults,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: usageKeys.all });
     },

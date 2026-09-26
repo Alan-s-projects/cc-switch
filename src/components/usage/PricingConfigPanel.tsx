@@ -8,7 +8,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Dialog,
@@ -18,22 +17,61 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useModelPricing, useDeleteModelPricing } from "@/lib/query/usage";
+import {
+  useDeleteModelPricing,
+  useModelPricing,
+  useResetModelPricingToDefaults,
+} from "@/lib/query/usage";
 import { PricingEditModal } from "./PricingEditModal";
 import type { ModelPricing } from "@/types/usage";
-import { Plus, Pencil, Trash2, Loader2 } from "lucide-react";
+import { settingsApi } from "@/lib/api";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import {
+  ExternalLink,
+  Loader2,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
+
+const BUILT_IN_PRICING_SOURCE_URL =
+  "https://github.com/Alan-s-projects/copilot-bridge-atlas/blob/atlas/src-tauri/src/database/schema.rs";
 
 export function PricingConfigPanel() {
   const { t } = useTranslation();
   const { data: pricing, isLoading, error } = useModelPricing();
   const deleteMutation = useDeleteModelPricing();
+  const resetMutation = useResetModelPricingToDefaults();
   const [editingModel, setEditingModel] = useState<ModelPricing | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [resetConfirm, setResetConfirm] = useState(false);
+
+  const openBuiltInPricingSource = () => {
+    void settingsApi
+      .openExternal(BUILT_IN_PRICING_SOURCE_URL)
+      .catch((error) => {
+        toast.error(String(error));
+      });
+  };
 
   const handleDelete = (modelId: string) => {
     deleteMutation.mutate(modelId, {
       onSuccess: () => setDeleteConfirm(null),
+    });
+  };
+
+  const handleReset = () => {
+    resetMutation.mutate(undefined, {
+      onSuccess: () => {
+        setResetConfirm(false);
+        toast.success(
+          t("usage.pricingReset", "Pricing reset to bundled GPT defaults"),
+        );
+      },
+      onError: (error) => toast.error(String(error)),
     });
   };
 
@@ -71,20 +109,51 @@ export function PricingConfigPanel() {
     <div className="space-y-6">
       {/* 模型定价配置 */}
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h4 className="text-sm font-medium text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm font-medium text-muted-foreground">
             {t("usage.modelPricingDesc")} {t("usage.perMillion")}
-          </h4>
-          <Button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleAddNew();
-            }}
-            size="sm"
-          >
-            <Plus className="mr-1 h-4 w-4" />
-            {t("common.add")}
-          </Button>
+          </p>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button asChild variant="link" size="sm">
+              <a
+                href={BUILT_IN_PRICING_SOURCE_URL}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(event) => {
+                  event.preventDefault();
+                  openBuiltInPricingSource();
+                }}
+              >
+                <ExternalLink className="h-4 w-4" />
+                {t("usage.viewBuiltInPricing", "View built-in prices")}
+              </a>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={resetMutation.isPending}
+              onClick={() => setResetConfirm(true)}
+            >
+              {resetMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RotateCcw className="h-4 w-4" />
+              )}
+              {t("usage.resetPricing", "Reset to code defaults")}
+            </Button>
+            <Button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleAddNew();
+              }}
+              size="sm"
+            >
+              <Plus className="h-4 w-4" />
+              {t("common.add")}
+            </Button>
+          </div>
         </div>
 
         <div className="space-y-4">
@@ -179,6 +248,61 @@ export function PricingConfigPanel() {
           }}
         />
       )}
+
+      <Dialog open={resetConfirm} onOpenChange={setResetConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {t(
+                "usage.resetPricingTitle",
+                "Reset GPT prices to code defaults?",
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              {t(
+                "usage.resetPricingDesc",
+                "This removes all custom GPT price overrides and GPT deletion tombstones, then restores prices bundled with Atlas. Custom GPT models without a bundled default will become unpriced. Non-GPT pricing and retired metadata are preserved. Previously recorded request costs are unchanged.",
+              )}
+              <a
+                href={BUILT_IN_PRICING_SOURCE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-3 inline-flex items-center gap-1 text-blue-600 hover:underline dark:text-blue-400"
+                onClick={(event) => {
+                  event.preventDefault();
+                  openBuiltInPricingSource();
+                }}
+              >
+                {t(
+                  "usage.viewBuiltInPricingFile",
+                  "View bundled defaults in schema.rs",
+                )}
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+              </a>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={resetMutation.isPending}
+              onClick={() => setResetConfirm(false)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={resetMutation.isPending}
+              onClick={handleReset}
+            >
+              {resetMutation.isPending
+                ? t("common.loading", "Loading...")
+                : t("usage.resetPricingConfirm", "Reset GPT prices")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={!!deleteConfirm}
