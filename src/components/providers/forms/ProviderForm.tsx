@@ -4,16 +4,11 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import type { ManagedAuthProvider } from "@/lib/api";
-import type {
-  Provider,
-  ProviderMeta,
-  CodexCatalogModel,
-  CodexCopilotApiFormat,
-} from "@/types";
+import type { Provider, ProviderMeta, CodexCatalogModel } from "@/types";
 import { CodexFormFields } from "./CodexFormFields";
 import { useCopilotAuth } from "./hooks/useCopilotAuth";
 import {
-  isGptModel,
+  isValidModelId,
   mapCodexCatalogModelForForm,
 } from "@/utils/codexModelCatalog";
 
@@ -26,7 +21,7 @@ export const normalizeCodexCatalogModelsForSave = (
   for (const item of models) {
     const model = item.model.trim();
     const key = model.toLowerCase();
-    if (!isGptModel(model) || seen.has(key)) continue;
+    if (!isValidModelId(model) || seen.has(key)) continue;
     seen.add(key);
 
     const displayName = item.displayName?.trim();
@@ -51,6 +46,19 @@ export const normalizeCodexCatalogModelsForSave = (
     normalized.push({
       model,
       ...(item.enabled === false ? { enabled: false } : {}),
+      ...(typeof item.available === "boolean"
+        ? { available: item.available }
+        : {}),
+      ...(item.vendor ? { vendor: item.vendor } : {}),
+      ...(item.maxOutputTokens
+        ? { maxOutputTokens: item.maxOutputTokens }
+        : {}),
+      ...(typeof item.supportsToolCalls === "boolean"
+        ? { supportsToolCalls: item.supportsToolCalls }
+        : {}),
+      ...(item.supportedReasoningLevels
+        ? { supportedReasoningLevels: item.supportedReasoningLevels }
+        : {}),
       ...(displayName ? { displayName } : {}),
       ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
       // Native Responses profile overrides (ignored by the chat/proxy profile).
@@ -61,9 +69,7 @@ export const normalizeCodexCatalogModelsForSave = (
         ? { inputModalities }
         : {}),
       ...(baseInstructions ? { baseInstructions } : {}),
-      ...(reasoningLevels && reasoningLevels.length > 0
-        ? { reasoningLevels }
-        : {}),
+      ...(reasoningLevels ? { reasoningLevels } : {}),
       ...(defaultReasoningLevel ? { defaultReasoningLevel } : {}),
     });
   }
@@ -120,14 +126,11 @@ export function ProviderForm({
     initialMeta?.authBinding?.accountId ?? initialMeta?.githubAccountId ?? null,
   );
   const { hasAnyAccount } = useCopilotAuth();
-  const [format, setFormat] = useState<CodexCopilotApiFormat>(
-    initialMeta?.codexCopilotApiFormat ?? "auto",
-  );
   const [catalog, setCatalog] = useState<CodexCatalogModel[]>(() => {
     const value = settings.modelCatalog as { models?: unknown[] } | undefined;
     return (value?.models ?? [])
       .map(mapCodexCatalogModelForForm)
-      .filter((item) => isGptModel(item.model));
+      .filter((item) => isValidModelId(item.model));
   });
 
   const markChanged = useCallback(() => {
@@ -141,8 +144,6 @@ export function ProviderForm({
     const meta: ProviderMeta = {
       ...initialMeta,
       providerType: "github_copilot",
-      apiFormat: format === "auto" ? "openai_chat" : format,
-      codexCopilotApiFormat: format === "auto" ? undefined : format,
       githubAccountId: accountId ?? undefined,
       authBinding: {
         source: "managed_account",
@@ -158,7 +159,7 @@ export function ProviderForm({
         modelCatalog: { models: normalizeCodexCatalogModelsForSave(catalog) },
       }),
     };
-  }, [accountId, catalog, format, initialData?.name, initialMeta, settings]);
+  }, [accountId, catalog, initialData?.name, initialMeta, settings]);
 
   const enqueueAutoSave = useCallback(
     (version: number, values: ProviderFormValues) => {
@@ -223,9 +224,7 @@ export function ProviderForm({
       !autoSave ||
       !hasAnyAccount ||
       saveVersionRef.current === savedVersionRef.current ||
-      catalog.some(
-        (item) => item.model.trim() && !isGptModel(item.model.trim()),
-      )
+      catalog.some((item) => item.model.trim() && !isValidModelId(item.model))
     ) {
       return;
     }
@@ -247,9 +246,7 @@ export function ProviderForm({
       return;
     }
     if (
-      catalog.some(
-        (item) => item.model.trim() && !isGptModel(item.model.trim()),
-      )
+      catalog.some((item) => item.model.trim() && !isValidModelId(item.model))
     ) {
       setSaveStatus("invalid");
       return;
@@ -276,8 +273,10 @@ export function ProviderForm({
       toast.error("Sign in to GitHub Copilot first.");
       return;
     }
-    if (catalog.some((item) => item.model.trim() && !isGptModel(item.model))) {
-      toast.error("Only GPT model IDs (gpt-...) are supported.");
+    if (
+      catalog.some((item) => item.model.trim() && !isValidModelId(item.model))
+    ) {
+      toast.error("Model IDs must not contain whitespace.");
       return;
     }
     setSaving(true);
@@ -303,11 +302,6 @@ export function ProviderForm({
           markChanged();
         }}
         onManageAuthAccounts={onManageAuthAccounts}
-        copilotApiFormat={format}
-        onCopilotApiFormatChange={(value) => {
-          setFormat(value);
-          markChanged();
-        }}
         catalogModels={catalog}
         onCatalogModelsChange={(models) => {
           setCatalog(models);
@@ -335,9 +329,7 @@ export function ProviderForm({
             <span role="alert">{t("settings.saveFailedGeneric")}</span>
           )}
           {!saving && saveStatus === "invalid" && (
-            <span role="alert">
-              Only GPT model IDs (gpt-...) are supported.
-            </span>
+            <span role="alert">Model IDs must not contain whitespace.</span>
           )}
           {!saving && saveStatus === "auth-required" && (
             <span role="alert">Sign in to GitHub Copilot to save changes.</span>

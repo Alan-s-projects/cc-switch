@@ -2,6 +2,7 @@
 use crate::config::get_home_dir;
 use crate::error::AppError;
 use crate::model_capabilities::{image_input_capability_from_modalities, ImageInputCapability};
+use crate::proxy::providers::copilot_model_map::is_valid_model_id;
 use once_cell::sync::OnceCell;
 use serde_json::{json, Value};
 use std::fs;
@@ -110,12 +111,16 @@ fn apply_codex_reasoning_level_override(
     template_default: Option<&str>,
     spec: &CodexCatalogModelSpec,
 ) -> bool {
-    let Some(levels) = spec.reasoning_levels.as_deref() else {
-        return false;
-    };
+    let levels = spec.reasoning_levels.as_deref().unwrap_or(&[]);
     let canonical = codex_canonical_efforts(levels);
     if canonical.is_empty() {
-        return false;
+        entry_obj.insert(
+            "supported_reasoning_levels".into(),
+            codex_supported_reasoning_levels(&["none".into()]),
+        );
+        entry_obj.insert("default_reasoning_level".into(), json!("none"));
+        entry_obj.insert("supports_reasoning_summaries".into(), json!(false));
+        return true;
     }
     let supported = codex_supported_reasoning_levels(levels);
     entry_obj.insert("supported_reasoning_levels".to_string(), supported);
@@ -225,7 +230,9 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
     let mut specs = Vec::new();
 
     for model_config in models {
-        if model_config.get("enabled").and_then(Value::as_bool) == Some(false) {
+        if model_config.get("enabled").and_then(Value::as_bool) == Some(false)
+            || model_config.get("available").and_then(Value::as_bool) == Some(false)
+        {
             continue;
         }
 
@@ -233,12 +240,12 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
             .get("model")
             .and_then(|value| value.as_str())
             .map(str::trim)
-            .filter(|model| model.to_ascii_lowercase().starts_with("gpt-"))
+            .filter(|model| is_valid_model_id(model))
         else {
             continue;
         };
 
-        if !seen.insert(model.to_string()) {
+        if !seen.insert(model.to_ascii_lowercase()) {
             continue;
         }
 
@@ -272,7 +279,7 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
             })
             .filter(|items| !items.is_empty());
 
-        let reasoning_levels = ["reasoningLevels", "reasoning_levels"]
+        let mut reasoning_levels = ["reasoningLevels", "reasoning_levels"]
             .into_iter()
             .find_map(|key| {
                 model_config
@@ -289,6 +296,22 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
                     })
                     .filter(|levels| !levels.is_empty())
             });
+        if let Some(supported) = model_config
+            .get("supportedReasoningLevels")
+            .and_then(Value::as_array)
+        {
+            let supported = supported
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>();
+            reasoning_levels = Some(
+                reasoning_levels
+                    .unwrap_or_else(|| supported.iter().map(|level| level.to_string()).collect())
+                    .into_iter()
+                    .filter(|level| supported.contains(&level.as_str()))
+                    .collect(),
+            );
+        }
         let default_reasoning_level = ["defaultReasoningLevel", "default_reasoning_level"]
             .into_iter()
             .find_map(|key| {
@@ -517,11 +540,12 @@ mod tests {
     }
 
     #[test]
-    fn only_enabled_gpt_models_are_published_without_mutating_saved_rows() {
+    fn enabled_available_models_from_any_vendor_are_published_without_mutating_saved_rows() {
         let settings = json!({"modelCatalog": {"models": [
-            {"model": "gpt-6-astra"}, {"model": "retired-model"},
+            {"model": "gpt-6-astra"}, {"model": "future-vendor/model"},
             {"model": "GPT-6-LUNA"}, {"model": "gpt-6-disabled", "enabled": false},
-            {"model": ""}
+            {"model": ""}, {"model": "not-available", "available": false},
+            {"model": "gemini-future"}, {"model": "GEMINI-FUTURE"}
         ]}});
         let specs = codex_catalog_model_specs(&settings);
         assert_eq!(
@@ -529,11 +553,55 @@ mod tests {
                 .iter()
                 .map(|spec| spec.model.as_str())
                 .collect::<Vec<_>>(),
-            ["gpt-6-astra", "GPT-6-LUNA"]
+            [
+                "gpt-6-astra",
+                "future-vendor/model",
+                "GPT-6-LUNA",
+                "gemini-future"
+            ]
         );
         assert_eq!(
             settings["modelCatalog"]["models"].as_array().unwrap().len(),
-            5
+            8
+        );
+    }
+
+    #[test]
+    fn non_reasoning_and_future_model_catalogs_do_not_inherit_gpt_efforts() {
+        let settings = json!({"modelCatalog": {"models": [
+            {"model": "future/text-only", "inputModalities": ["text"], "supportsParallelToolCalls": false,
+             "reasoningLevels": ["high", "ultra"], "supportedReasoningLevels": []},
+            {"model": "gemini-future", "reasoningLevels": ["low", "high", "ultra"], "supportedReasoningLevels": ["low", "high"],
+             "defaultReasoningLevel": "ultra", "contextWindow": 936000}
+        ]}});
+        let catalog = codex_model_catalog_from_settings(&settings, "")
+            .unwrap()
+            .unwrap();
+        let first = &catalog["models"][0];
+        assert_eq!(first["input_modalities"], json!(["text"]));
+        assert_eq!(first["supports_parallel_tool_calls"], false);
+        assert_eq!(first["default_reasoning_level"], "none");
+        assert_eq!(
+            first["supported_reasoning_levels"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(first["supports_reasoning_summaries"], false);
+        let second = &catalog["models"][1];
+        assert_eq!(second["context_window"], 936000);
+        assert_eq!(second["default_reasoning_level"], "high");
+        assert_eq!(
+            second["supported_reasoning_levels"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            settings["modelCatalog"]["models"][0]["reasoningLevels"],
+            json!(["high", "ultra"])
         );
     }
 

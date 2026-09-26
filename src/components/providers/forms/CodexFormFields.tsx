@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Check, ChevronsUpDown, Loader2, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -34,29 +33,27 @@ import {
 } from "@/lib/api/copilot";
 import { cn } from "@/lib/utils";
 import { extractErrorMessage } from "@/utils/errorUtils";
-import { isGptModel } from "@/utils/codexModelCatalog";
-import type { CodexCatalogModel, CodexCopilotApiFormat } from "@/types";
+import { isValidModelId } from "@/utils/codexModelCatalog";
+import type { CodexCatalogModel } from "@/types";
 import type { ManagedAuthProvider } from "@/lib/api";
 
-export function isCopilotModelSupportedByCodex(
-  model: CopilotModel,
-  format: CodexCopilotApiFormat = "auto",
-): boolean {
-  if (!isGptModel(model.id)) return false;
-  const endpoints =
-    format === "openai_responses"
-      ? ["/responses", "/v1/responses"]
-      : format === "openai_chat"
-        ? ["/chat/completions", "/v1/chat/completions"]
-        : [
-            "/responses",
-            "/v1/responses",
-            "/chat/completions",
-            "/v1/chat/completions",
-          ];
+export function isCopilotModelSupportedByCodex(model: CopilotModel): boolean {
+  if (
+    !isValidModelId(model.id) ||
+    !model.model_picker_enabled ||
+    model.policy_state === "disabled" ||
+    (model.model_type && model.model_type !== "chat")
+  )
+    return false;
+  const endpoints = [
+    "/responses",
+    "/v1/responses",
+    "/chat/completions",
+    "/v1/chat/completions",
+  ];
   return (model.supported_endpoints ?? []).some((endpoint) =>
     endpoints.includes(
-      endpoint.split("?")[0].replace(/\/+$/, "").toLowerCase(),
+      endpoint.trim().split("?")[0].replace(/\/+$/, "").toLowerCase(),
     ),
   );
 }
@@ -70,15 +67,6 @@ export function resolveCopilotCatalogContextWindow(
   return reported && reported > 0 ? Math.min(configured, reported) : current;
 }
 
-const DEFAULT_NEW_MODEL_REASONING_LEVELS = [
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultra",
-] as const;
-
 export function mergeCopilotModelCapabilities(
   model: CopilotModel,
   existing?: CodexCatalogModel,
@@ -86,11 +74,15 @@ export function mergeCopilotModelCapabilities(
   return {
     ...existing,
     model: model.id,
+    available: true,
+    vendor: model.vendor || existing?.vendor,
     displayName: model.name || model.id,
     contextWindow: resolveCopilotCatalogContextWindow(
       existing?.contextWindow,
       model.context_window,
     ),
+    maxOutputTokens: model.max_output_tokens ?? existing?.maxOutputTokens,
+    supportsToolCalls: model.supports_tool_calls ?? existing?.supportsToolCalls,
     // Live capabilities supersede old inferred flags. An omitted declaration
     // preserves the saved value instead of guessing that a feature is absent.
     supportsParallelToolCalls:
@@ -103,13 +95,10 @@ export function mergeCopilotModelCapabilities(
           : ["text"],
     // Reasoning levels are editable preferences. Live data seeds an unset
     // list, but must not replace a saved choice or its default.
-    reasoningLevels: existing
-      ? existing.reasoningLevels?.length
-        ? existing.reasoningLevels
-        : model.reasoning_efforts
-      : model.reasoning_efforts?.length
-        ? model.reasoning_efforts
-        : [...DEFAULT_NEW_MODEL_REASONING_LEVELS],
+    reasoningLevels: existing?.reasoningLevels?.length
+      ? existing.reasoningLevels
+      : (model.reasoning_efforts ?? []),
+    supportedReasoningLevels: model.reasoning_efforts ?? [],
     defaultReasoningLevel: existing?.defaultReasoningLevel,
   };
 }
@@ -119,8 +108,6 @@ interface CodexFormFieldsProps {
   selectedGitHubAccountId?: string | null;
   onGitHubAccountSelect?: (id: string | null) => void;
   onManageAuthAccounts?: (target: ManagedAuthProvider) => void;
-  copilotApiFormat: CodexCopilotApiFormat;
-  onCopilotApiFormatChange: (value: CodexCopilotApiFormat) => void;
   catalogModels: CodexCatalogModel[];
   onCatalogModelsChange: (models: CodexCatalogModel[]) => void;
 }
@@ -142,19 +129,24 @@ const AUTO_DEFAULT_REASONING_LEVEL = "__auto__";
 
 function ReasoningLevelsEditor({
   levels,
+  supportedLevels,
   defaultLevel,
   onLevelsChange,
   onDefaultLevelChange,
 }: {
   levels?: string[];
+  supportedLevels?: string[];
   defaultLevel?: string;
   onLevelsChange: (levels: string[] | undefined) => void;
   onDefaultLevelChange: (level: string | undefined) => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const availableLevels = CODEX_REASONING_LEVELS.filter(
+    (level) => supportedLevels === undefined || supportedLevels.includes(level),
+  );
   const selected = (levels ?? []).filter((level) =>
-    (CODEX_REASONING_LEVELS as readonly string[]).includes(level),
+    (availableLevels as readonly string[]).includes(level),
   );
 
   const toggleLevel = (level: string) => {
@@ -184,6 +176,7 @@ function ReasoningLevelsEditor({
           role="combobox"
           aria-label="Reasoning levels"
           aria-expanded={open}
+          disabled={availableLevels.length === 0}
           className="flex h-9 w-full items-center justify-between gap-1 rounded-md border border-border-default bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus-visible:outline-none focus:border-border-default focus-visible:border-border-default focus:ring-0 focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span
@@ -218,7 +211,7 @@ function ReasoningLevelsEditor({
               })}
             </CommandEmpty>
             <CommandGroup>
-              {CODEX_REASONING_LEVELS.map((level) => (
+              {availableLevels.map((level) => (
                 <CommandItem
                   key={level}
                   value={level}
@@ -244,7 +237,11 @@ function ReasoningLevelsEditor({
               })}
             </span>
             <Select
-              value={defaultLevel ?? AUTO_DEFAULT_REASONING_LEVEL}
+              value={
+                defaultLevel && selected.includes(defaultLevel)
+                  ? defaultLevel
+                  : AUTO_DEFAULT_REASONING_LEVEL
+              }
               onValueChange={(value) =>
                 onDefaultLevelChange(
                   value === AUTO_DEFAULT_REASONING_LEVEL ? undefined : value,
@@ -287,8 +284,6 @@ export function CodexFormFields({
   selectedGitHubAccountId,
   onGitHubAccountSelect,
   onManageAuthAccounts,
-  copilotApiFormat,
-  onCopilotApiFormatChange,
   catalogModels,
   onCatalogModelsChange,
 }: CodexFormFieldsProps) {
@@ -301,7 +296,7 @@ export function CodexFormFields({
     return () => {
       fetchSequence.current += 1;
     };
-  }, [selectedGitHubAccountId, isCopilotAuthenticated, copilotApiFormat]);
+  }, [selectedGitHubAccountId, isCopilotAuthenticated]);
 
   const fetchModels = async () => {
     if (!isCopilotAuthenticated) {
@@ -318,24 +313,35 @@ export function CodexFormFields({
       const existing = new Map(
         catalogModels.map((model) => [model.model.trim().toLowerCase(), model]),
       );
-      const usable = models.filter((model) =>
-        isCopilotModelSupportedByCodex(model, copilotApiFormat),
-      );
+      const usable = models.filter(isCopilotModelSupportedByCodex);
       if (!usable.length) {
+        onCatalogModelsChange(
+          catalogModels.map((model) => ({ ...model, available: false })),
+        );
         toast.error(
-          "No GPT models support the selected protocol. Try Automatic.",
+          "No compatible chat models are available to this Copilot account.",
         );
         return;
       }
-      onCatalogModelsChange(
-        usable.map((model) =>
+      const availableIds = new Set(
+        usable.map((model) => model.id.trim().toLowerCase()),
+      );
+      onCatalogModelsChange([
+        ...usable.map((model) =>
           mergeCopilotModelCapabilities(
             model,
             existing.get(model.id.trim().toLowerCase()),
           ),
         ),
-      );
-      toast.success(`Loaded ${usable.length} Copilot GPT models.`);
+        ...catalogModels
+          .filter(
+            (model) =>
+              isValidModelId(model.model) &&
+              !availableIds.has(model.model.trim().toLowerCase()),
+          )
+          .map((model) => ({ ...model, available: false })),
+      ]);
+      toast.success(`Loaded ${usable.length} Copilot models.`);
     } catch (error) {
       if (sequence === fetchSequence.current)
         toast.error(extractErrorMessage(error));
@@ -353,8 +359,10 @@ export function CodexFormFields({
     .map((model, index) => ({ model, index }))
     .sort((left, right) => {
       const enabledOrder =
-        Number(right.model.enabled !== false) -
-        Number(left.model.enabled !== false);
+        Number(
+          right.model.enabled !== false && right.model.available !== false,
+        ) -
+        Number(left.model.enabled !== false && left.model.available !== false);
       if (enabledOrder !== 0) return enabledOrder;
 
       const leftName =
@@ -380,28 +388,6 @@ export function CodexFormFields({
             : undefined
         }
       />
-      <div className="space-y-2">
-        <Label htmlFor="codex-upstream-format">Upstream format</Label>
-        <Select
-          value={copilotApiFormat}
-          onValueChange={(value) =>
-            onCopilotApiFormatChange(value as CodexCopilotApiFormat)
-          }
-        >
-          <SelectTrigger id="codex-upstream-format">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="auto">Automatic (recommended)</SelectItem>
-            <SelectItem value="openai_responses">Responses</SelectItem>
-            <SelectItem value="openai_chat">Chat Completions</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground">
-          Automatic uses each model's supported Copilot endpoint, preferring
-          Responses. Codex always connects to Atlas using Responses.
-        </p>
-      </div>
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-medium">Model catalog</h3>
@@ -433,13 +419,6 @@ export function CodexFormFields({
             </Button>
           </div>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Refresh updates image and parallel-tool capabilities. New models
-          default to Copilot-reported reasoning levels, or the standard set if
-          none are reported. Saved choices survive refresh. Input limits cap the
-          catalog context window. Disable a model to hide it from Codex without
-          deleting its settings or pricing.
-        </p>
         {catalogModels.length === 0 && (
           <p role="status" className="text-sm text-muted-foreground">
             {isCopilotAuthenticated
@@ -486,6 +465,7 @@ export function CodexFormFields({
               />
               <ReasoningLevelsEditor
                 levels={model.reasoningLevels}
+                supportedLevels={model.supportedReasoningLevels}
                 defaultLevel={model.defaultReasoningLevel}
                 onLevelsChange={(reasoningLevels) =>
                   updateModel(index, {
@@ -504,6 +484,7 @@ export function CodexFormFields({
               <div className="flex items-center justify-center">
                 <Switch
                   checked={model.enabled !== false}
+                  disabled={model.available === false}
                   onCheckedChange={(enabled) =>
                     updateModel(index, { enabled: enabled ? undefined : false })
                   }
@@ -514,7 +495,16 @@ export function CodexFormFields({
                 />
               </div>
             </div>
+            {model.available === false && (
+              <p
+                role="status"
+                className="text-xs text-amber-600 dark:text-amber-400"
+              >
+                Unavailable in the current Copilot catalog
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">
+              {model.vendor ? `${model.vendor} · ` : ""}
               Images:{" "}
               {model.inputModalities
                 ? model.inputModalities.includes("image")

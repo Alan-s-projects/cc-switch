@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Table,
@@ -27,17 +27,20 @@ import type { ModelPricing } from "@/types/usage";
 import { settingsApi } from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   ExternalLink,
   Loader2,
   Pencil,
   Plus,
   RotateCcw,
+  Search,
   Trash2,
+  X,
 } from "lucide-react";
 
 const BUILT_IN_PRICING_SOURCE_URL =
-  "https://github.com/Alan-s-projects/copilot-bridge-atlas/blob/atlas/src-tauri/src/database/schema.rs";
+  "https://github.com/Alan-s-projects/copilot-bridge-atlas/blob/atlas/src-tauri/src/resources/model-pricing.json";
 
 export function PricingConfigPanel() {
   const { t } = useTranslation();
@@ -48,6 +51,14 @@ export function PricingConfigPanel() {
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
+  const [search, setSearch] = useState("");
+  const filteredPricing = useMemo(() => {
+    const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return (pricing ?? []).filter((model) => {
+      const text = `${model.modelId} ${model.displayName}`.toLowerCase();
+      return terms.every((term) => text.includes(term));
+    });
+  }, [pricing, search]);
 
   const openBuiltInPricingSource = () => {
     void settingsApi
@@ -68,7 +79,7 @@ export function PricingConfigPanel() {
       onSuccess: () => {
         setResetConfirm(false);
         toast.success(
-          t("usage.pricingReset", "Pricing reset to bundled GPT defaults"),
+          t("usage.pricingReset", "Pricing reset to bundled defaults"),
         );
       },
       onError: (error) => toast.error(String(error)),
@@ -110,9 +121,38 @@ export function PricingConfigPanel() {
       {/* 模型定价配置 */}
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm font-medium text-muted-foreground">
-            {t("usage.modelPricingDesc")} {t("usage.perMillion")}
-          </p>
+          <div className="relative w-full min-w-0 sm:w-72">
+            <Search
+              aria-hidden
+              className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground"
+            />
+            <Input
+              aria-label={t("usage.searchPricing", "Search model prices")}
+              placeholder={t("usage.searchPricing", "Search model prices")}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setSearch("");
+              }}
+              className="h-9 pl-9 pr-9"
+            />
+            {search && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-1 top-1 h-7 w-7"
+                title={t("usage.clearPricingSearch", "Clear pricing search")}
+                aria-label={t(
+                  "usage.clearPricingSearch",
+                  "Clear pricing search",
+                )}
+                onClick={() => setSearch("")}
+              >
+                <X aria-hidden className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button asChild variant="link" size="sm">
               <a
@@ -155,6 +195,7 @@ export function PricingConfigPanel() {
             </Button>
           </div>
         </div>
+        <p className="text-xs text-muted-foreground">{t("usage.perMillion")}</p>
 
         <div className="space-y-4">
           {!pricing || pricing.length === 0 ? (
@@ -186,7 +227,7 @@ export function PricingConfigPanel() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {pricing.map((model) => (
+                  {filteredPricing.map((model) => (
                     <TableRow key={model.modelId}>
                       <TableCell className="font-mono text-sm">
                         {model.modelId}
@@ -230,6 +271,21 @@ export function PricingConfigPanel() {
                       </TableCell>
                     </TableRow>
                   ))}
+                  {filteredPricing.length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={7}
+                        className="py-8 text-center text-sm text-muted-foreground"
+                      >
+                        <span role="status">
+                          {t(
+                            "usage.noPricingMatches",
+                            "No matching model prices.",
+                          )}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </div>
@@ -253,15 +309,12 @@ export function PricingConfigPanel() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {t(
-                "usage.resetPricingTitle",
-                "Reset GPT prices to code defaults?",
-              )}
+              {t("usage.resetPricingTitle", "Reset prices to code defaults?")}
             </DialogTitle>
             <DialogDescription>
               {t(
                 "usage.resetPricingDesc",
-                "This removes all custom GPT price overrides and GPT deletion tombstones, then restores prices bundled with Atlas. Custom GPT models without a bundled default will become unpriced. Non-GPT pricing and retired metadata are preserved. Previously recorded request costs are unchanged.",
+                "This removes all custom price overrides and deletion tombstones, then restores prices bundled with Atlas. Custom models without a bundled default will become unpriced. Retired metadata and previously recorded request costs are unchanged.",
               )}
               <a
                 href={BUILT_IN_PRICING_SOURCE_URL}
@@ -275,7 +328,7 @@ export function PricingConfigPanel() {
               >
                 {t(
                   "usage.viewBuiltInPricingFile",
-                  "View bundled defaults in schema.rs",
+                  "View bundled defaults in model-pricing.json",
                 )}
                 <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
               </a>
@@ -298,7 +351,7 @@ export function PricingConfigPanel() {
             >
               {resetMutation.isPending
                 ? t("common.loading", "Loading...")
-                : t("usage.resetPricingConfirm", "Reset GPT prices")}
+                : t("usage.resetPricingConfirm", "Reset prices")}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -343,7 +343,7 @@ function UnpricedModelsAlert({
             <p>
               {t(
                 "usage.unpricedModelsMessage",
-                "No bundled or custom GPT price matches these models. Their usage cost is recorded as $0 until a matching price is added.",
+                "No bundled or custom price matches these models. Their usage cost is recorded as $0 until a matching price is added.",
               )}
             </p>
           </div>
@@ -400,7 +400,7 @@ function UnpricedModelsAlert({
         <p className="text-xs text-muted-foreground">
           {t(
             "usage.unpricedModelsCatalogNote",
-            "A client-requested GPT model may not have a row in Copilot's advertised model list. If so, Atlas cannot read a matching hidden Copilot budget price or broaden its GPT pricing rules.",
+            "New Copilot models may not have a bundled price yet. No price is inferred from another model or vendor.",
           )}
         </p>
       </AlertDescription>

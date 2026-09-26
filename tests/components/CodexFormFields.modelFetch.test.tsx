@@ -32,8 +32,6 @@ function props(overrides: Partial<Props> = {}): Props {
   return {
     isCopilotAuthenticated: true,
     selectedGitHubAccountId: "account-a",
-    copilotApiFormat: "auto",
-    onCopilotApiFormatChange: vi.fn(),
     catalogModels: [],
     onCatalogModelsChange: vi.fn(),
     ...overrides,
@@ -113,20 +111,29 @@ describe("Copilot model catalog import", () => {
     expect(displayNames()).toEqual(["Zulu", "Alpha", "Beta", "Charlie"]);
   });
 
-  it("filters models by Copilot transport and imports them into the bridge catalog", async () => {
+  it("imports models from all vendors and both supported transports without a format selector", async () => {
     vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
       model("gpt-6-astra"),
-      model("gpt-chat-only", "/chat/completions"),
-      model("other-model"),
+      model("gemini-future", "/chat/completions"),
+      model("grok-future"),
+      model("future-vendor/model"),
+      model("unsupported-transport", "/messages"),
     ]);
-    const input = props({ copilotApiFormat: "openai_responses" });
+    const input = props();
     render(<Harness {...input} />);
     fireEvent.click(fetchButton());
     await waitFor(() =>
       expect(screen.getAllByDisplayValue("gpt-6-astra")[0]).toBeVisible(),
     );
-    expect(screen.queryByDisplayValue("gpt-chat-only")).not.toBeInTheDocument();
-    expect(screen.queryByDisplayValue("other-model")).not.toBeInTheDocument();
+    for (const id of ["gemini-future", "grok-future", "future-vendor/model"]) {
+      expect(screen.getAllByDisplayValue(id)[0]).toBeVisible();
+    }
+    expect(
+      screen.queryByDisplayValue("unsupported-transport"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Upstream format" }),
+    ).not.toBeInTheDocument();
     expect(copilotGetModelsForAccount).toHaveBeenCalledWith("account-a");
   });
 
@@ -156,7 +163,7 @@ describe("Copilot model catalog import", () => {
         expect.objectContaining({
           model: "gpt-new",
           inputModalities: ["text", "image"],
-          reasoningLevels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          reasoningLevels: [],
           defaultReasoningLevel: undefined,
         }),
       ]),
@@ -204,7 +211,10 @@ describe("Copilot model catalog import", () => {
     );
     expect(
       screen.getAllByRole("combobox", { name: "Reasoning levels" })[0],
-    ).toHaveTextContent("low, high, ultra");
+    ).toHaveTextContent("low, high");
+    expect(
+      screen.getAllByRole("combobox", { name: "Reasoning levels" })[0],
+    ).not.toHaveTextContent("ultra");
   });
 
   it("discards results from an account that is no longer selected", async () => {
@@ -269,7 +279,7 @@ describe("Copilot model catalog import", () => {
     fireEvent.click(fetchButton());
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        "No GPT models support the selected protocol. Try Automatic.",
+        "No compatible chat models are available to this Copilot account.",
       ),
     );
   });
@@ -306,5 +316,48 @@ describe("Copilot model catalog import", () => {
       ).toBeVisible(),
     );
     expect(copilotGetModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves missing models and disabled choices across catalog refreshes", async () => {
+    vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
+      model("gemini-new", "/chat/completions"),
+    ]);
+    const input = props({
+      catalogModels: [
+        { model: "grok-returning", enabled: false, reasoningLevels: ["high"] },
+      ],
+    });
+    render(<Harness {...input} />);
+    fireEvent.click(fetchButton());
+    await waitFor(() => expect(input.onCatalogModelsChange).toHaveBeenCalled());
+    expect(input.onCatalogModelsChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({ model: "gemini-new", available: true }),
+      expect.objectContaining({
+        model: "grok-returning",
+        enabled: false,
+        available: false,
+        reasoningLevels: ["high"],
+      }),
+    ]);
+    expect(screen.getAllByRole("switch")[1]).toBeDisabled();
+    vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
+      model("gemini-new", "/chat/completions"),
+      model("grok-returning"),
+    ]);
+    fireEvent.click(fetchButton());
+    await waitFor(() => expect(screen.getAllByRole("switch")[1]).toBeEnabled());
+    expect(screen.getAllByRole("switch")[1]).not.toBeChecked();
+  });
+
+  it("marks saved models unavailable when a successful refresh returns no eligible models", async () => {
+    vi.mocked(copilotGetModelsForAccount).mockResolvedValue([]);
+    const input = props({ catalogModels: [{ model: "future-model" }] });
+    render(<Harness {...input} />);
+    fireEvent.click(fetchButton());
+    await waitFor(() =>
+      expect(input.onCatalogModelsChange).toHaveBeenCalledWith([
+        { model: "future-model", available: false },
+      ]),
+    );
   });
 });

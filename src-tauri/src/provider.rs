@@ -48,24 +48,10 @@ pub struct AuthBinding {
     pub account_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum CodexCopilotApiFormat {
-    #[default]
-    Auto,
-    OpenaiResponses,
-    OpenaiChat,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderMeta {
     #[serde(rename = "providerType", skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
-    #[serde(
-        rename = "codexCopilotApiFormat",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub codex_copilot_api_format: Option<CodexCopilotApiFormat>,
     #[serde(rename = "authBinding", skip_serializing_if = "Option::is_none")]
     pub auth_binding: Option<AuthBinding>,
     /// Read compatibility for a saved Copilot account binding.
@@ -108,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_copilot_metadata_keeps_its_protocol_and_account() {
+    fn existing_copilot_metadata_keeps_account_and_ignores_retired_protocol_selection() {
         let meta: ProviderMeta = serde_json::from_value(json!({
             "providerType": "github_copilot",
             "githubAccountId": "account",
@@ -120,10 +106,10 @@ mod tests {
             meta.managed_account_id_for("github_copilot").as_deref(),
             Some("account")
         );
-        assert_eq!(
-            meta.codex_copilot_api_format,
-            Some(CodexCopilotApiFormat::OpenaiResponses)
-        );
+        assert!(serde_json::to_value(&meta)
+            .unwrap()
+            .get("codexCopilotApiFormat")
+            .is_none());
         assert!(serde_json::to_value(&meta)
             .unwrap()
             .get("retiredFeature")

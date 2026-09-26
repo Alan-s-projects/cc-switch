@@ -1,6 +1,7 @@
 use crate::config::{atomic_write, get_app_config_dir};
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+use crate::proxy::providers::copilot_model_map::is_valid_model_id;
 use rusqlite::{params, Transaction};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -77,10 +78,12 @@ fn normalize_decimal(label: &str, value: &str) -> Result<String, AppError> {
 }
 
 fn normalize_pricing(entry: ModelPricingInfo) -> Result<ModelPricingInfo, AppError> {
-    let model_id = entry.model_id.trim().to_string();
+    let model_id = entry.model_id.trim().to_ascii_lowercase();
     let display_name = entry.display_name.trim().to_string();
-    if model_id.is_empty() {
-        return Err(AppError::Message("Model ID is required".into()));
+    if !is_valid_model_id(&model_id) {
+        return Err(AppError::Message(
+            "A model ID without whitespace is required".into(),
+        ));
     }
     if display_name.is_empty() {
         return Err(AppError::Message("Display name is required".into()));
@@ -102,24 +105,10 @@ fn normalize_pricing(entry: ModelPricingInfo) -> Result<ModelPricingInfo, AppErr
     })
 }
 
-pub(crate) fn is_gpt_model_id(model_id: &str) -> bool {
-    model_id.trim().to_ascii_lowercase().starts_with("gpt-")
-}
-
-fn require_gpt_pricing(model_id: &str) -> Result<(), AppError> {
-    if is_gpt_model_id(model_id) {
-        Ok(())
-    } else {
-        Err(AppError::InvalidInput(
-            "Only GPT model pricing can be changed.".into(),
-        ))
-    }
-}
-
 fn normalize_key_list(values: Vec<String>) -> Vec<String> {
     values
         .into_iter()
-        .map(|value| value.trim().to_string())
+        .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -220,19 +209,11 @@ fn apply_file_to_database(
     let mut conn = lock_conn!(db.conn);
     let transaction = conn.transaction()?;
     let mut upserted = 0;
-    for entry in file
-        .models
-        .iter()
-        .filter(|entry| is_gpt_model_id(&entry.model_id))
-    {
+    for entry in &file.models {
         upserted += upsert_pricing(&transaction, entry)?;
     }
     let mut deleted = 0;
-    for model_id in file
-        .deleted_model_ids
-        .iter()
-        .filter(|id| is_gpt_model_id(id))
-    {
+    for model_id in &file.deleted_model_ids {
         deleted += transaction.execute(
             "DELETE FROM model_pricing WHERE model_id = ?1",
             params![model_id],
@@ -242,8 +223,7 @@ fn apply_file_to_database(
     Ok((upserted, deleted))
 }
 
-/// Load GPT overrides from Atlas's own model-pricing.json. Imported prices
-/// for other models remain opaque in the file and database.
+/// Load all model overrides from Atlas's own model-pricing.json.
 pub fn sync_local_model_pricing(db: &Database) -> Result<usize, AppError> {
     let (upserted, deleted) = {
         let _file_guard = file_lock()
@@ -266,7 +246,6 @@ pub fn sync_local_model_pricing(db: &Database) -> Result<usize, AppError> {
 
 pub fn update_model_pricing(db: &Database, entry: ModelPricingInfo) -> Result<usize, AppError> {
     let mut entry = normalize_pricing(entry)?;
-    require_gpt_pricing(&entry.model_id)?;
     entry.model_id.make_ascii_lowercase();
 
     sync_local_model_pricing(db)?;
@@ -305,11 +284,12 @@ pub fn update_model_pricing(db: &Database, entry: ModelPricingInfo) -> Result<us
 }
 
 pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppError> {
-    let model_id = model_id.trim();
-    if model_id.is_empty() {
-        return Err(AppError::Message("Model ID is required".into()));
+    let model_id = model_id.trim().to_ascii_lowercase();
+    if !is_valid_model_id(&model_id) {
+        return Err(AppError::Message(
+            "A model ID without whitespace is required".into(),
+        ));
     }
-    require_gpt_pricing(model_id)?;
 
     sync_local_model_pricing(db)?;
     let _file_guard = file_lock()
@@ -317,7 +297,11 @@ pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppErro
         .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
     let mut file = load_or_create_file_unlocked()?;
     file.models.retain(|entry| entry.model_id != model_id);
-    if !file.deleted_model_ids.iter().any(|entry| entry == model_id) {
+    if !file
+        .deleted_model_ids
+        .iter()
+        .any(|entry| entry == &model_id)
+    {
         file.deleted_model_ids.push(model_id.to_string());
         file.deleted_model_ids.sort();
     }
@@ -333,24 +317,19 @@ pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppErro
     Ok(())
 }
 
-/// Restore bundled GPT prices and remove GPT-only user overrides and tombstones.
-/// Non-GPT data and retired file metadata remain untouched.
+/// Restore bundled prices and remove explicit overrides and deletion tombstones.
+/// Retired file metadata and recorded request costs remain untouched.
 pub fn reset_model_pricing_to_defaults(db: &Database) -> Result<(), AppError> {
     let _file_guard = file_lock()
         .lock()
         .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
     let mut file = read_file_unlocked()?.unwrap_or_default();
-    file.models
-        .retain(|entry| !is_gpt_model_id(&entry.model_id));
-    file.deleted_model_ids
-        .retain(|model_id| !is_gpt_model_id(model_id));
+    file.models.clear();
+    file.deleted_model_ids.clear();
 
     let mut conn = lock_conn!(db.conn);
     let transaction = conn.transaction()?;
-    transaction.execute(
-        "DELETE FROM model_pricing WHERE lower(trim(model_id)) LIKE 'gpt-%'",
-        [],
-    )?;
+    transaction.execute("DELETE FROM model_pricing", [])?;
     Database::ensure_model_pricing_seeded_on_conn(&transaction)?;
     write_file_unlocked(&file)?;
     transaction.commit()?;
@@ -513,7 +492,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn reset_restores_bundled_gpt_prices_and_preserves_non_gpt_data_and_history() {
+    fn reset_restores_all_bundled_prices_and_preserves_metadata_and_history() {
         with_test_home(|db, path| {
             let edited_default = ModelPricingInfo {
                 model_id: "gpt-6-astra".into(),
@@ -603,13 +582,13 @@ mod tests {
             );
             assert_eq!(
                 conn.query_row(
-                    "SELECT input_cost_per_million FROM model_pricing
+                    "SELECT COUNT(*) FROM model_pricing
                      WHERE model_id = 'retired-model'",
                     [],
-                    |row| row.get::<_, String>(0),
+                    |row| row.get::<_, i64>(0),
                 )
-                .expect("query preserved non-GPT price"),
-                "4.2"
+                .expect("query removed custom price"),
+                0
             );
             assert_eq!(
                 conn.query_row(
@@ -630,11 +609,8 @@ mod tests {
                 saved["retiredMetadata"],
                 serde_json::json!({"enabled": false})
             );
-            assert_eq!(saved["models"], serde_json::json!([retired_entry]));
-            assert_eq!(
-                saved["deletedModelIds"],
-                serde_json::json!(["retired-tombstone"])
-            );
+            assert_eq!(saved["models"], serde_json::json!([]));
+            assert_eq!(saved["deletedModelIds"], serde_json::json!([]));
         });
     }
 
@@ -778,12 +754,12 @@ mod tests {
 
     #[test]
     #[serial]
-    fn rejects_non_gpt_pricing_before_writing_a_file_or_database() {
+    fn rejects_invalid_pricing_before_writing_a_file_or_database() {
         with_test_home(|db, path| {
             let mut retired = sample_pricing();
-            retired.model_id = "retired-model".into();
+            retired.model_id = "invalid model".into();
             assert!(update_model_pricing(db, retired).is_err());
-            assert!(delete_model_pricing(db, "retired-model").is_err());
+            assert!(delete_model_pricing(db, "invalid model").is_err());
             assert!(!path.exists());
             assert_eq!(db.conn.lock().unwrap().query_row(
                 "SELECT COUNT(*) FROM model_pricing WHERE model_id IN ('gpt-custom-model', 'retired-model')",
@@ -794,7 +770,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn imported_non_gpt_overrides_and_tombstones_do_not_change_opaque_database_rows() {
+    fn explicit_non_gpt_overrides_and_tombstones_are_applied_without_rewriting_the_file() {
         with_test_home(|db, path| {
             let mut legacy = sample_pricing();
             legacy.model_id = "retired-model".into();
@@ -811,12 +787,12 @@ mod tests {
             ).unwrap();
             write_file_unlocked(&file).unwrap();
             let before = fs::read(path).unwrap();
-            assert_eq!(sync_local_model_pricing(db).unwrap(), 0);
+            assert_eq!(sync_local_model_pricing(db).unwrap(), 2);
             assert_eq!(fs::read(path).unwrap(), before);
             assert_eq!(db.conn.lock().unwrap().query_row(
-                "SELECT COUNT(*) FROM model_pricing WHERE model_id LIKE 'retired-%' AND input_cost_per_million = '4.2'",
+                "SELECT COUNT(*) FROM model_pricing WHERE model_id LIKE 'retired-%' AND input_cost_per_million = '99'",
                 [], |row| row.get::<_, i64>(0)
-            ).unwrap(), 2);
+            ).unwrap(), 1);
         });
     }
 }

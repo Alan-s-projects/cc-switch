@@ -13,26 +13,29 @@ export interface AuthBinding {
 
 export interface ProviderMeta {
   apiFormat?: "openai_chat" | "openai_responses";
-  // An omitted selection uses Copilot's live endpoint capabilities.
-  codexCopilotApiFormat?: CodexCopilotApiFormat;
+  // Retired metadata is accepted from old records but never controls routing.
+  codexCopilotApiFormat?: string;
   authBinding?: AuthBinding;
   providerType?: string;
   // Accept the saved account binding used by earlier provider records.
   githubAccountId?: string;
 }
 
-export type CodexCopilotApiFormat = "auto" | "openai_responses" | "openai_chat";
-
 export interface CodexCatalogModel {
   model: string;
   displayName?: string;
   /** Defaults to enabled for catalog rows saved by earlier app versions. */
   enabled?: boolean;
+  available?: boolean;
+  vendor?: string;
   contextWindow?: string | number;
+  maxOutputTokens?: number;
+  supportsToolCalls?: boolean;
   supportsParallelToolCalls?: boolean;
   inputModalities?: string[];
   baseInstructions?: string;
   reasoningLevels?: string[];
+  supportedReasoningLevels?: string[];
   defaultReasoningLevel?: string;
 }
 

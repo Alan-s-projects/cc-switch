@@ -9,11 +9,13 @@ describe("ProviderForm Codex catalog helpers", () => {
         { model: " gpt-6-astra ", displayName: " GPT-6 Astra " },
         { model: "GPT-6-ASTRA", displayName: "Duplicate" },
         { model: "", displayName: "Empty" },
-        { model: "other-model", displayName: "Unsupported" },
+        { model: "other-model", displayName: "Future Model" },
+        { model: "invalid model", displayName: "Invalid" },
         { model: "gpt-6-luna", contextWindow: "128000 tokens" },
       ]),
     ).toEqual([
       { model: "gpt-6-astra", displayName: "GPT-6 Astra" },
+      { model: "other-model", displayName: "Future Model" },
       { model: "gpt-6-luna", contextWindow: 128000 },
     ]);
   });
@@ -75,7 +77,7 @@ describe("ProviderForm Codex catalog helpers", () => {
         reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"],
         defaultReasoningLevel: "xhigh",
       },
-      { model: "gpt-test" },
+      { model: "gpt-test", reasoningLevels: [] },
     ]);
   });
 

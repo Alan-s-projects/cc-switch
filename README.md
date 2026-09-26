@@ -1,16 +1,16 @@
 # Copilot Bridge Atlas
 
-A Windows x64 desktop app connecting **Codex → GitHub Copilot → GPT**, with a
+A Windows x64 desktop app connecting **Codex → GitHub Copilot**, with a
 local OpenAI-compatible server, account management, usage statistics, and
 read-only Codex configuration previews.
 
 ## Install and connect
 
-Download `Copilot-Bridge-Atlas-4.2.9-Windows-x64.msi` from
+Download `Copilot-Bridge-Atlas-4.2.10-Windows-x64.msi` from
 [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 The installer is per-user and unsigned.
 
-1. Open **Settings → Copilot**, sign in to GitHub, and refresh your GPT models.
+1. Open **Settings → Copilot**, sign in to GitHub, and refresh your models.
    Changes save automatically.
 2. Turn on the proxy switch. The default address is `http://127.0.0.1:15722/v1`.
 3. Open **Connect**, review the proposed TOML, copy it, and apply it yourself.
@@ -45,14 +45,14 @@ or change Codex's compaction settings.
   appear above Provider. Health check measures
   endpoint reachability, without an inference or authentication test.
 - **Usage:** a compact summary of cost, tokens, and requests, with token and
-  request details, history, trends, model statistics, and manual GPT pricing.
-  Usage-range warnings identify GPT models without a matching bundled or custom
+  request details, history, trends, model statistics, and searchable model pricing.
+  Usage-range warnings identify models without a matching bundled or custom
   price and include fresh input, output, cache hits, and cache-hit rate.
   Historical recorded costs are preserved. Imported conversation totals are excluded.
   Token costs are estimates, not a Copilot subscription bill.
 - **Connect:** configuration detection, comparison, copying, and a context-window option.
 - **Settings:** appearance/startup, outbound networking, GitHub authentication,
-  GPT catalog/protocol choices, logs, local backups, and About.
+  unified model catalog, logs, local backups, and About.
 
 Home usage updates are coalesced from request events instead of idle SQL polling.
 Status and quota polling pause while the window is inactive. Close the window to
@@ -66,21 +66,32 @@ selected range.
 
 Pricing has no models.dev downloads or automatic sync. Existing local price
 overrides are stored in `%USERPROFILE%\.copilot-bridge-atlas\model-pricing.json`;
-the bundled GPT defaults are in `src-tauri/src/database/schema.rs`. Cost Pricing
-links to that source and can reset GPT overrides to bundled defaults. Resetting
-removes GPT tombstones and overrides while preserving non-GPT data, retired
-metadata, and recorded history. Custom GPT models without a bundled default
-become unpriced. A client-requested GPT model missing from Copilot's advertised
-catalog may have no matching price in Atlas, even if Copilot has hidden budget
-metadata for it; Atlas does not broaden its GPT pricing rules.
+the bundled defaults are in `src-tauri/src/resources/model-pricing.json`.
+They contain 219 entries copied from a pinned cc-switch revision, with provenance
+in that file. Cost Pricing links to the source, filters model IDs and names as
+you type, and can reset all overrides to bundled defaults. Resetting removes
+price overrides and deletion tombstones while preserving retired metadata and
+recorded history. Custom models without a bundled default become unpriced.
+Unknown models and distinct vendor variants never borrow another model's price.
+See [pricing provenance and limitations](docs/model-pricing.md).
 Existing retired sync metadata remains inactive.
-New models default to Copilot-advertised reasoning levels, or the standard six
-levels if none are reported; the default reasoning level remains Auto. Refreshes
-preserve saved choices for existing models. An empty catalog explains when GitHub
+New models default to Copilot-advertised reasoning levels; an absent declaration
+does not invent GPT reasoning capabilities. Refreshes preserve saved choices,
+while generated catalogs expose only supported choices. An empty catalog explains when GitHub
 Copilot must be signed in.
 Catalog rows can be disabled to hide them from Codex without deleting their
 settings, pricing, or usage history. Enabled models sort before disabled models,
-then alphabetically by display name.
+then alphabetically by display name. Temporarily unavailable models retain their
+saved choices but are omitted from Codex's generated catalog.
+
+Atlas keeps one provider, GitHub Copilot, regardless of the model vendor.
+Responses or Chat Completions transport is chosen automatically from each model's
+advertised capabilities; there is no upstream-format setting. Future model IDs
+using these protocols do not need a code allowlist update. Embedding, completion,
+hidden, policy-disabled, and unsupported-protocol entries are not exposed as chat
+models. Explicit refresh fetches a fresh catalog, and routing caches expire after
+five minutes. Context, output limits, image support, parallel tools, and reasoning
+metadata remain model-specific.
 
 ## Independent application identity
 
