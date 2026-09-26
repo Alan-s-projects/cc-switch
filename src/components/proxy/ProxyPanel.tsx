@@ -16,7 +16,7 @@ export function ProxyPanel() {
   const { data: status } = useProxyStatusQuery();
   const save = useUpdateGlobalProxyConfig();
   const [address, setAddress] = useState("127.0.0.1");
-  const [port, setPort] = useState("15721");
+  const [port, setPort] = useState("15722");
   useEffect(() => {
     if (config) {
       setAddress(config.listenAddress);

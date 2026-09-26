@@ -38,13 +38,13 @@ try {
     if ($env:CARGO_BUILD_TARGET) {
         $targetRoot = Join-Path $targetRoot $env:CARGO_BUILD_TARGET
     }
-    $builtMsi = Join-Path $targetRoot "release\bundle\msi\CC Switch_${atlasVersion}_x64_en-US.msi"
+    $builtMsi = Join-Path $targetRoot "release\bundle\msi\Copilot Bridge Atlas_${atlasVersion}_x64_en-US.msi"
     if (-not (Test-Path -LiteralPath $builtMsi -PathType Leaf)) {
         throw "Expected installer is missing: $builtMsi"
     }
     $releaseDir = Join-Path $atlasRoot 'release'
     New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
-    $installerName = "CC-Switch-atlas-$atlasVersion-Windows-x64.msi"
+    $installerName = "Copilot-Bridge-Atlas-$atlasVersion-Windows-x64.msi"
     $installerPath = Join-Path $releaseDir $installerName
     Copy-Item -LiteralPath $builtMsi -Destination $installerPath -Force
     $hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()

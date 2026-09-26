@@ -29,30 +29,10 @@ pub struct ModelPricing {
 pub struct CostCalculator;
 
 impl CostCalculator {
-    /// 计算请求成本
-    ///
-    /// # 参数
-    /// - `usage`: Token 使用量
-    /// - `pricing`: 模型定价
-    /// - `cost_multiplier`: Global pricing multiplier
-    ///
-    /// # 计算逻辑
-    /// - input_cost: input_tokens × 输入价格
-    /// - cache_read_cost: cache_read_tokens × 缓存读取价格
-    /// - Claude/Anthropic 的 input_tokens 已经不包含 cache_read_tokens
-    /// - total_cost: 各项成本之和 × 倍率（倍率只作用于最终总价）
-    pub fn calculate(
-        usage: &TokenUsage,
-        pricing: &ModelPricing,
-        cost_multiplier: Decimal,
-    ) -> CostBreakdown {
-        Self::calculate_with_cache_semantics(usage, pricing, cost_multiplier, false)
-    }
-
     /// 按 app_type 选择输入 token 语义后计算成本。
     ///
-    /// Codex/OpenAI Responses 与 Gemini 的输入 token 字段包含 cache read 部分；
-    /// Claude/Anthropic 的 input_tokens 已经是 fresh input。
+    /// Codex reports total input including cache usage. Historical rows can
+    /// declare fresh-input semantics independently.
     pub fn calculate_for_app(
         app_type: &str,
         usage: &TokenUsage,
@@ -77,8 +57,7 @@ impl CostCalculator {
     ) -> CostBreakdown {
         let million = Decimal::from(1_000_000);
 
-        // OpenAI/Gemini 风格的 input_tokens 包含缓存读取和写入，需要扣除后再按输入价计费；
-        // Claude/Anthropic 风格的 input_tokens 已经是 fresh input，不能再次扣减。
+        // Subtract cached input only when the recorded semantics include it.
         let billable_input_tokens = if input_includes_cache_read {
             usage
                 .input_tokens
@@ -146,7 +125,7 @@ mod tests {
     #[test]
     fn test_cost_calculation() {
         let usage = TokenUsage {
-            input_tokens: 1000,
+            input_tokens: 1300,
             output_tokens: 500,
             cache_read_tokens: 200,
             cache_creation_tokens: 100,
@@ -157,9 +136,9 @@ mod tests {
         let pricing = ModelPricing::from_strings("3.0", "15.0", "0.3", "3.75").unwrap();
         let multiplier = Decimal::from_str("1.0").unwrap();
 
-        let cost = CostCalculator::calculate(&usage, &pricing, multiplier);
+        let cost = CostCalculator::calculate_for_app("codex", &usage, &pricing, multiplier);
 
-        // Claude/Anthropic 语义：input_tokens 已经不含 cache_read_tokens
+        // Codex input includes 1,000 fresh tokens and 300 cached tokens.
         // input: 1000 * 3.0 / 1M = 0.003
         assert_eq!(cost.input_cost, Decimal::from_str("0.003").unwrap());
         // output: 500 * 15.0 / 1M = 0.0075
@@ -203,25 +182,6 @@ mod tests {
     }
 
     #[test]
-    fn grokbuild_does_not_double_bill_cached_input() {
-        let usage = TokenUsage {
-            input_tokens: 1000,
-            output_tokens: 0,
-            cache_read_tokens: 600,
-            cache_creation_tokens: 0,
-            model: None,
-            message_id: None,
-        };
-        let pricing = ModelPricing::from_strings("10", "0", "1", "0").unwrap();
-
-        let cost = CostCalculator::calculate_for_app("grokbuild", &usage, &pricing, Decimal::ONE);
-
-        assert_eq!(cost.input_cost, Decimal::from_str("0.004").unwrap());
-        assert_eq!(cost.cache_read_cost, Decimal::from_str("0.0006").unwrap());
-        assert_eq!(cost.total_cost, Decimal::from_str("0.0046").unwrap());
-    }
-
-    #[test]
     fn test_cost_multiplier() {
         let usage = TokenUsage {
             input_tokens: 1000,
@@ -235,7 +195,7 @@ mod tests {
         let pricing = ModelPricing::from_strings("3.0", "15.0", "0", "0").unwrap();
         let multiplier = Decimal::from_str("1.5").unwrap();
 
-        let cost = CostCalculator::calculate(&usage, &pricing, multiplier);
+        let cost = CostCalculator::calculate_for_app("codex", &usage, &pricing, multiplier);
 
         // input_cost: 基础价格（不含倍率）= 1000 * 3.0 / 1M = 0.003
         assert_eq!(cost.input_cost, Decimal::from_str("0.003").unwrap());
@@ -246,7 +206,7 @@ mod tests {
     #[test]
     fn test_decimal_precision() {
         let usage = TokenUsage {
-            input_tokens: 1,
+            input_tokens: 3,
             output_tokens: 1,
             cache_read_tokens: 1,
             cache_creation_tokens: 1,
@@ -257,7 +217,7 @@ mod tests {
         let pricing = ModelPricing::from_strings("0.075", "0.3", "0.01875", "0.075").unwrap();
         let multiplier = Decimal::from_str("1.0").unwrap();
 
-        let cost = CostCalculator::calculate(&usage, &pricing, multiplier);
+        let cost = CostCalculator::calculate_for_app("codex", &usage, &pricing, multiplier);
 
         // 验证高精度计算
         assert!(cost.total_cost > Decimal::ZERO);

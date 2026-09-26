@@ -10,7 +10,7 @@ import endpointCases from "../fixtures/copilot-endpoint-cases.json";
 
 function model(supportedEndpoints?: string[]): CopilotModel {
   return {
-    id: "model",
+    id: "gpt-test",
     name: "Model",
     vendor: "vendor",
     model_picker_enabled: true,
@@ -46,25 +46,32 @@ describe("Codex Copilot capabilities", () => {
     );
   });
 
-  it("replaces stale capability guesses with live declarations, including explicit false", () => {
+  it("refreshes live capabilities while preserving saved reasoning choices", () => {
     const saved = {
       model: "gpt-6-luna",
+      contextWindow: 1_000_000,
       supportsParallelToolCalls: false,
       inputModalities: ["text"],
-      reasoningLevels: ["ultra"],
+      reasoningLevels: ["low", "high", "ultra"],
+      defaultReasoningLevel: "ultra",
     };
     const live: CopilotModel = {
       ...model(["/responses"]),
       id: "gpt-6-luna",
+      context_window: 872_000,
       supports_parallel_tool_calls: true,
       supports_vision: true,
       reasoning_efforts: ["low", "medium", "high", "xhigh", "max"],
     };
-    expect(mergeCopilotModelCapabilities(live, saved)).toMatchObject({
+    const refreshed = mergeCopilotModelCapabilities(live, saved);
+    expect(refreshed).toMatchObject({
+      contextWindow: 872_000,
       supportsParallelToolCalls: true,
       inputModalities: ["text", "image"],
-      reasoningLevels: live.reasoning_efforts,
+      reasoningLevels: saved.reasoningLevels,
+      defaultReasoningLevel: "ultra",
     });
+    expect(mergeCopilotModelCapabilities(live, refreshed)).toEqual(refreshed);
     expect(
       mergeCopilotModelCapabilities(
         {
@@ -85,10 +92,53 @@ describe("Codex Copilot capabilities", () => {
     expect(mergeCopilotModelCapabilities(model(), saved)).toMatchObject({
       supportsParallelToolCalls: false,
       inputModalities: ["text"],
+      reasoningLevels: saved.reasoningLevels,
+      defaultReasoningLevel: "ultra",
     });
+  });
+
+  it.each([{ reasoningLevels: undefined }, { reasoningLevels: [] }])(
+    "initializes an unset reasoning list from Copilot without forcing a default",
+    ({ reasoningLevels }) => {
+      const live = {
+        ...model(["/responses"]),
+        reasoning_efforts: ["low", "medium", "high"],
+      };
+      const refreshed = mergeCopilotModelCapabilities(live, {
+        model: live.id,
+        reasoningLevels,
+      });
+      expect(refreshed.reasoningLevels).toEqual(live.reasoning_efforts);
+      expect(refreshed.defaultReasoningLevel).toBeUndefined();
+      expect(mergeCopilotModelCapabilities(live).reasoningLevels).toEqual(
+        live.reasoning_efforts,
+      );
+    },
+  );
+
+  it("keeps an automatic default when the saved levels differ from Copilot", () => {
+    const refreshed = mergeCopilotModelCapabilities(
+      { ...model(["/responses"]), reasoning_efforts: ["low", "medium"] },
+      { model: "gpt-test", reasoningLevels: ["high", "ultra"] },
+    );
+    expect(refreshed.reasoningLevels).toEqual(["high", "ultra"]);
+    expect(refreshed.defaultReasoningLevel).toBeUndefined();
   });
 
   it("rejects an absent capabilities field", () => {
     expect(isCopilotModelSupportedByCodex(model())).toBe(false);
+  });
+
+  it("accepts GPT IDs without case sensitivity and rejects other models", () => {
+    const compatible = model(["/responses"]);
+    expect(
+      isCopilotModelSupportedByCodex({ ...compatible, id: " GPT-6-ASTRA " }),
+    ).toBe(true);
+    expect(
+      isCopilotModelSupportedByCodex({ ...compatible, id: "other-model" }),
+    ).toBe(false);
+    expect(isCopilotModelSupportedByCodex({ ...compatible, id: "gpt-" })).toBe(
+      false,
+    );
   });
 });

@@ -22,13 +22,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { settingsApi } from "@/lib/api/settings";
 import { usageApi } from "@/lib/api/usage";
@@ -61,7 +54,6 @@ interface AutoSyncDialogProps {
 function AutoSyncDialog({ state, onClose, onSaved }: AutoSyncDialogProps) {
   const { t } = useTranslation();
   const [search, setSearch] = useState("");
-  const [providerFilter, setProviderFilter] = useState("all");
   const [includeCommonModels, setIncludeCommonModels] = useState(
     state.config.includeCommonModels,
   );
@@ -97,31 +89,18 @@ function AutoSyncDialog({ state, onClose, onSaved }: AutoSyncDialogProps) {
     selectedModelKeys,
   ]);
 
-  const providers = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const entry of entries) {
-      if (!map.has(entry.providerId)) {
-        map.set(entry.providerId, entry.providerName);
-      }
-    }
-    return Array.from(map, ([id, name]) => ({ id, name })).sort((a, b) =>
-      a.name.localeCompare(b.name),
-    );
-  }, [entries]);
-
-  const isFiltering = search.trim() !== "" || providerFilter !== "all";
+  const isFiltering = search.trim() !== "";
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return entries.filter(
       (entry) =>
-        (providerFilter === "all" || entry.providerId === providerFilter) &&
-        (!query ||
-          entry.modelId.toLowerCase().includes(query) ||
-          entry.normalizedId.includes(query) ||
-          entry.modelName.toLowerCase().includes(query) ||
-          entry.providerName.toLowerCase().includes(query)),
+        !query ||
+        entry.modelId.toLowerCase().includes(query) ||
+        entry.normalizedId.includes(query) ||
+        entry.modelName.toLowerCase().includes(query) ||
+        entry.providerName.toLowerCase().includes(query),
     );
-  }, [entries, providerFilter, search]);
+  }, [entries, search]);
   const visible = useMemo(
     () =>
       filtered.slice(0, isFiltering ? MAX_VISIBLE_ROWS : DEFAULT_VISIBLE_ROWS),
@@ -260,24 +239,6 @@ function AutoSyncDialog({ state, onClose, onSaved }: AutoSyncDialogProps) {
           ) : (
             <>
               <div className="flex items-center gap-2">
-                <Select
-                  value={providerFilter}
-                  onValueChange={setProviderFilter}
-                >
-                  <SelectTrigger className="w-48 shrink-0">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="z-[120] max-h-[min(24rem,var(--radix-select-content-available-height))]">
-                    <SelectItem value="all">
-                      {t("usage.modelsDevAllProviders")}
-                    </SelectItem>
-                    {providers.map((provider) => (
-                      <SelectItem key={provider.id} value={provider.id}>
-                        {provider.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input

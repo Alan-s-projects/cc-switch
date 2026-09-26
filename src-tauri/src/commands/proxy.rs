@@ -11,37 +11,18 @@ use crate::store::AppState;
 pub async fn start_proxy_server(
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyServerInfo, String> {
-    let info = state.proxy_service.start().await?;
-    let mut config = state
-        .db
-        .get_proxy_config_for_app("codex")
-        .await
-        .map_err(|e| e.to_string())?;
-    config.enabled = true;
-    state
-        .db
-        .update_proxy_config_for_app(config)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(info)
+    state.proxy_service.start().await
 }
 
 /// 停止代理服务器（仅停止服务，不恢复/清理 Live 接管状态）
 #[tauri::command]
 pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut config = state
-        .db
-        .get_proxy_config_for_app("codex")
-        .await
-        .map_err(|e| e.to_string())?;
-    config.enabled = false;
-    state
-        .db
-        .update_proxy_config_for_app(config)
-        .await
-        .map_err(|e| e.to_string())?;
     if state.proxy_service.is_running().await {
         state.proxy_service.stop().await?;
+    } else {
+        let mut config = state.db.get_global_proxy_config().await.map_err(|e| e.to_string())?;
+        config.proxy_enabled = false;
+        state.db.update_global_proxy_config(config).await.map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -50,21 +31,6 @@ pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), 
 #[tauri::command]
 pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
     state.proxy_service.get_status().await
-}
-
-/// 获取代理配置
-#[tauri::command]
-pub async fn get_proxy_config(state: tauri::State<'_, AppState>) -> Result<ProxyConfig, String> {
-    state.proxy_service.get_config().await
-}
-
-/// 更新代理配置
-#[tauri::command]
-pub async fn update_proxy_config(
-    state: tauri::State<'_, AppState>,
-    config: ProxyConfig,
-) -> Result<(), String> {
-    state.proxy_service.update_config(&config).await
 }
 
 // ==================== Global & Per-App Config ====================
@@ -84,7 +50,7 @@ pub async fn get_global_proxy_config(
 
 /// 更新全局代理配置
 ///
-/// 更新统一的全局配置字段，会同时更新三行（claude/codex/gemini）
+/// Update the one local listener's configuration.
 #[tauri::command]
 pub async fn update_global_proxy_config(
     state: tauri::State<'_, AppState>,
@@ -210,10 +176,4 @@ pub async fn set_pricing_model_source(
     set_pricing_model_source_internal(&state, &app_type, &value)
         .await
         .map_err(|e| e.to_string())
-}
-
-/// 检查代理服务器是否正在运行
-#[tauri::command]
-pub async fn is_proxy_running(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.proxy_service.is_running().await)
 }

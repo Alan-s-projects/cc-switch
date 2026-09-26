@@ -18,20 +18,10 @@ export const proxyApi = {
     return invoke("stop_proxy_server");
   },
 
-  // 停止代理服务器并恢复配置
-
   // 获取代理服务器状态
   async getProxyStatus(): Promise<ProxyStatus> {
     return invoke("get_proxy_status");
   },
-
-  // ========== 接管状态 API ==========
-
-  // 获取各应用接管状态
-
-  // 为指定应用开启/关闭接管
-
-  // ========== v3+ 全局/应用级配置 API ==========
 
   // 获取全局代理配置
   async getGlobalProxyConfig(): Promise<GlobalProxyConfig> {
@@ -42,10 +32,6 @@ export const proxyApi = {
   async updateGlobalProxyConfig(config: GlobalProxyConfig): Promise<void> {
     return invoke("update_global_proxy_config", { config });
   },
-
-  // 获取指定应用的代理配置
-
-  // 更新指定应用的代理配置
 
   // ========== 计费默认配置 API ==========
 

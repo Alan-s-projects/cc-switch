@@ -1,50 +1,22 @@
-use serde::{Deserialize, Serialize};
+use crate::error::AppError;
+use serde::Serialize;
 use serde_json::{Map, Value};
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
-use crate::error::AppError;
-
-/// 获取用户主目录，带回退和日志
-///
-/// ## Windows 注意事项
-///
-/// - `dirs::home_dir()` 在 Windows 上使用 `SHGetKnownFolderPath(FOLDERID_Profile)`，
-///   返回的是真实用户目录（类似 `C:\\Users\\Alice`），与 v3.10.2 行为一致。
-/// - 不要直接使用 `HOME` 环境变量：它可能由 Git/Cygwin/MSYS 等第三方工具注入，
-///   且不一定等于用户目录，可能导致 `.cc-switch/cc-switch.db` 路径变化，从而“看起来像数据丢失”。
-///
-/// ## 测试隔离
-///
-/// 为了让 Windows CI/本地测试能稳定隔离真实用户数据，可通过 `CC_SWITCH_TEST_HOME`
-/// 显式覆盖 home dir（仅用于测试/调试场景）。
 pub fn get_home_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("CC_SWITCH_TEST_HOME") {
-        let trimmed = home.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-
-    dirs::home_dir().unwrap_or_else(|| {
-        log::warn!("无法获取用户主目录，回退到当前目录");
-        PathBuf::from(".")
-    })
+    std::env::var("COPILOT_BRIDGE_ATLAS_TEST_HOME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| PathBuf::from(value.trim()))
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
 }
 
-/// 获取 Claude Code 配置目录路径
-pub fn get_claude_config_dir() -> PathBuf {
-    if let Some(custom) = crate::settings::get_claude_override_dir() {
-        return custom;
-    }
-
-    get_home_dir().join(".claude")
-}
-
-/// 默认 Claude MCP 配置文件路径 (~/.claude.json)
-pub fn get_default_claude_mcp_path() -> PathBuf {
-    get_home_dir().join(".claude.json")
+/// Atlas never discovers another application's data directory.
+pub fn get_app_config_dir() -> PathBuf {
+    crate::app_store::get_app_config_dir_override()
+        .unwrap_or_else(|| get_home_dir().join(".copilot-bridge-atlas"))
 }
 
 fn normalize_path_lexically(path: &Path) -> PathBuf {
@@ -86,17 +58,13 @@ fn comparable_path_key(path: &Path) -> String {
     key
 }
 
-fn path_eq_lexical(left: &Path, right: &Path) -> bool {
-    comparable_path_key(left) == comparable_path_key(right)
-}
-
 /// Returns true when `path` is lexically contained within `base`.
 ///
 /// Both paths are normalized lexically (without hitting the filesystem), so
 /// this works for non-existent paths. It is **not** a symlink defense: a
 /// symlink inside `base` can still lead a resolved path outside it. Callers
 /// that go on to open the file must canonicalize the existing path and
-/// re-verify containment (see `resolve_cc_switch_catalog_path`).
+/// re-verify containment before reading.
 /// On Windows the comparison is case-insensitive.
 pub(crate) fn path_is_within(base: &Path, path: &Path) -> bool {
     let base_key = comparable_path_key(base);
@@ -108,225 +76,6 @@ pub(crate) fn path_is_within(base: &Path, path: &Path) -> bool {
 
     let prefix = format!("{base_key}/");
     path_key.starts_with(&prefix)
-}
-
-#[cfg(windows)]
-fn derive_wsl_default_mcp_path(dir: &Path) -> Option<PathBuf> {
-    use std::path::Prefix;
-
-    let normalized = normalize_path_lexically(dir);
-    let mut components = normalized.components();
-    let prefix = match components.next()? {
-        Component::Prefix(prefix) => prefix,
-        _ => return None,
-    };
-
-    let server = match prefix.kind() {
-        Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => server.to_string_lossy(),
-        _ => return None,
-    };
-
-    if !server.eq_ignore_ascii_case("wsl$") && !server.eq_ignore_ascii_case("wsl.localhost") {
-        return None;
-    }
-
-    let mut parts = Vec::new();
-    for component in components {
-        match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
-            Component::ParentDir | Component::Prefix(_) => return None,
-        }
-    }
-
-    let is_wsl_home_default =
-        parts.len() == 3 && parts[0] == "home" && !parts[1].is_empty() && parts[2] == ".claude";
-    let is_wsl_root_default = parts.len() == 2 && parts[0] == "root" && parts[1] == ".claude";
-
-    if is_wsl_home_default || is_wsl_root_default {
-        return normalized
-            .parent()
-            .map(|parent| parent.join(".claude.json"));
-    }
-
-    None
-}
-
-/// Derive the WSL-side home directory from a WSL UNC path inside a user's
-/// home: `\\wsl$\<distro>\home\<user>\...` -> `\\wsl$\<distro>\home\<user>`,
-/// and `\\wsl.localhost\<distro>\root\...` -> `\\wsl.localhost\<distro>\root`.
-/// Returns None for non-WSL paths and for WSL paths outside a home directory
-/// (e.g. `\\wsl$\<distro>\etc`), where no home can be derived safely.
-#[cfg(windows)]
-pub(crate) fn derive_wsl_home_dir(dir: &Path) -> Option<PathBuf> {
-    use std::path::Prefix;
-
-    let normalized = normalize_path_lexically(dir);
-    let mut components = normalized.components();
-    let prefix = match components.next()? {
-        Component::Prefix(prefix) => prefix,
-        _ => return None,
-    };
-
-    let server = match prefix.kind() {
-        Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => server.to_string_lossy(),
-        _ => return None,
-    };
-
-    if !server.eq_ignore_ascii_case("wsl$") && !server.eq_ignore_ascii_case("wsl.localhost") {
-        return None;
-    }
-
-    let mut parts = Vec::new();
-    for component in components {
-        match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
-            Component::ParentDir | Component::Prefix(_) => return None,
-        }
-    }
-
-    let home_len = match parts.as_slice() {
-        [home, user, ..] if home == "home" && !user.is_empty() => 2,
-        [root, ..] if root == "root" => 1,
-        _ => return None,
-    };
-
-    // Rebuild prefix + root + the first `home_len` components.
-    let mut home_dir = PathBuf::new();
-    let mut normal_seen = 0usize;
-    for component in normalized.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => home_dir.push(component.as_os_str()),
-            Component::Normal(_) if normal_seen < home_len => {
-                home_dir.push(component.as_os_str());
-                normal_seen += 1;
-            }
-            _ => break,
-        }
-    }
-    Some(home_dir)
-}
-
-fn default_mcp_path_for_config_dir(dir: &Path) -> Option<PathBuf> {
-    let default_config_dir = get_home_dir().join(".claude");
-    if path_eq_lexical(dir, &default_config_dir) {
-        return Some(get_default_claude_mcp_path());
-    }
-
-    #[cfg(windows)]
-    {
-        if let Some(path) = derive_wsl_default_mcp_path(dir) {
-            return Some(path);
-        }
-    }
-
-    None
-}
-
-fn derive_mcp_path_from_override(dir: &Path) -> PathBuf {
-    dir.join(".claude.json")
-}
-
-/// 获取 Claude MCP 配置文件路径
-pub fn get_claude_mcp_path() -> PathBuf {
-    if let Some(custom_dir) = crate::settings::get_claude_override_dir() {
-        if let Some(path) = default_mcp_path_for_config_dir(&custom_dir) {
-            return path;
-        }
-        return derive_mcp_path_from_override(&custom_dir);
-    }
-    get_default_claude_mcp_path()
-}
-
-/// 获取 Claude Code 主配置文件路径
-pub fn get_claude_settings_path() -> PathBuf {
-    let dir = get_claude_config_dir();
-    let settings = dir.join("settings.json");
-    if settings.exists() {
-        return settings;
-    }
-    // 兼容旧版命名：若存在旧文件则继续使用
-    let legacy = dir.join("claude.json");
-    if legacy.exists() {
-        return legacy;
-    }
-    // 默认新建：回落到标准文件名 settings.json（不再生成 claude.json）
-    settings
-}
-
-/// 获取应用配置目录路径 (~/.cc-switch)
-pub fn get_app_config_dir() -> PathBuf {
-    if let Some(custom) = crate::app_store::get_app_config_dir_override() {
-        return custom;
-    }
-
-    let default_dir = get_home_dir().join(".cc-switch");
-
-    // 兼容 v3.10.3：当用户环境存在 `HOME` 且与真实用户目录不同，
-    // v3.10.3 可能在 `HOME/.cc-switch/` 下创建/使用了数据库。
-    // 这里仅在“默认位置没有数据库”时回退到旧位置，避免再次出现“供应商消失”问题，
-    // 同时也避免新安装因为 `HOME` 被设置而写入非预期路径。
-    #[cfg(windows)]
-    {
-        let default_db = default_dir.join("cc-switch.db");
-        if !default_db.exists() {
-            if let Ok(home_env) = std::env::var("HOME") {
-                let trimmed = home_env.trim();
-                if !trimmed.is_empty() {
-                    let legacy_dir = PathBuf::from(trimmed).join(".cc-switch");
-                    if legacy_dir.join("cc-switch.db").exists() {
-                        log::info!(
-                            "Detected v3.10.3 legacy database at {}, using it instead of {}",
-                            legacy_dir.display(),
-                            default_dir.display()
-                        );
-                        return legacy_dir;
-                    }
-                }
-            }
-        }
-    }
-
-    default_dir
-}
-
-/// 获取应用配置文件路径
-pub fn get_app_config_path() -> PathBuf {
-    get_app_config_dir().join("config.json")
-}
-
-/// 清理供应商名称，确保文件名安全
-#[allow(dead_code)]
-pub fn sanitize_provider_name(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '-',
-            _ => c,
-        })
-        .collect::<String>()
-        .to_lowercase()
-}
-
-/// 获取供应商配置文件路径
-#[allow(dead_code)]
-pub fn get_provider_config_path(provider_id: &str, provider_name: Option<&str>) -> PathBuf {
-    let base_name = provider_name
-        .map(sanitize_provider_name)
-        .unwrap_or_else(|| sanitize_provider_name(provider_id));
-
-    get_claude_config_dir().join(format!("settings-{base_name}.json"))
-}
-
-/// 读取 JSON 配置文件
-pub fn read_json_file<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<T, AppError> {
-    if !path.exists() {
-        return Err(AppError::Config(format!("文件不存在: {}", path.display())));
-    }
-
-    let content = fs::read_to_string(path).map_err(|e| AppError::io(path, e))?;
-
-    serde_json::from_str(&content).map_err(|e| AppError::json(path, e))
 }
 
 /// 递归排序 JSON 对象的键（按字母顺序），确保序列化输出是确定性的
@@ -346,11 +95,8 @@ fn sort_json_keys(value: &Value) -> Value {
     }
 }
 
-/// 写入 JSON 配置文件并返回实际写入的字节。
-pub fn write_json_file_with_contents<T: Serialize>(
-    path: &Path,
-    data: &T,
-) -> Result<Vec<u8>, AppError> {
+/// Write stable JSON into Atlas's own storage using atomic replacement.
+pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
     // 确保目录存在
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
@@ -361,42 +107,11 @@ pub fn write_json_file_with_contents<T: Serialize>(
     let json = serde_json::to_string_pretty(&sorted_value)
         .map_err(|e| AppError::JsonSerialize { source: e })?;
 
-    let contents = json.into_bytes();
-    atomic_write(path, &contents)?;
-    Ok(contents)
-}
-
-/// 写入 JSON 配置文件（键按字母排序，确保确定性输出）
-pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
-    write_json_file_with_contents(path, data).map(|_| ())
-}
-
-/// 原子写入文本文件（用于 TOML/纯文本）
-pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
-    atomic_write(path, data.as_bytes())
+    atomic_write(path, json.as_bytes())
 }
 
 /// 原子写入：写入临时文件后 rename 替换，避免半写状态
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
-    atomic_write_with_unix_mode(path, data, None)
-}
-
-/// 原子写入包含凭据的文件。Unix 上新文件和替换文件始终使用 0600。
-pub fn atomic_write_private(path: &Path, data: &[u8]) -> Result<(), AppError> {
-    atomic_write_with_unix_mode(path, data, Some(0o600))
-}
-
-fn atomic_write_with_unix_mode(
-    path: &Path,
-    data: &[u8],
-    unix_mode: Option<u32>,
-) -> Result<(), AppError> {
-    #[cfg(not(unix))]
-    let _ = unix_mode;
-
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
@@ -424,11 +139,6 @@ fn atomic_write_with_unix_mode(
             ));
             let mut options = fs::OpenOptions::new();
             options.write(true).create_new(true);
-            #[cfg(unix)]
-            if let Some(mode) = unix_mode {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(mode);
-            }
             match options.open(&candidate) {
                 Ok(file) => return Ok((candidate, file)),
                 Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -448,20 +158,6 @@ fn atomic_write_with_unix_mode(
         return Err(AppError::io(&tmp, source));
     }
     drop(file);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Some(mode) = unix_mode {
-            if let Err(source) = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode)) {
-                let _ = fs::remove_file(&tmp);
-                return Err(AppError::io(&tmp, source));
-            }
-        } else if let Ok(meta) = fs::metadata(path) {
-            let perm = meta.permissions().mode();
-            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(perm));
-        }
-    }
 
     #[cfg(windows)]
     {
@@ -608,141 +304,6 @@ mod tests {
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
-    #[cfg(windows)]
-    #[test]
-    #[ignore = "requires CC_SWITCH_WSL_TEST_DIR to point to a WSL2 UNC directory"]
-    fn atomic_write_replaces_existing_wsl_unc_file() {
-        let root = PathBuf::from(
-            std::env::var_os("CC_SWITCH_WSL_TEST_DIR").expect("CC_SWITCH_WSL_TEST_DIR must be set"),
-        );
-        let home = get_home_dir();
-        let temp = std::env::temp_dir();
-        for (name, path) in [
-            ("test root", root.as_path()),
-            ("test home", home.as_path()),
-            ("temporary directory", temp.as_path()),
-        ] {
-            let unc = path.to_string_lossy();
-            assert!(
-                unc.starts_with(r"\\wsl.localhost\") || unc.starts_with(r"\\wsl$\"),
-                "expected {name} to be a WSL UNC path, got {unc}"
-            );
-            assert!(
-                path.starts_with(&root),
-                "expected {name} to be under {}, got {unc}",
-                root.display()
-            );
-        }
-
-        let dir = tempfile::Builder::new()
-            .prefix("atomic-write-contract-")
-            .tempdir_in(&root)
-            .unwrap();
-        assert_atomic_write_replaces_existing_file(dir.path());
-    }
-
-    #[test]
-    fn derive_mcp_path_from_override_uses_config_dir_for_custom_path() {
-        let override_dir = PathBuf::from("/tmp/profile/.claude");
-        let derived = derive_mcp_path_from_override(&override_dir);
-        assert_eq!(derived, PathBuf::from("/tmp/profile/.claude/.claude.json"));
-    }
-
-    #[test]
-    fn derive_mcp_path_from_override_uses_config_dir_for_non_hidden_folder() {
-        let override_dir = PathBuf::from("/data/claude-config");
-        let derived = derive_mcp_path_from_override(&override_dir);
-        assert_eq!(derived, PathBuf::from("/data/claude-config/.claude.json"));
-    }
-
-    #[test]
-    fn derive_mcp_path_from_override_supports_relative_rootless_dir() {
-        let override_dir = PathBuf::from("claude");
-        let derived = derive_mcp_path_from_override(&override_dir);
-        assert_eq!(derived, PathBuf::from("claude/.claude.json"));
-    }
-
-    #[test]
-    fn derive_mcp_path_from_root_like_dir_uses_root_file() {
-        let override_dir = PathBuf::from("/");
-        let derived = derive_mcp_path_from_override(&override_dir);
-        assert_eq!(derived, PathBuf::from("/.claude.json"));
-    }
-
-    #[test]
-    fn derive_mcp_path_from_override_preserves_leading_parent_dirs() {
-        let override_dir = PathBuf::from("../../profiles/work/.claude");
-        let derived = derive_mcp_path_from_override(&override_dir);
-        assert_eq!(derived, override_dir.join(".claude.json"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_unc_home_default_uses_split_mcp_path() {
-        let override_dir = PathBuf::from(r"\\wsl$\Ubuntu\home\travis\.claude");
-        let derived = default_mcp_path_for_config_dir(&override_dir)
-            .expect("WSL home default should use split MCP path");
-        assert_eq!(
-            derived,
-            PathBuf::from(r"\\wsl$\Ubuntu\home\travis\.claude.json")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_unc_root_default_uses_split_mcp_path() {
-        let override_dir = PathBuf::from(r"\\wsl.localhost\Ubuntu\root\.claude");
-        let derived = default_mcp_path_for_config_dir(&override_dir)
-            .expect("WSL root default should use split MCP path");
-        assert_eq!(
-            derived,
-            PathBuf::from(r"\\wsl.localhost\Ubuntu\root\.claude.json")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn derive_wsl_home_dir_from_opencode_config_dir() {
-        let dir = PathBuf::from(r"\\wsl.localhost\Ubuntu-26.04\home\travis\.config\opencode");
-        let home = derive_wsl_home_dir(&dir).expect("WSL home should be derived");
-        assert_eq!(
-            home,
-            PathBuf::from(r"\\wsl.localhost\Ubuntu-26.04\home\travis")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn derive_wsl_home_dir_supports_wsl_dollar_and_root() {
-        let dir = PathBuf::from(r"\\wsl$\Ubuntu\root\.config\opencode");
-        let home = derive_wsl_home_dir(&dir).expect("WSL root home should be derived");
-        assert_eq!(home, PathBuf::from(r"\\wsl$\Ubuntu\root"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn derive_wsl_home_dir_rejects_non_home_and_non_wsl_paths() {
-        assert_eq!(
-            derive_wsl_home_dir(&PathBuf::from(r"\\wsl$\Ubuntu\etc\opencode")),
-            None
-        );
-        assert_eq!(
-            derive_wsl_home_dir(&PathBuf::from(r"C:\Users\travis\.config\opencode")),
-            None
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_unc_custom_dir_uses_nested_mcp_path() {
-        let override_dir = PathBuf::from(r"\\wsl$\Ubuntu\opt\claude\.claude");
-        assert!(default_mcp_path_for_config_dir(&override_dir).is_none());
-        assert_eq!(
-            derive_mcp_path_from_override(&override_dir),
-            PathBuf::from(r"\\wsl$\Ubuntu\opt\claude\.claude\.claude.json")
-        );
-    }
-
     #[test]
     fn sort_json_keys_sorts_top_level_object() {
         let input = serde_json::json!({
@@ -839,21 +400,4 @@ mod tests {
             serde_json::to_string(&sorted_b).unwrap(),
         );
     }
-}
-
-/// 复制文件
-pub fn copy_file(from: &Path, to: &Path) -> Result<(), AppError> {
-    fs::copy(from, to).map_err(|e| AppError::IoContext {
-        context: format!("复制文件失败 ({} -> {})", from.display(), to.display()),
-        source: e,
-    })?;
-    Ok(())
-}
-
-/// 删除文件
-pub fn delete_file(path: &Path) -> Result<(), AppError> {
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| AppError::io(path, e))?;
-    }
-    Ok(())
 }

@@ -4,14 +4,14 @@ import { Github, Download, ExternalLink } from "lucide-react";
 import { settingsApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 
-export function AboutSection(_props: { isPortable: boolean }) {
+export function AboutSection() {
   const [version, setVersion] = useState("");
   useEffect(() => {
     void getVersion().then(setVersion);
   }, []);
   return (
     <section className="space-y-5 rounded-xl border bg-card p-6">
-      <h2 className="text-xl font-semibold">CC Switch Atlas {version}</h2>
+      <h2 className="text-xl font-semibold">Copilot Bridge Atlas {version}</h2>
       <p className="text-sm text-muted-foreground">
         A local OpenAI-compatible server connecting Codex to GitHub Copilot,
         with usage statistics and read-only configuration suggestions.
@@ -21,7 +21,7 @@ export function AboutSection(_props: { isPortable: boolean }) {
           variant="outline"
           onClick={() =>
             void settingsApi.openExternal(
-              "https://github.com/Alan-s-projects/cc-switch",
+              "https://github.com/Alan-s-projects/copilot-bridge-atlas",
             )
           }
         >
@@ -32,7 +32,7 @@ export function AboutSection(_props: { isPortable: boolean }) {
           variant="outline"
           onClick={() =>
             void settingsApi.openExternal(
-              `https://github.com/Alan-s-projects/cc-switch/releases${version ? `/tag/atlas-${version}` : ""}`,
+              `https://github.com/Alan-s-projects/copilot-bridge-atlas/releases${version ? `/tag/atlas-${version}` : ""}`,
             )
           }
         >

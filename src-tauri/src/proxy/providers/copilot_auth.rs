@@ -142,15 +142,13 @@ pub const COPILOT_USER_AGENT: &str = "GitHubCopilotChat/0.38.2";
 pub const COPILOT_API_VERSION: &str = "2025-10-01";
 pub const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
 
-/// Build the Copilot request identity shared by every proxy adapter.
+/// Build the Copilot request identity used by Codex forwarding.
 ///
 /// The forwarder adds the session-derived interaction ID separately because
-/// it is not available at the provider-adapter seam.
+/// authentication has no per-request session context.
 pub fn build_copilot_request_headers(
     token: &str,
 ) -> Result<Vec<(http::HeaderName, http::HeaderValue)>, ProxyError> {
-    use super::adapter::auth_header_value;
-
     let mut bearer = String::from("Bearer ");
     bearer.push_str(token);
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -926,7 +924,9 @@ impl CopilotAuthManager {
             .fetch_all_models_for_account(account_id)
             .await?
             .into_iter()
-            .filter(|model| model.model_picker_enabled)
+            .filter(|model| {
+                model.model_picker_enabled && super::copilot_model_map::is_gpt_model(&model.id)
+            })
             .collect())
     }
 
@@ -996,20 +996,12 @@ impl CopilotAuthManager {
             .data
             .into_iter()
             .map(CopilotModel::from)
+            .filter(|model| super::copilot_model_map::is_gpt_model(&model.id))
             .collect();
 
         log::info!("[CopilotAuth] 获取到 {} 个可用模型", models.len());
 
         Ok(models)
-    }
-
-    pub async fn get_model_vendor_for_account(
-        &self,
-        account_id: &str,
-        model_id: &str,
-    ) -> Result<Option<String>, CopilotAuthError> {
-        let models = self.fetch_all_models_for_account(account_id).await?;
-        Ok(super::copilot_model_map::resolve_model(model_id, &models).map(|model| model.vendor))
     }
 
     pub async fn resolve_model_for_account(
@@ -1028,16 +1020,6 @@ impl CopilotAuthManager {
     pub async fn fetch_models(&self) -> Result<Vec<CopilotModel>, CopilotAuthError> {
         match self.resolve_default_account_id().await {
             Some(id) => self.fetch_models_for_account(&id).await,
-            None => Err(CopilotAuthError::GitHubTokenInvalid),
-        }
-    }
-
-    pub async fn get_model_vendor(
-        &self,
-        model_id: &str,
-    ) -> Result<Option<String>, CopilotAuthError> {
-        match self.resolve_default_account_id().await {
-            Some(id) => self.get_model_vendor_for_account(&id, model_id).await,
             None => Err(CopilotAuthError::GitHubTokenInvalid),
         }
     }
@@ -1422,23 +1404,6 @@ impl CopilotAuthManager {
             .as_nanos();
         let tmp_path = parent.join(format!("{file_name}.tmp.{ts}"));
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
-            let mut file = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .mode(0o600)
-                .open(&tmp_path)?;
-            file.write_all(content.as_bytes())?;
-            file.flush()?;
-
-            fs::rename(&tmp_path, &self.storage_path)?;
-            fs::set_permissions(&self.storage_path, fs::Permissions::from_mode(0o600))?;
-        }
-
-        #[cfg(windows)]
         {
             let mut file = fs::OpenOptions::new()
                 .create_new(true)
@@ -1668,7 +1633,6 @@ impl CopilotAuthManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::CodexCopilotApiFormat;
     use tempfile::tempdir;
 
     #[test]
@@ -1927,207 +1891,6 @@ mod tests {
         assert_eq!(
             CopilotAuthManager::fallback_default_account_id(&accounts),
             Some("67890".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_get_model_vendor_from_cache() {
-        let temp_dir = tempdir().unwrap();
-        let manager = CopilotAuthManager::new(temp_dir.path().to_path_buf());
-
-        {
-            let mut default_account_id = manager.default_account_id.write().await;
-            *default_account_id = Some("12345".to_string());
-        }
-        {
-            let mut accounts = manager.accounts.write().await;
-            accounts.insert(
-                "12345".to_string(),
-                GitHubAccountData {
-                    github_token: "gho_test".to_string(),
-                    user: GitHubUser {
-                        login: "alice".to_string(),
-                        id: 12345,
-                        avatar_url: None,
-                    },
-                    authenticated_at: 1700000000,
-                    github_domain: DEFAULT_GITHUB_DOMAIN.to_string(),
-                },
-            );
-        }
-        {
-            let mut models = manager.copilot_models.write().await;
-            models.insert(
-                "12345".to_string(),
-                vec![
-                    CopilotModel {
-                        id: "gpt-5.4".to_string(),
-                        name: "GPT-5.4".to_string(),
-                        vendor: "OpenAI".to_string(),
-                        model_picker_enabled: true,
-                        context_window: None,
-                        supported_endpoints: Vec::new(),
-                        ..Default::default()
-                    },
-                    CopilotModel {
-                        id: "claude-sonnet-4".to_string(),
-                        name: "Claude Sonnet 4".to_string(),
-                        vendor: "Anthropic".to_string(),
-                        model_picker_enabled: true,
-                        context_window: None,
-                        supported_endpoints: Vec::new(),
-                        ..Default::default()
-                    },
-                    CopilotModel {
-                        id: "gpt-hidden".to_string(),
-                        name: "GPT Hidden".to_string(),
-                        vendor: "OpenAI".to_string(),
-                        model_picker_enabled: false,
-                        context_window: Some(128_000),
-                        supported_endpoints: vec![
-                            "/v1/chat/completions".to_string(),
-                            "/responses".to_string(),
-                        ],
-                        ..Default::default()
-                    },
-                ],
-            );
-        }
-
-        let vendor = manager
-            .get_model_vendor_for_account("12345", "gpt-5.4")
-            .await
-            .unwrap();
-        assert_eq!(vendor.as_deref(), Some("OpenAI"));
-
-        let default_vendor = manager.get_model_vendor("claude-sonnet-4").await.unwrap();
-        assert_eq!(default_vendor.as_deref(), Some("Anthropic"));
-
-        let hidden = manager
-            .resolve_model_for_account("12345", "gpt-hidden", CodexCopilotApiFormat::Auto)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            hidden.transport,
-            Some(super::super::copilot_model_map::CopilotTransport {
-                protocol: super::super::copilot_model_map::CopilotProtocol::Responses,
-                endpoint: "/responses".to_string(),
-            })
-        );
-        for (api_format, protocol, endpoint) in [
-            (
-                CodexCopilotApiFormat::OpenaiChat,
-                super::super::copilot_model_map::CopilotProtocol::Chat,
-                "/v1/chat/completions",
-            ),
-            (
-                CodexCopilotApiFormat::OpenaiResponses,
-                super::super::copilot_model_map::CopilotProtocol::Responses,
-                "/responses",
-            ),
-        ] {
-            let account_model = manager
-                .resolve_model_for_account("12345", "GPT-HIDDEN", api_format)
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(account_model.id, "gpt-hidden");
-            assert_eq!(
-                account_model.transport,
-                Some(super::super::copilot_model_map::CopilotTransport {
-                    protocol,
-                    endpoint: endpoint.to_string(),
-                })
-            );
-            assert_eq!(
-                manager
-                    .resolve_model("GPT-HIDDEN", api_format)
-                    .await
-                    .unwrap(),
-                Some(account_model)
-            );
-        }
-        assert!(manager
-            .fetch_models_for_account("12345")
-            .await
-            .unwrap()
-            .iter()
-            .all(|model| model.id != "gpt-hidden"));
-    }
-
-    #[tokio::test]
-    async fn test_cached_vendor_fallback_is_independent_of_codex_transport_filter() {
-        let temp_dir = tempdir().unwrap();
-        let manager = CopilotAuthManager::new(temp_dir.path().to_path_buf());
-        let model = |endpoints: &[&str]| CopilotModel {
-            id: "claude-opus-4.7".to_string(),
-            name: "Claude Opus 4.7".to_string(),
-            vendor: "Anthropic".to_string(),
-            model_picker_enabled: false,
-            context_window: Some(1_000_000),
-            supported_endpoints: endpoints
-                .iter()
-                .map(|endpoint| endpoint.to_string())
-                .collect(),
-            ..Default::default()
-        };
-        manager.copilot_models.write().await.extend([
-            ("messages-only".to_string(), vec![model(&["/v1/messages"])]),
-            ("no-metadata".to_string(), vec![model(&[])]),
-            (
-                "chat-capable".to_string(),
-                vec![model(&["/chat/completions"])],
-            ),
-        ]);
-
-        for account in ["messages-only", "no-metadata"] {
-            assert!(manager
-                .fetch_models_for_account(account)
-                .await
-                .unwrap()
-                .is_empty());
-            assert_eq!(
-                manager
-                    .get_model_vendor_for_account(account, "claude-opus-4-8")
-                    .await
-                    .unwrap()
-                    .as_deref(),
-                Some("Anthropic"),
-                "{account}"
-            );
-            for format in [
-                CodexCopilotApiFormat::Auto,
-                CodexCopilotApiFormat::OpenaiChat,
-                CodexCopilotApiFormat::OpenaiResponses,
-            ] {
-                assert_eq!(
-                    manager
-                        .resolve_model_for_account(account, "claude-opus-4-8", format)
-                        .await
-                        .unwrap(),
-                    None,
-                    "{account}: {format:?}"
-                );
-            }
-        }
-
-        let resolved = manager
-            .resolve_model_for_account(
-                "chat-capable",
-                "claude-opus-4-8",
-                CodexCopilotApiFormat::Auto,
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(resolved.id, "claude-opus-4.7");
-        assert_eq!(
-            resolved.transport,
-            Some(super::super::copilot_model_map::CopilotTransport {
-                protocol: super::super::copilot_model_map::CopilotProtocol::Chat,
-                endpoint: "/chat/completions".to_string(),
-            })
         );
     }
 
@@ -2466,4 +2229,9 @@ mod tests {
         let account = GitHubAccount::from(&data);
         assert_eq!(account.id, "company.ghe.com:99999");
     }
+}
+
+fn auth_header_value(value: &str) -> Result<http::HeaderValue, ProxyError> {
+    http::HeaderValue::from_str(value)
+        .map_err(|error| ProxyError::AuthError(format!("Invalid authentication header: {error}")))
 }

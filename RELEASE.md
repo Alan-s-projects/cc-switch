@@ -1,12 +1,14 @@
-Atlas 4.1.4 introduces persistent navigation and clearer overview cards, with Windows installers built locally.
+Copilot Bridge Atlas 4.2.0 is an independent Windows x64 app for Codex, GitHub Copilot, and GPT.
 
-- Keeps **Overview**, **Usage**, **Connect**, and **Settings** at the top left on every page, highlighting the selected page. Removes the previous changing title, Back button, and decorative brand animation.
-- Keeps the original green proxy switch on the right, labeled **Proxy Running** or **Proxy Stopped**.
-- Groups the overview into large **Provider**, **Proxy**, **Today's usage**, and **Requests** cards, each with its title at the upper left. Removes the redundant Overview heading.
-- Moves **Health check** into the Provider card. **Refresh overview**, connection warnings, usage metrics, and recent requests remain available.
-- Preserves read-only Codex previews and the existing low-CPU update behavior; this layout change adds no polling or background work.
-- Removes the GitHub Actions workflow. Tests, renderer builds, and Windows MSI packaging run locally; releases receive the verified MSI and checksum directly.
+- Uses its own product name, executable, application ID, installer upgrade identity, icon, data folder, database, logs, startup entry, and repository.
+- Defaults to loopback port **15722**, allowing it to coexist with a different bridge.
+- Fixes saved reasoning levels and defaults being overwritten by startup or **Refresh models**. Explicit saved choices remain intact; unconfigured models receive live defaults.
+- Removes inactive provider protocols, other-client management, cloud-sync remnants, obsolete configuration migrations, unused API wrappers, foreign pricing rules, unused logos, and unsupported-platform assets.
+- Keeps GPT Responses/Chat routing, GitHub accounts and enterprise endpoints, request/response compatibility, image/tool handling, stable streamed message IDs, reasoning accounting, and accurate cache usage.
+- Preserves the four-page navigation, overview cards, health check, manual refresh, global pricing, local backups, and read-only Codex previews.
+- Imported SQLite data retains recorded costs and opaque historical data. The app never rewrites Codex files.
+- Keeps active settings, backup and database paths together until restart after an application-data directory change.
 
-Download **CC-Switch-atlas-4.1.4-Windows-x64.msi** and its SHA256 file. Use the tray menu's **Quit** action before installing. This unsigned Windows x64 installer upgrades existing Atlas installations.
+Download **Copilot-Bridge-Atlas-4.2.0-Windows-x64.msi** and its SHA256 file. This unsigned per-user installer installs as a separate application. Review and apply its Connect preview before pointing Codex at the new endpoint.
 
-Local validation: TypeScript, all 222 frontend tests, and all 1,535 Rust tests passed; four optional Rust checks remain skipped. Browser checks covered the normal and minimum 900×600 layouts, all page selections, card grouping, Health check placement, and both proxy status labels. The MSI is built locally and its version, architecture, upgrade identity, and checksum are checked before publication.
+Local validation: TypeScript and all **208 frontend tests** passed; all **476 Rust tests** passed with one optional performance check skipped and no compiler warnings. Tests cover saved reasoning across restart, version-19 database import, historical costs, blank cache-key fallback, real loopback Responses/Chat forwarding, images/tools, compressed errors without retries, and application-data isolation. Synthetic browser checks covered the renamed overview, settings/catalog and connection previews, including the 900×600 minimum layout.

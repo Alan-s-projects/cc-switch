@@ -3,7 +3,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { authApi, settingsApi } from "@/lib/api";
-import { CODEX_OAUTH_DUPLICATE_ACCOUNT_ERROR } from "@/lib/api/auth";
 import { copyText } from "@/lib/clipboard";
 import type {
   ManagedAuthProvider,
@@ -13,7 +12,6 @@ import type {
 
 type PollingState = "idle" | "polling" | "success" | "error";
 type LoginRequest = {
-  targetAccountId?: string;
   generation: number;
 };
 
@@ -35,9 +33,6 @@ export function useManagedAuth(
   );
   const pollingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flowGenerationRef = useRef(0);
-  const activeDeviceCodeRef = useRef<string | null>(null);
-  const retryTargetAccountIdRef = useRef<string | undefined>(undefined);
-  const flowTransitionRef = useRef<Promise<void>>(Promise.resolve());
 
   const {
     data: authStatus,
@@ -49,10 +44,7 @@ export function useManagedAuth(
     queryKey,
     queryFn: () => authApi.authGetStatus(authProvider),
     staleTime: 30000,
-    // A rejected xAI refresh token is persisted as `requires_reauth` by the
-    // proxy hot path. Periodically refresh local status so an already-open Auth
-    // Center stops showing the account as logged in without requiring a reload.
-    refetchInterval: authProvider === "xai_oauth" ? 15_000 : false,
+    refetchInterval: false,
   });
 
   const stopPolling = useCallback(() => {
@@ -66,60 +58,20 @@ export function useManagedAuth(
     }
   }, []);
 
-  const cancelBackendFlow = useCallback(
-    async (deviceCode: string | null): Promise<boolean> => {
-      if (authProvider !== "codex_oauth" || !deviceCode) return true;
-      try {
-        const cancelled = await authApi.authCancelLogin(
-          authProvider,
-          deviceCode,
-        );
-        if (!cancelled) {
-          await queryClient.invalidateQueries({
-            queryKey: ["managed-auth-status", authProvider],
-          });
-        }
-        return cancelled;
-      } catch (e) {
-        console.debug("[ManagedAuth] Failed to cancel device flow:", e);
-        await queryClient.invalidateQueries({
-          queryKey: ["managed-auth-status", authProvider],
-        });
-        return false;
-      }
-    },
-    [authProvider, queryClient],
-  );
-
-  const queueBackendCancellation = useCallback(
-    (deviceCode: string | null) => {
-      const transition = flowTransitionRef.current.then(async () => {
-        await cancelBackendFlow(deviceCode);
-      });
-      flowTransitionRef.current = transition;
-      return transition;
-    },
-    [cancelBackendFlow],
-  );
-
   useEffect(() => {
     return () => {
       flowGenerationRef.current += 1;
-      void cancelBackendFlow(activeDeviceCodeRef.current);
-      activeDeviceCodeRef.current = null;
       stopPolling();
     };
-  }, [cancelBackendFlow, stopPolling]);
+  }, [authProvider, githubDomain, stopPolling]);
 
   const startLoginMutation = useMutation({
-    mutationFn: ({ targetAccountId }: LoginRequest) =>
-      authApi.authStartLogin(authProvider, githubDomain, targetAccountId),
+    mutationFn: (_request: LoginRequest) =>
+      authApi.authStartLogin(authProvider, githubDomain),
     onSuccess: async (response, request) => {
       if (request.generation !== flowGenerationRef.current) {
-        void cancelBackendFlow(response.device_code);
         return;
       }
-      activeDeviceCodeRef.current = response.device_code;
       setDeviceCode(response);
       setPollingState("polling");
       setError(null);
@@ -147,8 +99,6 @@ export function useManagedAuth(
         if (request.generation !== flowGenerationRef.current) return;
         if (Date.now() > expiresAt) {
           stopPolling();
-          activeDeviceCodeRef.current = null;
-          void cancelBackendFlow(response.device_code);
           flowGenerationRef.current += 1;
           setPollingState("error");
           setError("Device code expired. Please try again.");
@@ -164,7 +114,6 @@ export function useManagedAuth(
           if (request.generation !== flowGenerationRef.current) return;
           if (newAccount) {
             stopPolling();
-            activeDeviceCodeRef.current = null;
             flowGenerationRef.current += 1;
             const completionGeneration = flowGenerationRef.current;
             setPollingState("success");
@@ -182,18 +131,9 @@ export function useManagedAuth(
             !errorMessage.includes("slow_down")
           ) {
             stopPolling();
-            activeDeviceCodeRef.current = null;
-            void cancelBackendFlow(response.device_code);
             flowGenerationRef.current += 1;
             setPollingState("error");
-            setError(
-              authProvider === "codex_oauth" &&
-                errorMessage === CODEX_OAUTH_DUPLICATE_ACCOUNT_ERROR
-                ? t("codexOauth.duplicateAccount", {
-                    defaultValue: "该 ChatGPT 账号已添加，请直接使用现有账号。",
-                  })
-                : errorMessage,
-            );
+            setError(errorMessage);
           }
         }
       };
@@ -202,8 +142,6 @@ export function useManagedAuth(
       pollingTimeoutRef.current = setTimeout(() => {
         if (request.generation !== flowGenerationRef.current) return;
         stopPolling();
-        activeDeviceCodeRef.current = null;
-        void cancelBackendFlow(response.device_code);
         flowGenerationRef.current += 1;
         setPollingState("error");
         setError("Device code expired. Please try again.");
@@ -247,7 +185,7 @@ export function useManagedAuth(
       setError(null);
       toast.success(
         t("managedAuth.accountRemoved", {
-          defaultValue: "账号已移除",
+          defaultValue: "Account removed",
         }),
       );
       await refetchStatus();
@@ -272,50 +210,22 @@ export function useManagedAuth(
     },
   });
 
-  const beginLogin = useCallback(
-    (targetAccountId?: string) => {
-      const previousDeviceCode = activeDeviceCodeRef.current;
-      activeDeviceCodeRef.current = null;
-      const generation = flowGenerationRef.current + 1;
-      flowGenerationRef.current = generation;
-      retryTargetAccountIdRef.current = targetAccountId;
-      setPollingState("idle");
-      setDeviceCode(null);
-      setError(null);
-      stopPolling();
-      void queueBackendCancellation(previousDeviceCode).then(() => {
-        if (generation !== flowGenerationRef.current) return;
-        startLoginMutation.mutate({ targetAccountId, generation });
-      });
-    },
-    [queueBackendCancellation, startLoginMutation, stopPolling],
-  );
-
-  const startAuth = useCallback(() => beginLogin(), [beginLogin]);
-
-  const reauthAccount = useCallback(
-    (accountId: string) => {
-      beginLogin(accountId);
-    },
-    [beginLogin],
-  );
-
-  const retryAuth = useCallback(
-    () => beginLogin(retryTargetAccountIdRef.current),
-    [beginLogin],
-  );
-
-  const cancelAuth = useCallback(() => {
-    flowGenerationRef.current += 1;
-    const previousDeviceCode = activeDeviceCodeRef.current;
-    activeDeviceCodeRef.current = null;
-    retryTargetAccountIdRef.current = undefined;
+  const startAuth = useCallback(() => {
+    const generation = ++flowGenerationRef.current;
     stopPolling();
     setPollingState("idle");
     setDeviceCode(null);
     setError(null);
-    void queueBackendCancellation(previousDeviceCode);
-  }, [queueBackendCancellation, stopPolling]);
+    startLoginMutation.mutate({ generation });
+  }, [startLoginMutation, stopPolling]);
+
+  const cancelAuth = useCallback(() => {
+    flowGenerationRef.current += 1;
+    stopPolling();
+    setPollingState("idle");
+    setDeviceCode(null);
+    setError(null);
+  }, [stopPolling]);
 
   const logout = useCallback(() => {
     logoutMutation.mutate();
@@ -338,7 +248,6 @@ export function useManagedAuth(
   const accounts = authStatus?.accounts ?? [];
 
   return {
-    authStatus,
     isLoadingStatus,
     // Distinguish "status loaded successfully" from "loading / failed" so
     // callers don't treat a failed query's empty `accounts` as authoritative.
@@ -346,7 +255,6 @@ export function useManagedAuth(
     isStatusError,
     accounts,
     hasAnyAccount: accounts.length > 0,
-    isAuthenticated: authStatus?.authenticated ?? false,
     defaultAccountId: authStatus?.default_account_id ?? null,
     migrationError: authStatus?.migration_error ?? null,
     pollingState,
@@ -356,10 +264,7 @@ export function useManagedAuth(
     isAddingAccount: startLoginMutation.isPending || pollingState === "polling",
     isRemovingAccount: removeAccountMutation.isPending,
     isSettingDefaultAccount: setDefaultAccountMutation.isPending,
-    startAuth,
     addAccount: startAuth,
-    reauthAccount,
-    retryAuth,
     cancelAuth,
     logout,
     removeAccount,

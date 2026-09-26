@@ -32,13 +32,15 @@ it("browses and resets the Atlas data directory", async () => {
   await waitFor(() => expect(result.current.isLoading).toBe(false));
   await act(() => result.current.browseAppConfigDir());
   expect(api.selectConfigDirectory).toHaveBeenCalledWith(
-    "/home/mock/.cc-switch",
+    "/home/mock/.copilot-bridge-atlas",
   );
   expect(result.current.appConfigDir).toBe("/picked/atlas");
   expect(result.current.resolvedDirs.appConfig).toBe("/picked/atlas");
   await act(() => result.current.resetAppConfigDir());
   expect(result.current.appConfigDir).toBeUndefined();
-  expect(result.current.resolvedDirs.appConfig).toBe("/home/mock/.cc-switch");
+  expect(result.current.resolvedDirs.appConfig).toBe(
+    "/home/mock/.copilot-bridge-atlas",
+  );
 });
 it("leaves the preference alone when the picker is cancelled", async () => {
   api.getAppConfigDirOverride.mockResolvedValue("/existing/atlas");
@@ -56,7 +58,9 @@ it("restores the initial Atlas data directory when settings are reset", async ()
   act(() => result.current.updateAppConfigDir(" /new/atlas "));
   expect(result.current.resolvedDirs.appConfig).toBe("/new/atlas");
   await act(() => result.current.resetAppConfigDir());
-  expect(result.current.resolvedDirs.appConfig).toBe("/home/mock/.cc-switch");
+  expect(result.current.resolvedDirs.appConfig).toBe(
+    "/home/mock/.copilot-bridge-atlas",
+  );
   act(() => result.current.resetAllDirectories());
   expect(result.current.appConfigDir).toBe("/existing/atlas");
   expect(result.current.resolvedDirs.appConfig).toBe("/existing/atlas");

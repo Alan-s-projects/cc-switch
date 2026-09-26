@@ -3,14 +3,14 @@ use tauri::menu::{Menu, MenuBuilder};
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
-pub const TRAY_ID: &str = "cc-switch";
+pub const TRAY_ID: &str = "copilot-bridge-atlas";
 
 pub fn create_tray_menu(
     app: &tauri::AppHandle,
     _state: &AppState,
 ) -> Result<Menu<tauri::Wry>, AppError> {
     MenuBuilder::new(app)
-        .text("show_main", "Open CC Switch Atlas")
+        .text("show_main", "Open Copilot Bridge Atlas")
         .text("open_website", "GitHub repository")
         .separator()
         .text("quit", "Quit")
@@ -30,7 +30,7 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, id: &str) {
         }
         "open_website" => {
             let _ = app.opener().open_url(
-                "https://github.com/Alan-s-projects/cc-switch",
+                "https://github.com/Alan-s-projects/copilot-bridge-atlas",
                 None::<String>,
             );
         }

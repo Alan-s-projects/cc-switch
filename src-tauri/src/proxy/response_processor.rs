@@ -7,9 +7,9 @@ use super::{
     forwarder::ActiveConnectionGuard,
     handler_config::{StreamUsageEventFilter, UsageParserConfig},
     handler_context::{RequestContext, StreamingTimeoutConfig},
-    hyper_client::{ProxyResponse, MAX_RESPONSE_BODY_BYTES},
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
+    upstream_response::{ProxyResponse, MAX_RESPONSE_BODY_BYTES},
     usage::parser::TokenUsage,
     ProxyError,
 };
@@ -78,7 +78,7 @@ pub(crate) fn strip_entity_headers_for_rebuilt_body(headers: &mut HeaderMap) {
 ///
 /// `body_timeout`: 整包超时。当非零时用 `tokio::time::timeout` 包住 `.bytes()` 调用，
 /// 防止上游发完响应头后卡住 body 导致请求永远挂住。
-/// 传入 `Duration::ZERO` 表示不启用超时（故障转移关闭时）。
+/// `Duration::ZERO` leaves body reads without a local deadline.
 pub(crate) async fn read_decoded_body(
     response: ProxyResponse,
     tag: &str,
@@ -218,7 +218,7 @@ pub async fn handle_non_streaming(
     // guard 在函数 scope 内持有，整包响应读取完成后随函数返回一并 drop
     _connection_guard: Option<ActiveConnectionGuard>,
 ) -> Result<Response, ProxyError> {
-    // Atlas has one upstream. Retired failover settings must not cut off long responses.
+    // Allow long Codex responses to finish without a local body deadline.
     let body_timeout = Duration::ZERO;
     let (mut response_headers, status, body_bytes) =
         read_decoded_body(response, ctx.tag, body_timeout).await?;
@@ -480,9 +480,7 @@ pub(crate) fn create_usage_collector(
         .outbound_model
         .clone()
         .unwrap_or_else(|| ctx.request_model.clone());
-    // 用 ctx 的 app_type 而不是 parser_config 的：Claude Desktop 流式透传复用
-    // CLAUDE_PARSER_CONFIG（app_type_str="claude"），按 parser_config 记账会把
-    // claude-desktop 的行错记到 claude 名下，导致供应商计价覆盖解析不到。
+    // Keep usage attribution with the request context.
     let app_type_str = ctx.app_type_str;
     let tag = ctx.tag;
     let start_time = ctx.start_time;
@@ -852,9 +850,7 @@ mod tests {
     use crate::database::Database;
     use crate::error::AppError;
     use crate::proxy::provider_router::ProviderRouter;
-    use crate::proxy::providers::{
-        codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore,
-    };
+    use crate::proxy::providers::codex_chat_history::CodexChatHistoryStore;
     use crate::proxy::types::{ProxyConfig, ProxyStatus};
     use rust_decimal::Decimal;
     use std::collections::HashMap;
@@ -1018,7 +1014,6 @@ mod tests {
             start_time: Arc::new(RwLock::new(None)),
             current_providers: Arc::new(RwLock::new(HashMap::new())),
             provider_router: Arc::new(ProviderRouter::new(db.clone())),
-            gemini_shadow: Arc::new(GeminiShadowStore::default()),
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
             app_handle: None,
         }
@@ -1029,13 +1024,13 @@ mod tests {
         conn.execute(
             "INSERT OR REPLACE INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million)
              VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params!["resp-model", "Resp Model", "1.0", "0"],
+            rusqlite::params!["gpt-response-fixture", "Resp Model", "1.0", "0"],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute(
             "INSERT OR REPLACE INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million)
              VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params!["req-model", "Req Model", "2.0", "0"],
+            rusqlite::params!["gpt-request-fixture", "Req Model", "2.0", "0"],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
@@ -1071,7 +1066,7 @@ mod tests {
                 "response",
                 "request",
                 "1.5",
-                "resp-model",
+                "gpt-response-fixture",
                 "1.5",
             ),
             (
@@ -1079,7 +1074,7 @@ mod tests {
                 "request",
                 "response",
                 "2.5",
-                "req-model",
+                "gpt-request-fixture",
                 "5",
             ),
         ];
@@ -1110,9 +1105,9 @@ mod tests {
                 &state,
                 provider_id,
                 app_type,
-                "resp-model",
-                "req-model",
-                "req-model",
+                "gpt-response-fixture",
+                "gpt-request-fixture",
+                "gpt-request-fixture",
                 usage,
                 10,
                 None,
@@ -1149,8 +1144,8 @@ mod tests {
                     },
                 )
                 .map_err(|e| AppError::Database(e.to_string()))?;
-            assert_eq!(model, "resp-model");
-            assert_eq!(request_model, "req-model");
+            assert_eq!(model, "gpt-response-fixture");
+            assert_eq!(request_model, "gpt-request-fixture");
             assert_eq!(pricing_model, expected_model);
             assert_eq!(
                 Decimal::from_str(&cost_multiplier).unwrap(),
@@ -1178,7 +1173,7 @@ mod tests {
     #[tokio::test]
     async fn test_request_pricing_mode_anchors_to_outbound_model() -> Result<(), AppError> {
         let db = Arc::new(Database::memory()?);
-        let app_type = "claude";
+        let app_type = "codex";
 
         db.set_pricing_model_source(app_type, "request").await?;
         seed_pricing(&db)?;
@@ -1186,7 +1181,7 @@ mod tests {
             let conn = crate::database::lock_conn!(db.conn);
             conn.execute(
                 "INSERT OR REPLACE INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million)
-                 VALUES ('outbound-model', 'Outbound Model', '4.0', '0')",
+                 VALUES ('gpt-outbound-fixture', 'Outbound Model', '4.0', '0')",
                 [],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -1204,15 +1199,15 @@ mod tests {
             message_id: None,
         };
 
-        // 路由接管场景：客户端请求 req-model（$2/M），代理实际发出 outbound-model
-        // （$4/M），上游回显 resp-model。「按请求计价」必须锚定实际发出的模型。
+        // 路由接管场景：客户端请求 gpt-request-fixture（$2/M），代理实际发出 gpt-outbound-fixture
+        // （$4/M），上游回显 gpt-response-fixture。「按请求计价」必须锚定实际发出的模型。
         log_usage_internal(
             &state,
             "provider-3",
             app_type,
-            "resp-model",
-            "req-model",
-            "outbound-model",
+            "gpt-response-fixture",
+            "gpt-request-fixture",
+            "gpt-outbound-fixture",
             usage,
             10,
             None,
@@ -1233,9 +1228,9 @@ mod tests {
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         // model / request_model 列不受计价锚点影响
-        assert_eq!(model, "resp-model");
-        assert_eq!(request_model, "req-model");
-        // 按 outbound-model（$4/M）计价，而不是 req-model（$2/M）或 resp-model（$1/M）
+        assert_eq!(model, "gpt-response-fixture");
+        assert_eq!(request_model, "gpt-request-fixture");
+        // 按 gpt-outbound-fixture（$4/M）计价，而不是 gpt-request-fixture（$2/M）或 gpt-response-fixture（$1/M）
         assert_eq!(
             Decimal::from_str(&total_cost).unwrap(),
             Decimal::from_str("4").unwrap()
@@ -1244,28 +1239,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_claude_desktop_inherits_claude_global_defaults() -> Result<(), AppError> {
-        use crate::proxy::usage::logger::UsageLogger;
-
+    async fn test_log_usage_uses_global_defaults_without_provider_metadata() -> Result<(), AppError>
+    {
         let db = Arc::new(Database::memory()?);
-
-        // 全局计费配置只有 claude/codex/gemini 三行；claude-desktop 的
-        // 全局默认必须继承 claude，而不是静默落回工厂默认（1 / response）
-        db.set_default_cost_multiplier("claude", "1.5").await?;
-        db.set_pricing_model_source("claude", "request").await?;
-
-        let logger = UsageLogger::new(&db);
-        let (multiplier, source) = logger.resolve_pricing_config("claude-desktop").await;
-
-        assert_eq!(multiplier, Decimal::from_str("1.5").unwrap());
-        assert_eq!(source, "request");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_log_usage_uses_global_defaults_without_provider_metadata() -> Result<(), AppError> {
-        let db = Arc::new(Database::memory()?);
-        let app_type = "claude";
+        let app_type = "codex";
 
         db.set_default_cost_multiplier(app_type, "1.5").await?;
         db.set_pricing_model_source(app_type, "response").await?;
@@ -1287,9 +1264,9 @@ mod tests {
             &state,
             "provider-2",
             app_type,
-            "resp-model",
-            "req-model",
-            "req-model",
+            "gpt-response-fixture",
+            "gpt-request-fixture",
+            "gpt-request-fixture",
             usage,
             10,
             None,

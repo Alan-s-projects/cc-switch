@@ -11,7 +11,6 @@ use super::ProxyError;
 /// - 超时：504 Gateway Timeout
 /// - 连接失败：502 Bad Gateway
 /// - 无可用 Provider：503 Service Unavailable
-/// - 重试耗尽：503 Service Unavailable
 /// - 认证错误：401 Unauthorized
 /// - 配置/请求错误：400 Bad Request
 /// - 转换错误：422 Unprocessable Entity
@@ -32,19 +31,9 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         ProxyError::ForwardFailed(_) => 502,
 
         // 无可用 Provider：503 Service Unavailable
-        ProxyError::NoAvailableProvider => 503,
-
-        // 所有供应商已熔断：503 Service Unavailable
-        ProxyError::AllProvidersCircuitOpen => 503,
 
         // 未配置供应商：503 Service Unavailable
         ProxyError::NoProvidersConfigured => 503,
-
-        // 重试耗尽：503 Service Unavailable
-        ProxyError::MaxRetriesExceeded => 503,
-
-        // Provider 不健康：503 Service Unavailable
-        ProxyError::ProviderUnhealthy(_) => 503,
 
         // 配置错误/无效请求：400 Bad Request
         ProxyError::ConfigError(_) | ProxyError::InvalidRequest(_) => 400,
@@ -75,11 +64,7 @@ pub fn get_error_message(error: &ProxyError) -> String {
         }
         ProxyError::Timeout(msg) => format!("请求超时: {msg}"),
         ProxyError::ForwardFailed(msg) => format!("转发失败: {msg}"),
-        ProxyError::NoAvailableProvider => "无可用 Provider".to_string(),
-        ProxyError::AllProvidersCircuitOpen => "所有供应商已熔断，无可用渠道".to_string(),
         ProxyError::NoProvidersConfigured => "未配置供应商".to_string(),
-        ProxyError::MaxRetriesExceeded => "所有 Provider 都失败，重试耗尽".to_string(),
-        ProxyError::ProviderUnhealthy(msg) => format!("Provider 不健康: {msg}"),
         ProxyError::DatabaseError(msg) => format!("数据库错误: {msg}"),
         ProxyError::TransformError(msg) => format!("请求/响应转换错误: {msg}"),
         _ => error.to_string(),
@@ -113,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_map_no_provider_error() {
-        let error = ProxyError::NoAvailableProvider;
+        let error = ProxyError::NoProvidersConfigured;
         assert_eq!(map_proxy_error_to_status(&error), 503);
     }
 

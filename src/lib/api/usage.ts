@@ -1,16 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   UsageSummary,
-  UsageSummaryByApp,
   DailyStats,
   ProviderStats,
   ModelStats,
-  RequestLog,
   LogFilters,
   ModelPricing,
   ModelsDevSyncConfig,
   ModelsDevSyncState,
-  ProviderLimitStatus,
   PaginatedLogs,
 } from "@/types/usage";
 
@@ -27,20 +24,6 @@ export const usageApi = {
       startDate,
       endDate,
       appType,
-      providerName,
-      model,
-    });
-  },
-
-  getUsageSummaryByApp: async (
-    startDate?: number,
-    endDate?: number,
-    providerName?: string,
-    model?: string,
-  ): Promise<UsageSummaryByApp[]> => {
-    return invoke("get_usage_summary_by_app", {
-      startDate,
-      endDate,
       providerName,
       model,
     });
@@ -106,10 +89,6 @@ export const usageApi = {
     });
   },
 
-  getRequestDetail: async (requestId: string): Promise<RequestLog | null> => {
-    return invoke("get_request_detail", { requestId });
-  },
-
   getModelPricing: async (): Promise<ModelPricing[]> => {
     return invoke("get_model_pricing");
   },
@@ -155,12 +134,5 @@ export const usageApi = {
 
   deleteModelPricing: async (modelId: string): Promise<void> => {
     return invoke("delete_model_pricing", { modelId });
-  },
-
-  checkProviderLimits: async (
-    providerId: string,
-    appType: string,
-  ): Promise<ProviderLimitStatus> => {
-    return invoke("check_provider_limits", { providerId, appType });
   },
 };

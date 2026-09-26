@@ -1,30 +1,13 @@
+use copilot_bridge_atlas_lib::AppType;
 use std::str::FromStr;
 
-use cc_switch_lib::AppType;
-
 #[test]
-fn parse_known_apps_case_insensitive_and_trim() {
-    assert!(matches!(AppType::from_str("claude"), Ok(AppType::Claude)));
-    assert!(matches!(AppType::from_str("codex"), Ok(AppType::Codex)));
-    assert!(matches!(
-        AppType::from_str("grokbuild"),
-        Ok(AppType::GrokBuild)
-    ));
-    assert!(matches!(
-        AppType::from_str("Grok-Build"),
-        Ok(AppType::GrokBuild)
-    ));
-    assert!(matches!(
-        AppType::from_str(" ClAuDe \n"),
-        Ok(AppType::Claude)
-    ));
-    assert!(matches!(AppType::from_str("\tcoDeX\t"), Ok(AppType::Codex)));
-}
-
-#[test]
-fn parse_unknown_app_returns_localized_error_message() {
-    let err = AppType::from_str("unknown").unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("可选值") || msg.contains("Allowed"));
-    assert!(msg.contains("unknown"));
+fn accepts_only_codex_with_case_and_whitespace_normalization() {
+    for value in ["codex", " CODEX ", "\tcoDeX\n"] {
+        assert_eq!(AppType::from_str(value).unwrap(), AppType::Codex);
+    }
+    assert_eq!(AppType::Codex.as_str(), "codex");
+    let error = AppType::from_str("unsupported").unwrap_err().to_string();
+    assert!(error.contains("unsupported"));
+    assert!(error.contains("codex"));
 }

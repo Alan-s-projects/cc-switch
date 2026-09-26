@@ -1,281 +1,112 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useSettings } from "@/hooks/useSettings";
-import type { Settings } from "@/types";
 
-const mutateAsyncMock = vi.fn();
-const useSettingsQueryMock = vi.fn();
-const setAppConfigDirOverrideMock = vi.fn();
-const applyClaudePluginConfigMock = vi.fn();
-const applyClaudeOnboardingSkipMock = vi.fn();
-const clearClaudeOnboardingSkipMock = vi.fn();
-const syncCurrentProvidersLiveMock = vi.fn();
-const updateTrayMenuMock = vi.fn();
-const getCurrentMock = vi.fn();
-const getAllMock = vi.fn();
-const getQueryDataMock = vi.fn();
-const invalidatePiDirectoryCachesMock = vi.fn();
-const toastErrorMock = vi.fn();
-const toastSuccessMock = vi.fn();
+const mutateAsync = vi.fn();
+const setAppConfigDirOverride = vi.fn();
+const setAutoLaunch = vi.fn();
+const updateTrayMenu = vi.fn();
+let form: any;
+let directories: any;
+let saved: any;
 
-let settingsFormMock: any;
-let directorySettingsMock: any;
-let metadataMock: any;
-let serverSettings: Settings;
-
-vi.mock("sonner", () => ({
-  toast: {
-    error: (...args: unknown[]) => toastErrorMock(...args),
-    success: (...args: unknown[]) => toastSuccessMock(...args),
-  },
-}));
-
-vi.mock("@/hooks/useSettingsForm", () => ({
-  useSettingsForm: () => settingsFormMock,
-}));
-
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("@/hooks/useSettingsForm", () => ({ useSettingsForm: () => form }));
 vi.mock("@/hooks/useDirectorySettings", () => ({
-  useDirectorySettings: () => directorySettingsMock,
+  useDirectorySettings: () => directories,
 }));
-
-vi.mock("@/hooks/useSettingsMetadata", () => ({
-  useSettingsMetadata: () => metadataMock,
-}));
-
 vi.mock("@/lib/query", () => ({
-  invalidatePiDirectoryCaches: (...args: unknown[]) =>
-    invalidatePiDirectoryCachesMock(...args),
-  useSettingsQuery: (...args: unknown[]) => useSettingsQueryMock(...args),
-  useSaveSettingsMutation: () => ({
-    mutateAsync: mutateAsyncMock,
-    isPending: false,
-  }),
+  useSettingsQuery: () => ({ data: saved, isLoading: false }),
+  useSaveSettingsMutation: () => ({ mutateAsync, isPending: false }),
 }));
-
-vi.mock("@tanstack/react-query", async () => {
-  const actual = await vi.importActual<typeof import("@tanstack/react-query")>(
-    "@tanstack/react-query",
-  );
-  return {
-    ...actual,
-    useQueryClient: () => ({
-      getQueryData: (...args: unknown[]) => getQueryDataMock(...args),
-    }),
-  };
-});
-
 vi.mock("@/lib/api", () => ({
   settingsApi: {
     setAppConfigDirOverride: (...args: unknown[]) =>
-      setAppConfigDirOverrideMock(...args),
-    applyClaudePluginConfig: (...args: unknown[]) =>
-      applyClaudePluginConfigMock(...args),
-    applyClaudeOnboardingSkip: (...args: unknown[]) =>
-      applyClaudeOnboardingSkipMock(...args),
-    clearClaudeOnboardingSkip: (...args: unknown[]) =>
-      clearClaudeOnboardingSkipMock(...args),
-    syncCurrentProvidersLive: (...args: unknown[]) =>
-      syncCurrentProvidersLiveMock(...args),
+      setAppConfigDirOverride(...args),
+    setAutoLaunch: (...args: unknown[]) => setAutoLaunch(...args),
   },
   providersApi: {
-    updateTrayMenu: (...args: unknown[]) => updateTrayMenuMock(...args),
-    getCurrent: (...args: unknown[]) => getCurrentMock(...args),
-    getAll: (...args: unknown[]) => getAllMock(...args),
+    updateTrayMenu: (...args: unknown[]) => updateTrayMenu(...args),
   },
 }));
 
-const createSettingsFormMock = (overrides: Record<string, unknown> = {}) => ({
-  settings: {
-    showInTray: true,
-    claudeConfigDir: "/claude",
-    codexConfigDir: "/codex",
-    geminiConfigDir: "/gemini",
-    opencodeConfigDir: "/opencode",
-    openclawConfigDir: "/openclaw",
-    hermesConfigDir: "/hermes",
-    piConfigDir: "/pi",
-    language: "zh",
-  },
-  isLoading: false,
-  initialLanguage: "zh",
-  updateSettings: vi.fn(),
-  resetSettings: vi.fn(),
-  syncLanguage: vi.fn(),
-  ...overrides,
-});
-
-const createDirectorySettingsMock = (
-  overrides: Record<string, unknown> = {},
-) => ({
-  appConfigDir: undefined,
-  resolvedDirs: {
-    appConfig: "/home/mock/.cc-switch",
-  },
-  isLoading: false,
-  initialAppConfigDir: undefined,
-  updateAppConfigDir: vi.fn(),
-  browseAppConfigDir: vi.fn(),
-  resetAppConfigDir: vi.fn(),
-  resetAllDirectories: vi.fn(),
-  ...overrides,
-});
-
-const createMetadataMock = (overrides: Record<string, unknown> = {}) => ({
-  isPortable: false,
-  requiresRestart: false,
-  isLoading: false,
-  acknowledgeRestart: vi.fn(),
-  setRequiresRestart: vi.fn(),
-  ...overrides,
-});
-
-describe("useSettings hook", () => {
+describe("useSettings", () => {
   beforeEach(() => {
-    mutateAsyncMock.mockReset();
-    useSettingsQueryMock.mockReset();
-    setAppConfigDirOverrideMock.mockReset();
-    applyClaudePluginConfigMock.mockReset();
-    applyClaudeOnboardingSkipMock.mockReset();
-    clearClaudeOnboardingSkipMock.mockReset();
-    syncCurrentProvidersLiveMock.mockReset();
-    invalidatePiDirectoryCachesMock.mockReset();
-    getCurrentMock.mockReset();
-    getAllMock.mockReset();
-    getQueryDataMock.mockReset();
-    toastErrorMock.mockReset();
-    toastSuccessMock.mockReset();
-    window.localStorage.clear();
-
-    serverSettings = {
+    vi.clearAllMocks();
+    saved = {
       showInTray: true,
-      claudeConfigDir: "/server/claude",
-      codexConfigDir: "/server/codex",
-      geminiConfigDir: "/server/gemini",
-      opencodeConfigDir: "/server/opencode",
-      openclawConfigDir: "/server/openclaw",
-      hermesConfigDir: "/server/hermes",
-      piConfigDir: "/server/pi",
-      language: "zh",
+      launchOnStartup: false,
+      language: "en",
+      backupRetainCount: 10,
     };
-
-    useSettingsQueryMock.mockReturnValue({
-      data: serverSettings,
+    form = {
+      settings: saved,
       isLoading: false,
-    });
-
-    settingsFormMock = createSettingsFormMock({
-      settings: {
-        ...serverSettings,
-        language: "zh",
-      },
-    });
-    directorySettingsMock = createDirectorySettingsMock();
-    metadataMock = createMetadataMock();
-
-    mutateAsyncMock.mockResolvedValue(true);
-    setAppConfigDirOverrideMock.mockResolvedValue(true);
-    applyClaudePluginConfigMock.mockResolvedValue(true);
-    applyClaudeOnboardingSkipMock.mockResolvedValue(true);
-    clearClaudeOnboardingSkipMock.mockResolvedValue(true);
-    syncCurrentProvidersLiveMock.mockResolvedValue({ ok: true });
-    getCurrentMock.mockResolvedValue(null);
-    getAllMock.mockResolvedValue({});
-    // 默认将 queryClient 缓存对齐到 serverSettings，既有断言的 "prev === data" 语义保持不变
-    getQueryDataMock.mockImplementation(() => serverSettings);
+      updateSettings: vi.fn(),
+      resetSettings: vi.fn(),
+    };
+    directories = {
+      appConfigDir: undefined,
+      resolvedDirs: { appConfig: "/home/mock/.copilot-bridge-atlas" },
+      isLoading: false,
+      initialAppConfigDir: undefined,
+      updateAppConfigDir: vi.fn(),
+      browseAppConfigDir: vi.fn(),
+      resetAppConfigDir: vi.fn(),
+      resetAllDirectories: vi.fn(),
+    };
+    mutateAsync.mockResolvedValue(true);
+    setAppConfigDirOverride.mockResolvedValue(true);
+    setAutoLaunch.mockResolvedValue(true);
+    updateTrayMenu.mockResolvedValue(true);
   });
 
-  it("preserves historical client-directory preferences without projecting providers", async () => {
-    settingsFormMock = createSettingsFormMock({
-      settings: {
-        ...serverSettings,
-        codexConfigDir: "  /existing/codex  ",
-        piConfigDir: "  /custom/pi  ",
-      },
-    });
-
+  it("saves app preferences and flags a changed data directory for restart", async () => {
+    directories.appConfigDir = "  /custom/atlas  ";
     const { result } = renderHook(() => useSettings());
-
     await act(async () => {
       await result.current.saveSettings(undefined, { silent: true });
     });
-
-    const payload = mutateAsyncMock.mock.calls[0][0] as Settings;
-    expect(payload.codexConfigDir).toBe("  /existing/codex  ");
-    expect(payload.piConfigDir).toBe("  /custom/pi  ");
-    expect(syncCurrentProvidersLiveMock).not.toHaveBeenCalled();
-    expect(invalidatePiDirectoryCachesMock).not.toHaveBeenCalled();
+    expect(mutateAsync).toHaveBeenCalledWith(saved);
+    expect(setAppConfigDirOverride).toHaveBeenCalledWith("/custom/atlas");
+    expect(result.current.requiresRestart).toBe(true);
   });
 
-  it("resets form, language and directories using server data", () => {
-    serverSettings = {
-      ...serverSettings,
-      claudeConfigDir: "  /server/claude  ",
-      codexConfigDir: "   ",
-      language: "zh",
-    };
-    useSettingsQueryMock.mockReturnValue({
-      data: serverSettings,
-      isLoading: false,
-    });
-
-    settingsFormMock = createSettingsFormMock({
-      settings: {
-        ...serverSettings,
-        language: "zh",
-      },
-      initialLanguage: "zh",
-    });
-    directorySettingsMock = createDirectorySettingsMock();
-
+  it("autosaves startup changes without editing a data directory", async () => {
     const { result } = renderHook(() => useSettings());
-
-    act(() => {
-      result.current.resetSettings();
-    });
-
-    expect(settingsFormMock.resetSettings).toHaveBeenCalledWith(serverSettings);
-    expect(settingsFormMock.syncLanguage).toHaveBeenCalledWith(
-      settingsFormMock.initialLanguage,
-    );
-    expect(directorySettingsMock.resetAllDirectories).toHaveBeenCalledWith();
-    expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(false);
-  });
-
-  it("returns null immediately when settings state is missing", async () => {
-    settingsFormMock = createSettingsFormMock({
-      settings: null,
-    });
-
-    const { result } = renderHook(() => useSettings());
-
-    let resultValue: { requiresRestart: boolean } | null = null;
     await act(async () => {
-      resultValue = await result.current.saveSettings();
+      await result.current.autoSaveSettings({ launchOnStartup: true });
     });
-
-    expect(resultValue).toBeNull();
-    expect(mutateAsyncMock).not.toHaveBeenCalled();
-    expect(setAppConfigDirOverrideMock).not.toHaveBeenCalled();
+    expect(setAutoLaunch).toHaveBeenCalledWith(true);
+    expect(setAppConfigDirOverride).not.toHaveBeenCalled();
+    expect(mutateAsync).toHaveBeenCalledWith({
+      ...saved,
+      launchOnStartup: true,
+    });
   });
 
-  it("throws when save mutation rejects and keeps restart flag untouched", async () => {
-    settingsFormMock = createSettingsFormMock();
-    directorySettingsMock = createDirectorySettingsMock({
-      appConfigDir: "/override/app",
-      initialAppConfigDir: "/override/app",
-    });
-    const rejection = new Error("save failed");
-    mutateAsyncMock.mockRejectedValueOnce(rejection);
-
+  it("resets the form and directory selection to saved data", () => {
     const { result } = renderHook(() => useSettings());
+    act(() => result.current.resetSettings());
+    expect(form.resetSettings).toHaveBeenCalledWith(saved);
+    expect(directories.resetAllDirectories).toHaveBeenCalled();
+    expect(result.current.requiresRestart).toBe(false);
+  });
 
-    await expect(
-      act(async () => {
-        await result.current.saveSettings();
-      }),
-    ).rejects.toThrow("save failed");
+  it("returns null when preferences have not loaded", async () => {
+    form.settings = null;
+    const { result } = renderHook(() => useSettings());
+    await expect(result.current.saveSettings()).resolves.toBeNull();
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(setAppConfigDirOverride).not.toHaveBeenCalled();
+  });
 
-    expect(setAppConfigDirOverrideMock).not.toHaveBeenCalled();
-    expect(metadataMock.setRequiresRestart).not.toHaveBeenCalledWith(true);
+  it("keeps the current directory when saving preferences fails", async () => {
+    directories.appConfigDir = "/custom/atlas";
+    mutateAsync.mockRejectedValueOnce(new Error("save failed"));
+    const { result } = renderHook(() => useSettings());
+    await expect(result.current.saveSettings()).rejects.toThrow("save failed");
+    expect(setAppConfigDirOverride).not.toHaveBeenCalled();
+    expect(result.current.requiresRestart).toBe(false);
   });
 });

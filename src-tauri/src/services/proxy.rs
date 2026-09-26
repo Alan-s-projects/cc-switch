@@ -104,32 +104,33 @@ impl ProxyService {
             .map_err(|e| format!("保存动态代理端口失败: {e}"))
     }
 
-    pub async fn stop(&self) -> Result<(), String> {
+    /// Stop this instance's listener without changing the user's saved switch.
+    pub async fn shutdown(&self) -> Result<(), String> {
         if let Some(server) = self.server.write().await.take() {
             server
                 .stop()
                 .await
-                .map_err(|e| format!("停止代理服务器失败: {e}"))?;
-
-            // 停止时设置 proxy_enabled = false
-            let mut global_config = self
-                .db
-                .get_global_proxy_config()
-                .await
-                .map_err(|e| format!("获取全局代理配置失败: {e}"))?;
-
-            if global_config.proxy_enabled {
-                global_config.proxy_enabled = false;
-                if let Err(e) = self.db.update_global_proxy_config(global_config).await {
-                    log::warn!("更新代理总开关失败: {e}");
-                }
-            }
-
-            log::info!("代理服务器已停止");
-            Ok(())
-        } else {
-            Err("代理服务器未运行".to_string())
+                .map_err(|e| format!("Cannot stop the proxy listener: {e}"))?;
         }
+        Ok(())
+    }
+
+    /// A manual Off action also persists the preference for the next launch.
+    pub async fn stop(&self) -> Result<(), String> {
+        self.shutdown().await?;
+        let mut config = self
+            .db
+            .get_global_proxy_config()
+            .await
+            .map_err(|e| e.to_string())?;
+        if config.proxy_enabled {
+            config.proxy_enabled = false;
+            self.db
+                .update_global_proxy_config(config)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     pub async fn get_status(&self) -> Result<ProxyStatus, String> {
@@ -152,16 +153,7 @@ impl ProxyService {
     }
 
     pub async fn update_config(&self, config: &ProxyConfig) -> Result<(), String> {
-        // 记录旧配置用于判定是否需要重启
-        let previous = self
-            .db
-            .get_proxy_config()
-            .await
-            .map_err(|e| format!("获取代理配置失败: {e}"))?;
-
-        // 保存到数据库（保持 live_takeover_active 状态不变）
-        let mut new_config = config.clone();
-        new_config.live_takeover_active = previous.live_takeover_active;
+        let new_config = config.clone();
 
         self.db
             .update_proxy_config(new_config.clone())

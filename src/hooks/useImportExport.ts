@@ -59,7 +59,7 @@ export function useImportExport(
       console.error("[useImportExport] Failed to open file dialog", error);
       toast.error(
         t("settings.selectFileFailed", {
-          defaultValue: "选择文件失败",
+          defaultValue: "Please choose a valid SQL backup file",
         }),
       );
     }
@@ -69,7 +69,7 @@ export function useImportExport(
     if (!selectedFile) {
       toast.error(
         t("settings.selectFileFailed", {
-          defaultValue: "请选择有效的 SQL 备份文件",
+          defaultValue: "Please choose a valid SQL backup file",
         }),
       );
       return;
@@ -88,7 +88,7 @@ export function useImportExport(
         const message =
           result.message ||
           t("settings.configCorrupted", {
-            defaultValue: "SQL 文件已损坏或格式不正确",
+            defaultValue: "SQL file may be corrupted or invalid",
           });
         setErrorMessage(message);
         toast.error(message);
@@ -106,7 +106,7 @@ export function useImportExport(
         setStatus("success");
         toast.success(
           t("settings.importSuccess", {
-            defaultValue: "配置导入成功",
+            defaultValue: "Import Successful!",
           }),
           { closeButton: true },
         );
@@ -119,7 +119,7 @@ export function useImportExport(
         toast.warning(
           t("settings.importPartialSuccess", {
             defaultValue:
-              "配置已导入，但同步到当前供应商失败。请手动重新选择一次供应商。",
+              "The backup was imported, but Atlas could not refresh its model catalog. Reopen Atlas or edit Copilot setup.",
           }),
         );
       }
@@ -131,7 +131,7 @@ export function useImportExport(
       setErrorMessage(message);
       toast.error(
         t("settings.importFailedError", {
-          defaultValue: "导入配置失败: {{message}}",
+          defaultValue: "Import config failed: {{message}}",
           message,
         }),
       );
@@ -144,12 +144,12 @@ export function useImportExport(
     try {
       const now = new Date();
       const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
-      const defaultName = `cc-switch-export-${stamp}.sql`;
+      const defaultName = `copilot-bridge-atlas-export-${stamp}.sql`;
       const destination = await settingsApi.saveFileDialog(defaultName);
       if (!destination) {
         toast.error(
-          t("settings.selectFileFailed", {
-            defaultValue: "请选择 SQL 备份保存路径",
+          t("settings.selectSavePath", {
+            defaultValue: "Choose where to save the SQL backup.",
           }),
         );
         return;
@@ -160,14 +160,14 @@ export function useImportExport(
         const displayPath = result.filePath ?? destination;
         toast.success(
           t("settings.configExported", {
-            defaultValue: "配置已导出",
+            defaultValue: "Config exported to:",
           }) + `\n${displayPath}`,
           { closeButton: true },
         );
       } else {
         toast.error(
           t("settings.exportFailed", {
-            defaultValue: "导出配置失败",
+            defaultValue: "Export failed",
           }) + (result.message ? `: ${result.message}` : ""),
         );
       }
@@ -175,7 +175,7 @@ export function useImportExport(
       console.error("[useImportExport] Failed to export config", error);
       toast.error(
         t("settings.exportFailedError", {
-          defaultValue: "导出配置失败: {{message}}",
+          defaultValue: "Export config failed: {{message}}",
           message: error instanceof Error ? error.message : String(error ?? ""),
         }),
       );

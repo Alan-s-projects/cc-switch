@@ -1,11 +1,9 @@
-import { cloneElement, isValidElement } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
-import { useUsageSummaryByApp } from "@/lib/query/usage";
+import { useUsageSummary } from "@/lib/query/usage";
 import { cn } from "@/lib/utils";
-import { APP_ICON_MAP } from "@/config/appConfig";
-import type { AppId } from "@/lib/api/types";
+import { CodexIcon } from "@/components/BrandIcons";
 import {
   Activity,
   ArrowDownToLine,
@@ -14,182 +12,43 @@ import {
   Info,
   Loader2,
   Sparkles,
-  Zap,
 } from "lucide-react";
-import {
-  fmtUsd,
-  formatTokensShort,
-  getResolvedLang,
-  parseFiniteNumber,
-} from "./format";
-import {
-  getCacheWriteAvailability,
-  type AppType,
-  type UsageRangeSelection,
-  type UsageSummary,
-  type UsageSummaryByApp,
-} from "@/types/usage";
+import { fmtUsd, formatTokensShort, parseFiniteNumber } from "./format";
+import type { UsageRangeSelection } from "@/types/usage";
 
 interface UsageHeroProps {
   range: UsageRangeSelection;
-  appType?: string;
+  appType?: "codex";
   providerName?: string;
   model?: string;
   refreshIntervalMs: number;
 }
 
-interface TitleTheme {
-  /** Foreground color for the icon glyph (text-* class). */
-  accent: string;
-  /** Background tint for the icon square (bg-* class). */
-  iconBg: string;
-}
-
-const TITLE_THEMES: Record<AppType | "all", TitleTheme> = {
-  all: { accent: "text-primary", iconBg: "bg-primary/10" },
-  claude: {
-    accent: "text-amber-600 dark:text-amber-400",
-    iconBg: "bg-amber-500/10",
-  },
-  codex: {
-    // OpenAI/Codex 走黑白单色调；中性灰在深浅模式都能透出方块底色，
-    // 不像纯黑 bg-black/10 在深色背景下会糊掉。
-    accent: "text-neutral-700 dark:text-neutral-300",
-    iconBg: "bg-neutral-500/10",
-  },
-  gemini: {
-    accent: "text-sky-600 dark:text-sky-400",
-    iconBg: "bg-sky-500/10",
-  },
-  grokbuild: {
-    accent: "text-rose-600 dark:text-rose-400",
-    iconBg: "bg-rose-500/10",
-  },
-  opencode: {
-    accent: "text-purple-600 dark:text-purple-400",
-    iconBg: "bg-purple-500/10",
-  },
-  mcode: {
-    accent: "text-orange-600 dark:text-orange-400",
-    iconBg: "bg-orange-500/10",
-  },
-  pi: {
-    accent: "text-fuchsia-600 dark:text-fuchsia-400",
-    iconBg: "bg-fuchsia-500/10",
-  },
-};
-
-/**
- * Combine per-app summaries into a single rolled-up summary.
- *
- * The backend's per-app rows already use fresh-input semantics (cache-inclusive
- * providers have been normalized in SQL), so plain addition is correct here.
- * `cacheHitRate` and `successRate` must be re-derived from the summed counts
- * rather than averaged across rows.
- */
-function aggregateSummaries(items: UsageSummary[]): UsageSummary {
-  let totalRequests = 0;
-  let successCount = 0;
-  let totalCostNum = 0;
-  let input = 0;
-  let output = 0;
-  let cacheCreation = 0;
-  let cacheRead = 0;
-
-  for (const s of items) {
-    totalRequests += s.totalRequests;
-    successCount += Math.round((s.totalRequests * s.successRate) / 100);
-    totalCostNum += parseFiniteNumber(s.totalCost) ?? 0;
-    input += s.totalInputTokens;
-    output += s.totalOutputTokens;
-    cacheCreation += s.totalCacheCreationTokens;
-    cacheRead += s.totalCacheReadTokens;
-  }
-
-  const cacheableInput = input + cacheCreation + cacheRead;
-  return {
-    totalRequests,
-    totalCost: totalCostNum.toFixed(6),
-    totalInputTokens: input,
-    totalOutputTokens: output,
-    totalCacheCreationTokens: cacheCreation,
-    totalCacheReadTokens: cacheRead,
-    successRate: totalRequests > 0 ? (successCount / totalRequests) * 100 : 0,
-    realTotalTokens: input + output + cacheCreation + cacheRead,
-    cacheHitRate: cacheableInput > 0 ? cacheRead / cacheableInput : 0,
-  };
-}
-
-function pickSummary(
-  apps: UsageSummaryByApp[],
-  appType: string | undefined,
-): UsageSummary | undefined {
-  if (apps.length === 0) return undefined;
-  if (appType) {
-    return apps.find((a) => a.appType === appType)?.summary;
-  }
-  return aggregateSummaries(apps.map((a) => a.summary));
-}
-
-/**
- * Hero 标题图标：选中具体应用时显示该应用的品牌图标，"全部"时回退到通用闪电。
- * 复用 APP_ICON_MAP（与侧边栏 / 应用切换器同一套图标），用 cloneElement 放大到
- * 与原闪电一致的 20px；品牌图标自带配色，外层方块仍按 titleTheme 主题色着色。
- */
-function AppGlyph({
-  appType,
-  accentClass,
-}: {
-  appType?: string;
-  accentClass: string;
-}) {
-  if (appType && appType in APP_ICON_MAP) {
-    const base = APP_ICON_MAP[appType as AppId].icon;
-    if (isValidElement<{ size?: number }>(base)) {
-      return cloneElement(base, { size: 20 });
-    }
-  }
-  return <Zap className={cn("h-5 w-5", accentClass)} />;
-}
-
 export function UsageHero({
   range,
-  appType,
+  appType = "codex",
   providerName,
   model,
   refreshIntervalMs,
 }: UsageHeroProps) {
-  const { t, i18n } = useTranslation();
-  const lang = getResolvedLang(i18n);
+  const { t } = useTranslation();
 
-  const { data, isLoading } = useUsageSummaryByApp(
+  const { data: summary, isLoading } = useUsageSummary(
     range,
-    { providerName, model },
+    { appType, providerName, model },
     {
       refetchInterval: refreshIntervalMs > 0 ? refreshIntervalMs : false,
     },
   );
 
-  // No client-side filtering: Hero's totals must match the Trend/Logs/Stats
-  // below, which all go through the backend's full set of app_types. The
-  // KNOWN_APP_TYPES list only governs which filter buttons appear, not which
-  // rows participate in the "all" aggregate.
-  const allApps = data ?? [];
-  const summary = pickSummary(allApps, appType);
-
-  const titleTheme =
-    TITLE_THEMES[(appType ?? "all") as keyof typeof TITLE_THEMES] ??
-    TITLE_THEMES.all;
-  const appLabel =
-    appType && appType in TITLE_THEMES ? t(`usage.appFilter.${appType}`) : null;
-
-  const cacheWriteState = getCacheWriteAvailability(
-    appType ? [appType] : allApps.map((a) => a.appType),
-  );
+  const titleTheme = {
+    accent: "text-neutral-700 dark:text-neutral-300",
+    iconBg: "bg-neutral-500/10",
+  };
+  const appLabel = "Codex";
 
   const input = summary?.totalInputTokens ?? 0;
   const output = summary?.totalOutputTokens ?? 0;
-  const cacheWrite = summary?.totalCacheCreationTokens ?? 0;
   const cacheRead = summary?.totalCacheReadTokens ?? 0;
   const realTotal = summary?.realTotalTokens ?? 0;
   const hitRate = summary?.cacheHitRate ?? 0;
@@ -197,21 +56,9 @@ export function UsageHero({
   const requests = summary?.totalRequests ?? 0;
 
   const cacheWriteDisplay = {
-    value:
-      cacheWriteState === "na" ? "N/A" : formatTokensShort(cacheWrite, lang),
-    muted: cacheWriteState === "na",
-    tooltip:
-      cacheWriteState === "na"
-        ? t(
-            "usage.cacheWriteNotReported",
-            "OpenAI 协议不区分缓存写入，仅上报缓存命中",
-          )
-        : cacheWriteState === "partial"
-          ? t(
-              "usage.cacheWritePartial",
-              "部分协议（如 OpenAI）不上报缓存写入，数值可能偏低",
-            )
-          : undefined,
+    value: "N/A",
+    muted: true,
+    tooltip: t("usage.cacheWriteNotReported"),
   };
 
   if (isLoading) {
@@ -245,7 +92,7 @@ export function UsageHero({
                     titleTheme.iconBg,
                   )}
                 >
-                  <AppGlyph appType={appType} accentClass={titleTheme.accent} />
+                  <CodexIcon size={20} />
                 </div>
                 <div>
                   <div className="text-xs font-medium text-muted-foreground flex items-center gap-1.5 mb-0.5">
@@ -259,7 +106,7 @@ export function UsageHero({
                         <span className="text-muted-foreground/30">•</span>
                       </>
                     )}
-                    {t("usage.realTotal", "真实消耗 Tokens")}
+                    {t("usage.realTotal", "Tokens Processed")}
                   </div>
                   <div className="flex items-baseline gap-2">
                     <span
@@ -269,7 +116,7 @@ export function UsageHero({
                       {realTotal.toLocaleString()}
                     </span>
                     <span className="text-xs text-muted-foreground font-medium bg-muted/40 px-1.5 py-0.5 rounded-md">
-                      ≈ {formatTokensShort(realTotal, lang, 2)}
+                      ≈ {formatTokensShort(realTotal, 2)}
                     </span>
                   </div>
                 </div>
@@ -301,19 +148,19 @@ export function UsageHero({
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
               <MiniStat
                 icon={<ArrowDownToLine className="h-3.5 w-3.5" />}
-                label={t("usage.freshInput", "新增输入")}
-                value={formatTokensShort(input, lang)}
+                label={t("usage.freshInput", "Fresh Input")}
+                value={formatTokensShort(input)}
                 accent="text-blue-500"
               />
               <MiniStat
                 icon={<ArrowUpFromLine className="h-3.5 w-3.5" />}
                 label={t("usage.output")}
-                value={formatTokensShort(output, lang)}
+                value={formatTokensShort(output)}
                 accent="text-purple-500"
               />
               <MiniStat
                 icon={<Database className="h-3.5 w-3.5" />}
-                label={t("usage.cacheWrite", "缓存写入")}
+                label={t("usage.cacheWrite", "Creation")}
                 value={cacheWriteDisplay.value}
                 accent="text-amber-500"
                 muted={cacheWriteDisplay.muted}
@@ -321,15 +168,15 @@ export function UsageHero({
               />
               <MiniStat
                 icon={<Sparkles className="h-3.5 w-3.5" />}
-                label={t("usage.cacheRead", "缓存命中")}
-                value={formatTokensShort(cacheRead, lang)}
+                label={t("usage.cacheRead", "Hit")}
+                value={formatTokensShort(cacheRead)}
                 accent="text-emerald-500"
               />
 
               <div className="col-span-2 lg:col-span-1 flex flex-col justify-center rounded-xl border border-border/40 bg-background/40 p-3 shadow-sm">
                 <div className="flex items-center justify-between text-[11px] mb-2">
                   <span className="text-muted-foreground font-medium">
-                    {t("usage.cacheHitRate", "缓存命中率")}
+                    {t("usage.cacheHitRate", "Cache Hit Rate")}
                   </span>
                   <span className="font-bold text-emerald-500 tabular-nums">
                     {hitPercentLabel}%

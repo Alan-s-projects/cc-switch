@@ -4,7 +4,6 @@
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::ModelPricing;
 use crate::services::sql_helpers::{
     fresh_input_sql, INPUT_TOKEN_SEMANTICS_FRESH, INPUT_TOKEN_SEMANTICS_TOTAL,
 };
@@ -32,14 +31,6 @@ pub struct UsageSummary {
     /// cache_read / (input + cache_creation + cache_read). Range 0.0–1.0.
     /// Reported as a fraction; multiply by 100 in UI for percentage display.
     pub cache_hit_rate: f64,
-}
-
-/// Per-app-type usage summary used by the dashboard breakdown rail.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UsageSummaryByApp {
-    pub app_type: String,
-    pub summary: UsageSummary,
 }
 
 /// Helper: compute (real_total, hit_rate) from the four token counters.
@@ -203,22 +194,9 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
     })
 }
 
-/// SQL fragment: resolve provider_name with fallback for session-based entries.
-/// Session logs use placeholder provider_ids (e.g., `_session`, `_<app>_session`)
-/// that don't exist in the providers table — the CASE expression below is the
-/// authoritative mapping from placeholder to readable name.
+/// Keep historical proxy rows identifiable after their provider is removed.
 fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
-    format!(
-        "COALESCE({provider_alias}.name, CASE {log_alias}.provider_id \
-         WHEN '_session' THEN 'Claude (Session)' \
-         WHEN '_codex_session' THEN 'Codex (Session)' \
-         WHEN '_gemini_session' THEN 'Gemini (Session)' \
-         WHEN '_opencode_session' THEN 'OpenCode (Session)' \
-         WHEN '_grok_session' THEN 'Grok Build (Session)' \
-         WHEN '_mcode_session' THEN 'MiniMax Code (Session)' \
-         WHEN '_pi_session' THEN 'Pi (Session)' \
-         ELSE {log_alias}.provider_id END)"
-    )
+    format!("COALESCE({provider_alias}.name, {log_alias}.provider_id)")
 }
 
 /// SQL 片段：把指定别名的 `data_source` 包成 COALESCE，NULL 视作 'proxy'。
@@ -228,25 +206,6 @@ fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
 /// 都应通过此 helper 生成片段，避免遗漏。
 fn data_source_expr(log_alias: &str) -> String {
     format!("COALESCE({log_alias}.data_source, 'proxy')")
-}
-
-/// SQL 标量表达式：把 Claude Desktop 网关的 `claude-desktop` app_type 在“展示口径”
-/// 上折叠进 `claude`，其余 app_type 原样返回。
-///
-/// 背景：Desktop 网关流量在记账层按各自入口写为 `app_type='claude-desktop'`，
-/// 以保留路由接管的账单审计精度（不要回退这一点）。但 Dashboard 把它当作
-/// Claude Code 呈现——它本质就是跑在 Desktop 壳里的内嵌 Claude Code 运行时，
-/// 且 Desktop 聊天用量永远不经过本软件，单列只会让用户误以为是“桌面版全部用量”。
-///
-/// 用法：把任一参与“按应用筛选/分组”的 `app_type` 列包进此表达式即可，
-/// 这样 `= 'claude'` 过滤会同时命中 `claude-desktop`、`GROUP BY` 会把两者合并，
-/// 而不改动任何已存储的行（详情面板仍读原始 `app_type`）。
-///
-/// 注意：包裹后该列上的索引在此比较中失效，但这些都是已带时间过滤的聚合扫描，
-/// app_type 本就不是主访问路径，可接受。仅用于读侧；跨源去重使用更窄的
-/// [`dedup_app_type_match_sql`]，额度检查（`check_provider_limits`）仍保留原始精确比较。
-fn folded_app_type_sql(column: &str) -> String {
-    format!("CASE WHEN {column} = 'claude-desktop' THEN 'claude' ELSE {column} END")
 }
 
 /// SQL 片段：把日志/汇总行 LEFT JOIN 到 providers 表以取得供应商名称。
@@ -271,7 +230,7 @@ fn effective_model_sql(alias: &str) -> String {
 /// 把 Dashboard 顶部的 Provider/模型筛选追加到查询条件。
 ///
 /// Provider 按展示名精确匹配（复用 [`provider_name_coalesce`]，会话占位行的
-/// 可读名如 "Claude (Session)" 也能选中）；模型按 [`effective_model_sql`] 匹配。
+/// 可读名如 "_codex_session" 也能选中）；模型按 [`effective_model_sql`] 匹配。
 /// 注意：传入 `provider_name` 时调用方必须把 [`providers_join`] 拼进 FROM，
 /// 否则 `{provider_alias}.name` 无法解析。
 fn push_provider_model_filters(
@@ -298,13 +257,18 @@ fn push_provider_model_filters(
 pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
     // Imported conversation totals are not requests handled by Atlas. Keep the
     // historical rows on disk, but never mix them into proxy counts or cache rates.
-    format!("{} = 'proxy'", data_source_expr(log_alias))
+    format!(
+        "{log_alias}.app_type = 'codex' AND {} = 'proxy'",
+        data_source_expr(log_alias)
+    )
 }
 
 fn effective_usage_rollup_filter(alias: &str) -> String {
     // Legacy rollups predate a data_source column. Session importers used these
     // reserved provider IDs; real proxy rows retain their actual provider ID.
-    format!("{alias}.provider_id NOT IN ('_session', '_codex_session', '_gemini_session', '_opencode_session', '_grok_session', '_mcode_session', '_pi_session')")
+    format!(
+        "{alias}.app_type = 'codex' AND {alias}.provider_id NOT IN ('_session', '_codex_session')"
+    )
 }
 
 #[derive(Debug, Clone, Default)]
@@ -422,7 +386,7 @@ impl Database {
             params_vec.push(Box::new(end));
         }
         if let Some(at) = app_type {
-            conditions.push(format!("{} = ?", folded_app_type_sql("l.app_type")));
+            conditions.push("l.app_type = ?".to_string());
             params_vec.push(Box::new(at.to_string()));
         }
         push_provider_model_filters(
@@ -457,7 +421,7 @@ impl Database {
             &rollup_bounds,
         );
         if let Some(at) = app_type {
-            rollup_conditions.push(format!("{} = ?", folded_app_type_sql("r.app_type")));
+            rollup_conditions.push("r.app_type = ?".to_string());
             rollup_params.push(Box::new(at.to_string()));
         }
         push_provider_model_filters(
@@ -555,173 +519,6 @@ impl Database {
         Ok(result)
     }
 
-    /// 按 app_type 维度拆分的使用量汇总，用于 Dashboard 的分应用展示条。
-    /// 返回所有有数据的 app_type，按 real_total_tokens 降序。
-    ///
-    /// Single SQL with `GROUP BY app_type` — avoids the N+1 round-trip that
-    /// would result from invoking `get_usage_summary` once per app_type.
-    pub fn get_usage_summary_by_app(
-        &self,
-        start_date: Option<i64>,
-        end_date: Option<i64>,
-        provider_name: Option<&str>,
-        model: Option<&str>,
-    ) -> Result<Vec<UsageSummaryByApp>, AppError> {
-        let conn = lock_conn!(self.conn);
-
-        let mut detail_conditions = vec![effective_usage_log_filter("l")];
-        let mut detail_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        if let Some(start) = start_date {
-            detail_conditions.push("l.created_at >= ?".to_string());
-            detail_params.push(Box::new(start));
-        }
-        if let Some(end) = end_date {
-            detail_conditions.push("l.created_at <= ?".to_string());
-            detail_params.push(Box::new(end));
-        }
-        push_provider_model_filters(
-            &mut detail_conditions,
-            &mut detail_params,
-            "l",
-            "p",
-            provider_name,
-            model,
-        );
-        let detail_where = format!("WHERE {}", detail_conditions.join(" AND "));
-        let detail_join = if provider_name.is_some() {
-            providers_join("l", "p")
-        } else {
-            String::new()
-        };
-
-        let rollup_bounds = compute_rollup_date_bounds(start_date, end_date)?;
-        let mut rollup_conditions = vec![effective_usage_rollup_filter("r")];
-        let mut rollup_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        push_rollup_date_filters(
-            &mut rollup_conditions,
-            &mut rollup_params,
-            "r.date",
-            &rollup_bounds,
-        );
-        push_provider_model_filters(
-            &mut rollup_conditions,
-            &mut rollup_params,
-            "r",
-            "p2",
-            provider_name,
-            model,
-        );
-        let rollup_where = if rollup_conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", rollup_conditions.join(" AND "))
-        };
-        let rollup_join = if provider_name.is_some() {
-            providers_join("r", "p2")
-        } else {
-            String::new()
-        };
-
-        let fresh_input_detail = fresh_input_sql("l");
-        let fresh_input_rollup = fresh_input_sql("r");
-        // 折叠 claude-desktop → claude：内层投影成同一桶名，外层 GROUP BY 自然合并。
-        let detail_app_type = folded_app_type_sql("l.app_type");
-        let rollup_app_type = folded_app_type_sql("r.app_type");
-
-        let sql = format!(
-            "SELECT app_type,
-                SUM(req_count) as req_count,
-                SUM(cost) as cost,
-                SUM(input_t) as input_t,
-                SUM(output_t) as output_t,
-                SUM(cache_create_t) as cache_create_t,
-                SUM(cache_read_t) as cache_read_t,
-                SUM(success_count) as success_count
-            FROM (
-                SELECT {detail_app_type} as app_type,
-                    COUNT(*) as req_count,
-                    COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as cost,
-                    COALESCE(SUM({fresh_input_detail}), 0) as input_t,
-                    COALESCE(SUM(l.output_tokens), 0) as output_t,
-                    COALESCE(SUM(l.cache_creation_tokens), 0) as cache_create_t,
-                    COALESCE(SUM(l.cache_read_tokens), 0) as cache_read_t,
-                    COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count
-                FROM proxy_request_logs l {detail_join} {detail_where}
-                GROUP BY l.app_type
-                UNION ALL
-                SELECT {rollup_app_type} as app_type,
-                    COALESCE(SUM(r.request_count), 0),
-                    COALESCE(SUM(CAST(r.total_cost_usd AS REAL)), 0),
-                    COALESCE(SUM({fresh_input_rollup}), 0),
-                    COALESCE(SUM(r.output_tokens), 0),
-                    COALESCE(SUM(r.cache_creation_tokens), 0),
-                    COALESCE(SUM(r.cache_read_tokens), 0),
-                    COALESCE(SUM(r.success_count), 0)
-                FROM usage_daily_rollups r {rollup_join} {rollup_where}
-                GROUP BY r.app_type
-            )
-            GROUP BY app_type"
-        );
-
-        let mut combined: Vec<Box<dyn rusqlite::ToSql>> = detail_params;
-        combined.extend(rollup_params);
-        let refs: Vec<&dyn rusqlite::ToSql> = combined.iter().map(|p| p.as_ref()).collect();
-
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(refs.as_slice(), |row| {
-            let app_type: String = row.get(0)?;
-            let total_requests: i64 = row.get(1)?;
-            let total_cost: f64 = row.get(2)?;
-            let total_input_tokens: i64 = row.get(3)?;
-            let total_output_tokens: i64 = row.get(4)?;
-            let total_cache_creation_tokens: i64 = row.get(5)?;
-            let total_cache_read_tokens: i64 = row.get(6)?;
-            let success_count: i64 = row.get(7)?;
-
-            let success_rate = if total_requests > 0 {
-                (success_count as f32 / total_requests as f32) * 100.0
-            } else {
-                0.0
-            };
-            let (real_total_tokens, cache_hit_rate) = derive_real_total_and_hit_rate(
-                total_input_tokens as u64,
-                total_output_tokens as u64,
-                total_cache_creation_tokens as u64,
-                total_cache_read_tokens as u64,
-            );
-
-            Ok(UsageSummaryByApp {
-                app_type,
-                summary: UsageSummary {
-                    total_requests: total_requests as u64,
-                    total_cost: format!("{total_cost:.6}"),
-                    total_input_tokens: total_input_tokens as u64,
-                    total_output_tokens: total_output_tokens as u64,
-                    total_cache_creation_tokens: total_cache_creation_tokens as u64,
-                    total_cache_read_tokens: total_cache_read_tokens as u64,
-                    success_rate,
-                    real_total_tokens,
-                    cache_hit_rate,
-                },
-            })
-        })?;
-
-        let mut summaries = Vec::new();
-        for row in rows {
-            let item = row?;
-            if item.summary.total_requests == 0 && item.summary.real_total_tokens == 0 {
-                continue;
-            }
-            summaries.push(item);
-        }
-        summaries.sort_by(|a, b| {
-            b.summary
-                .real_total_tokens
-                .cmp(&a.summary.real_total_tokens)
-        });
-        Ok(summaries)
-    }
-
     /// 获取每日趋势（滑动窗口，<=24h 按小时，>24h 按天，窗口与汇总一致）
     pub fn get_daily_trends(
         &self,
@@ -756,7 +553,7 @@ impl Database {
             let mut extra_conditions: Vec<String> = Vec::new();
             let mut extra_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
             if let Some(at) = app_type {
-                extra_conditions.push(format!("{} = ?", folded_app_type_sql("l.app_type")));
+                extra_conditions.push("l.app_type = ?".to_string());
                 extra_params.push(Box::new(at.to_string()));
             }
             push_provider_model_filters(
@@ -869,7 +666,7 @@ impl Database {
         let mut extra_conditions: Vec<String> = Vec::new();
         let mut extra_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(at) = app_type {
-            extra_conditions.push(format!("{} = ?", folded_app_type_sql("l.app_type")));
+            extra_conditions.push("l.app_type = ?".to_string());
             extra_params.push(Box::new(at.to_string()));
         }
         push_provider_model_filters(
@@ -952,7 +749,7 @@ impl Database {
             &rollup_bounds,
         );
         if let Some(at) = app_type {
-            rollup_conditions.push(format!("{} = ?", folded_app_type_sql("r.app_type")));
+            rollup_conditions.push("r.app_type = ?".to_string());
             rollup_params.push(Box::new(at.to_string()));
         }
         push_provider_model_filters(
@@ -1084,7 +881,7 @@ impl Database {
             detail_params.push(Box::new(end));
         }
         if let Some(at) = app_type {
-            detail_conditions.push(format!("{} = ?", folded_app_type_sql("l.app_type")));
+            detail_conditions.push("l.app_type = ?".to_string());
             detail_params.push(Box::new(at.to_string()));
         }
         push_provider_model_filters(
@@ -1111,7 +908,7 @@ impl Database {
             &rollup_bounds,
         );
         if let Some(at) = app_type {
-            rollup_conditions.push(format!("{} = ?", folded_app_type_sql("r.app_type")));
+            rollup_conditions.push("r.app_type = ?".to_string());
             rollup_params.push(Box::new(at.to_string()));
         }
         push_provider_model_filters(
@@ -1228,7 +1025,7 @@ impl Database {
             detail_params.push(Box::new(end));
         }
         if let Some(at) = app_type {
-            detail_conditions.push(format!("{} = ?", folded_app_type_sql("l.app_type")));
+            detail_conditions.push("l.app_type = ?".to_string());
             detail_params.push(Box::new(at.to_string()));
         }
         push_provider_model_filters(
@@ -1260,7 +1057,7 @@ impl Database {
             &rollup_bounds,
         );
         if let Some(at) = app_type {
-            rollup_conditions.push(format!("{} = ?", folded_app_type_sql("r.app_type")));
+            rollup_conditions.push("r.app_type = ?".to_string());
             rollup_params.push(Box::new(at.to_string()));
         }
         push_provider_model_filters(
@@ -1366,13 +1163,11 @@ impl Database {
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         if let Some(ref app_type) = filters.app_type {
-            // 仅过滤口径折叠 claude-desktop→claude；行投影仍返回原始 app_type，
-            // 详情面板据此展示真实入口（路由接管账单审计需要）。
-            conditions.push(format!("{} = ?", folded_app_type_sql("l.app_type")));
+            conditions.push("l.app_type = ?".to_string());
             params.push(Box::new(app_type.clone()));
         }
         // 与 Dashboard 顶部下拉筛选同口径：Provider 按展示名精确匹配（会话占位
-        // 行如 "Claude (Session)" 也能命中），模型按有效计价模型匹配。
+        // 行如 "_codex_session" 也能命中），模型按有效计价模型匹配。
         push_provider_model_filters(
             &mut conditions,
             &mut params,
@@ -1452,141 +1247,6 @@ impl Database {
             page_size,
         })
     }
-
-    /// 获取单个请求详情
-    pub fn get_request_detail(
-        &self,
-        request_id: &str,
-    ) -> Result<Option<RequestLogDetail>, AppError> {
-        let conn = lock_conn!(self.conn);
-
-        let detail_pname = provider_name_coalesce("l", "p");
-        let detail_sql = format!(
-            "SELECT l.request_id, l.provider_id, {detail_pname} as provider_name, l.app_type, l.model,
-                    l.request_model, l.cost_multiplier,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
-                    is_streaming, latency_ms, first_token_ms, duration_ms,
-                    status_code, error_message, created_at, l.data_source, l.pricing_model,
-                    l.input_token_semantics
-             FROM proxy_request_logs l
-             LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
-             WHERE l.request_id = ?"
-        );
-        let result = conn.query_row(&detail_sql, [request_id], row_to_request_log_detail);
-
-        match result {
-            Ok(mut detail) => {
-                let mut pricing_cache = HashMap::new();
-                Self::maybe_backfill_log_costs(&conn, &mut detail, &mut pricing_cache)?;
-                Ok(Some(detail))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(AppError::Database(e.to_string())),
-        }
-    }
-
-    /// 检查 Provider 使用限额
-    pub fn check_provider_limits(
-        &self,
-        provider_id: &str,
-        app_type: &str,
-    ) -> Result<ProviderLimitStatus, AppError> {
-        let conn = lock_conn!(self.conn);
-
-        // 获取 provider 的限额设置
-        let (limit_daily, limit_monthly) = conn
-            .query_row(
-                "SELECT meta FROM providers WHERE id = ? AND app_type = ?",
-                params![provider_id, app_type],
-                |row| {
-                    let meta_str: String = row.get(0)?;
-                    Ok(meta_str)
-                },
-            )
-            .ok()
-            .and_then(|meta_str| serde_json::from_str::<serde_json::Value>(&meta_str).ok())
-            .map(|meta| {
-                let daily = meta
-                    .get("limitDailyUsd")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse::<f64>().ok());
-                let monthly = meta
-                    .get("limitMonthlyUsd")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse::<f64>().ok());
-                (daily, monthly)
-            })
-            .unwrap_or((None, None));
-
-        // 计算今日使用量 (detail logs + rollup)
-        let daily_usage: f64 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(cost), 0) FROM (
-                    SELECT CAST(total_cost_usd AS REAL) as cost
-                    FROM proxy_request_logs
-                    WHERE provider_id = ? AND app_type = ?
-                      AND date(datetime(created_at, 'unixepoch', 'localtime')) = date('now', 'localtime')
-                    UNION ALL
-                    SELECT CAST(total_cost_usd AS REAL)
-                    FROM usage_daily_rollups
-                    WHERE provider_id = ? AND app_type = ?
-                      AND date = date('now', 'localtime')
-                )",
-                params![provider_id, app_type, provider_id, app_type],
-                |row| row.get(0),
-            )
-            .unwrap_or(0.0);
-
-        // 计算本月使用量 (detail logs + rollup)
-        let monthly_usage: f64 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(cost), 0) FROM (
-                    SELECT CAST(total_cost_usd AS REAL) as cost
-                    FROM proxy_request_logs
-                    WHERE provider_id = ? AND app_type = ?
-                      AND strftime('%Y-%m', datetime(created_at, 'unixepoch', 'localtime')) = strftime('%Y-%m', 'now', 'localtime')
-                    UNION ALL
-                    SELECT CAST(total_cost_usd AS REAL)
-                    FROM usage_daily_rollups
-                    WHERE provider_id = ? AND app_type = ?
-                      AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now', 'localtime')
-                )",
-                params![provider_id, app_type, provider_id, app_type],
-                |row| row.get(0),
-            )
-            .unwrap_or(0.0);
-
-        let daily_exceeded = limit_daily
-            .map(|limit| daily_usage >= limit)
-            .unwrap_or(false);
-        let monthly_exceeded = limit_monthly
-            .map(|limit| monthly_usage >= limit)
-            .unwrap_or(false);
-
-        Ok(ProviderLimitStatus {
-            provider_id: provider_id.to_string(),
-            daily_usage: format!("{daily_usage:.6}"),
-            daily_limit: limit_daily.map(|l| format!("{l:.2}")),
-            daily_exceeded,
-            monthly_usage: format!("{monthly_usage:.6}"),
-            monthly_limit: limit_monthly.map(|l| format!("{l:.2}")),
-            monthly_exceeded,
-        })
-    }
-}
-
-/// Provider 限额状态
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderLimitStatus {
-    pub provider_id: String,
-    pub daily_usage: String,
-    pub daily_limit: Option<String>,
-    pub daily_exceeded: bool,
-    pub monthly_usage: String,
-    pub monthly_limit: Option<String>,
-    pub monthly_exceeded: bool,
 }
 
 #[derive(Clone)]
@@ -1626,7 +1286,8 @@ impl Database {
                         first_token_ms, duration_ms, status_code, error_message, created_at,
                         data_source, pricing_model, input_token_semantics
              FROM proxy_request_logs
-             WHERE CAST(total_cost_usd AS REAL) <= 0
+             WHERE app_type = 'codex' AND COALESCE(data_source, 'proxy') = 'proxy'
+               AND CAST(total_cost_usd AS REAL) <= 0
                AND (input_tokens > 0 OR output_tokens > 0
                     OR cache_read_tokens > 0 OR cache_creation_tokens > 0)";
 
@@ -1636,10 +1297,8 @@ impl Database {
             rows.collect::<Result<Vec<_>, _>>()?
         };
 
-        // 精准回填的行筛选必须与查价层共用 candidates 归一化：SQL 精确匹配会漏掉
-        // 以原始别名落库的行（如 openrouter/anthropic/claude-sonnet-4.5:free），
-        // 这些行查价时能归一化命中新定价，却在筛选层被挡掉，导致导入定价后
-        // 历史成本要等下次全量回填才更新。误纳无害——查不到价的行会被跳过。
+        // Use the same GPT date/reasoning aliases as price lookup when deciding
+        // which missing costs a single model-price update can fill.
         if let Some(model_id) = only_model_id {
             let target = model_pricing_candidates(model_id);
             logs.retain(|log| log_pricing_scope_matches(log, &target));
@@ -1704,23 +1363,18 @@ impl Database {
 
         let million = rust_decimal::Decimal::from(1_000_000u64);
 
-        // 与 CostCalculator::calculate_for_app 保持一致的计算逻辑：
-        // 1. 历史 cache-inclusive 行只包含 cache read；新 total 行还包含 cache write。
-        // 2. Claude/Anthropic 的 input_tokens 已经是 fresh input，不能再次扣减
-        // 3. 各项成本是基础成本（不含倍率），倍率只作用于最终总价
-        let cache_inclusive_app =
-            crate::services::sql_helpers::is_cache_inclusive_app(log.app_type.as_str());
-        let billable_input_tokens =
-            if !cache_inclusive_app || log.input_token_semantics == INPUT_TOKEN_SEMANTICS_FRESH {
-                log.input_tokens as u64
-            } else if log.input_token_semantics == INPUT_TOKEN_SEMANTICS_TOTAL {
-                (log.input_tokens as u64)
-                    .saturating_sub(log.cache_read_tokens as u64)
-                    .saturating_sub(log.cache_creation_tokens as u64)
-            } else {
-                // v12 and earlier: input included cache reads but excluded cache writes.
-                (log.input_tokens as u64).saturating_sub(log.cache_read_tokens as u64)
-            };
+        // Explicit fresh-input rows need no deduction. Legacy Codex totals
+        // include cache reads; current totals also include cache creation.
+        let billable_input_tokens = if log.input_token_semantics == INPUT_TOKEN_SEMANTICS_FRESH {
+            log.input_tokens as u64
+        } else if log.input_token_semantics == INPUT_TOKEN_SEMANTICS_TOTAL {
+            (log.input_tokens as u64)
+                .saturating_sub(log.cache_read_tokens as u64)
+                .saturating_sub(log.cache_creation_tokens as u64)
+        } else {
+            // v12 and earlier: input included cache reads but excluded cache writes.
+            (log.input_tokens as u64).saturating_sub(log.cache_read_tokens as u64)
+        };
         let input_cost =
             rust_decimal::Decimal::from(billable_input_tokens) * pricing.input / million;
         let output_cost =
@@ -1816,7 +1470,7 @@ impl Database {
 
         // 仅当 model 列是占位符（解析失败留下的 ""/"unknown" 等）时才回退到
         // request_model 定价。model 是真实模型名但缺定价时必须保持 0 成本等待
-        // 补价：路由接管下 request_model 是客户端别名（如 claude-sonnet-4-6），
+        // 补价：路由接管下 request_model 是客户端别名（如 gpt-6-astra），
         // 按别名回填会把真实上游模型的 tokens 按错误价格永久固化（行一旦有成本
         // 就不再进入回填范围）。
         if !is_placeholder_pricing_model(&log.model) {
@@ -1834,15 +1488,6 @@ impl Database {
     }
 }
 
-pub(crate) fn find_model_pricing(conn: &Connection, model_id: &str) -> Option<ModelPricing> {
-    find_model_pricing_row(conn, model_id)
-        .ok()
-        .flatten()
-        .and_then(|(input, output, cache_read, cache_creation)| {
-            ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation).ok()
-        })
-}
-
 pub(crate) fn find_model_pricing_row(
     conn: &Connection,
     model_id: &str,
@@ -1858,20 +1503,10 @@ pub(crate) fn find_model_pricing_row(
         }
     }
 
-    for candidate in &candidates {
-        if should_try_pricing_prefix_match(candidate) {
-            if let Some(row) = query_model_pricing_prefix(conn, candidate)? {
-                return Ok(Some(row));
-            }
-        }
-    }
-
     Ok(None)
 }
 
-/// 精准回填的行筛选：log 的任一模型字段归一化后与目标模型的 candidates 相交，
-/// 或可按查价层的前缀规则命中目标，即视为相关。镜像 find_model_pricing_row 的
-/// 匹配语义，宁可误纳（后续查价会兜底）不可漏筛。
+/// Match the same canonical GPT aliases used by exact price lookup.
 fn log_pricing_scope_matches(log: &RequestLogDetail, target_candidates: &[String]) -> bool {
     [
         Some(log.model.as_str()),
@@ -1881,15 +1516,9 @@ fn log_pricing_scope_matches(log: &RequestLogDetail, target_candidates: &[String
     .into_iter()
     .flatten()
     .any(|field| {
-        model_pricing_candidates(field).iter().any(|candidate| {
-            target_candidates.iter().any(|target| {
-                target == candidate
-                    || (should_try_pricing_prefix_match(candidate)
-                        && target
-                            .strip_prefix(candidate.as_str())
-                            .is_some_and(|rest| rest.starts_with('-')))
-            })
-        })
+        model_pricing_candidates(field)
+            .iter()
+            .any(|candidate| target_candidates.iter().any(|target| target == candidate))
     })
 }
 
@@ -1921,35 +1550,9 @@ fn query_model_pricing_exact(
     .map_err(|e| AppError::Database(format!("查询模型定价失败: {e}")))
 }
 
-fn query_model_pricing_prefix(
-    conn: &Connection,
-    model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
-    let pattern = format!("{model_id}-%");
-    conn.query_row(
-        "SELECT input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
-         FROM model_pricing
-         WHERE model_id LIKE ?1
-         ORDER BY LENGTH(model_id) ASC
-         LIMIT 1",
-        [pattern],
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        },
-    )
-    .optional()
-    .map_err(|e| AppError::Database(format!("查询模型前缀定价失败: {e}")))
-}
-
 fn model_pricing_candidates(model_id: &str) -> Vec<String> {
     let cleaned = clean_model_id_for_pricing(model_id);
-    if is_placeholder_pricing_model(&cleaned) {
+    if !cleaned.starts_with("gpt-") {
         return Vec::new();
     }
 
@@ -1961,23 +1564,11 @@ fn model_pricing_candidates(model_id: &str) -> Vec<String> {
             continue;
         }
 
-        if let Some(stripped) = strip_known_model_namespace(&candidate) {
-            queue.push(stripped);
-        }
-        if let Some(stripped) = strip_claude_desktop_non_anthropic_prefix(&candidate) {
-            queue.push(stripped);
-        }
-        if let Some(stripped) = strip_bedrock_model_version_suffix(&candidate) {
-            queue.push(stripped);
-        }
         if let Some(stripped) = strip_model_date_suffix(&candidate) {
             queue.push(stripped);
         }
         if let Some(stripped) = strip_reasoning_effort_suffix(&candidate) {
             queue.push(stripped);
-        }
-        if candidate.starts_with("claude-") && candidate.contains('.') {
-            queue.push(candidate.replace('.', "-"));
         }
     }
 
@@ -1985,19 +1576,10 @@ fn model_pricing_candidates(model_id: &str) -> Vec<String> {
 }
 
 fn clean_model_id_for_pricing(model_id: &str) -> String {
-    let normalized = model_id
-        .rsplit_once('/')
-        .map_or(model_id, |(_, r)| r)
-        .split(':')
-        .next()
-        .unwrap_or(model_id)
-        .trim()
-        .replace('@', "-")
-        .to_ascii_lowercase();
-
+    let normalized = model_id.trim().to_ascii_lowercase().replace('@', "-");
     normalized
-        .trim_end_matches(crate::claude_desktop_config::ONE_M_CONTEXT_MARKER)
-        .trim()
+        .strip_prefix("openai/")
+        .unwrap_or(&normalized)
         .to_string()
 }
 
@@ -2007,83 +1589,6 @@ fn push_unique_candidate(candidates: &mut Vec<String>, candidate: String) -> boo
     }
     candidates.push(candidate);
     true
-}
-
-fn strip_known_model_namespace(model_id: &str) -> Option<String> {
-    if let Some(pos) = model_id.rfind("claude-") {
-        if pos > 0 {
-            return Some(model_id[pos..].to_string());
-        }
-    }
-
-    for marker in [
-        "openai.",
-        "anthropic.",
-        "google.",
-        "moonshot.",
-        "moonshotai.",
-        "bedrock.",
-        "global.",
-    ] {
-        if let Some(stripped) = model_id.strip_prefix(marker) {
-            return Some(stripped.to_string());
-        }
-    }
-
-    None
-}
-
-fn strip_claude_desktop_non_anthropic_prefix(model_id: &str) -> Option<String> {
-    const NON_ANTHROPIC_MARKERS: &[&str] = &[
-        "abab",
-        "ark-code",
-        "arctic",
-        "astron",
-        "codex",
-        "command-r",
-        "deepseek",
-        "doubao",
-        "ernie",
-        "gemini",
-        "gemma",
-        "glm",
-        "gpt",
-        "grok",
-        "hermes",
-        "hy3",
-        "hunyuan",
-        "jamba",
-        "kimi",
-        "lfm",
-        "llama",
-        "longcat",
-        "mercury",
-        "mimo",
-        "minimax",
-        "mistral",
-        "mixtral",
-        "moonshot",
-        "nemotron",
-        "nova-",
-        "openai",
-        "qianfan",
-        "qwen",
-        "seed-",
-        "solar",
-        "stepfun",
-    ];
-
-    let rest = model_id.strip_prefix("claude-")?;
-    NON_ANTHROPIC_MARKERS
-        .iter()
-        .any(|marker| rest.starts_with(marker))
-        .then(|| rest.to_string())
-}
-
-fn strip_bedrock_model_version_suffix(model_id: &str) -> Option<String> {
-    let (base, suffix) = model_id.rsplit_once("-v")?;
-    (!base.is_empty() && !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
-        .then(|| base.to_string())
 }
 
 fn strip_model_date_suffix(model_id: &str) -> Option<String> {
@@ -2106,25 +1611,17 @@ fn strip_model_date_suffix(model_id: &str) -> Option<String> {
     if base.is_empty() || !suffix.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    // 8 位 YYYYMMDD（如 -20250615；OpenAI / Claude / 通义千问等）。
+    // OpenAI date aliases also use YYYYMMDD.
     if suffix.len() == 8 {
         return Some(base.to_string());
-    }
-    // 6 位 YYMMDD（如 -260628；火山方舟 doubao-seed-*、部分国产厂商）。
-    // 6 位比 8 位更易误伤非日期尾巴（如 -123456 的版本号），故额外校验
-    // 月 01-12、日 01-31 才剥离；剥不动时退回 None 由上层精确匹配兜底。
-    if suffix.len() == 6 {
-        let month: u32 = suffix[2..4].parse().unwrap_or(0);
-        let day: u32 = suffix[4..6].parse().unwrap_or(0);
-        if (1..=12).contains(&month) && (1..=31).contains(&day) {
-            return Some(base.to_string());
-        }
     }
     None
 }
 
 fn strip_reasoning_effort_suffix(model_id: &str) -> Option<String> {
-    for suffix in ["-minimal", "-low", "-medium", "-high", "-xhigh"] {
+    for suffix in [
+        "-none", "-minimal", "-low", "-medium", "-high", "-xhigh", "-max", "-ultra",
+    ] {
         if let Some(stripped) = model_id.strip_suffix(suffix) {
             if !stripped.is_empty() {
                 return Some(stripped.to_string());
@@ -2132,36 +1629,6 @@ fn strip_reasoning_effort_suffix(model_id: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn should_try_pricing_prefix_match(model_id: &str) -> bool {
-    let dash_count = model_id.matches('-').count();
-
-    if model_id.starts_with("claude-") {
-        return dash_count >= 3;
-    }
-
-    if ["o1", "o3", "o4", "o5"]
-        .iter()
-        .any(|prefix| model_id.starts_with(prefix))
-    {
-        return dash_count >= 1;
-    }
-
-    const PREFIX_MATCH_FAMILIES: &[&str] = &[
-        "gpt-",
-        "gemini-",
-        "deepseek-",
-        "qwen-",
-        "glm-",
-        "kimi-",
-        "minimax-",
-    ];
-
-    PREFIX_MATCH_FAMILIES
-        .iter()
-        .any(|prefix| model_id.starts_with(prefix))
-        && dash_count >= 2
 }
 
 #[cfg(test)]
@@ -2313,82 +1780,6 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_desktop_folds_into_claude_for_display() -> Result<(), AppError> {
-        let db = Database::memory()?;
-        let ts = local_ts(2026, 6, 10, 12, 0, 0);
-
-        {
-            let conn = lock_conn!(db.conn);
-            // 一条 Claude Code 行 + 一条 Claude Desktop 网关行，同一时间窗。
-            insert_usage_log(
-                &conn,
-                "cc-1",
-                "claude",
-                "p-claude",
-                "claude-sonnet-4-5",
-                "proxy",
-                ts,
-                100,
-                10,
-                0,
-                0,
-                200,
-                "0.5",
-            )?;
-            insert_usage_log(
-                &conn,
-                "cd-1",
-                "claude-desktop",
-                "p-desktop",
-                "claude-opus-4-8",
-                "proxy",
-                ts,
-                200,
-                20,
-                0,
-                0,
-                200,
-                "1.5",
-            )?;
-        }
-
-        // ① 分应用汇总：desktop 折叠进 claude，不再单列 claude-desktop 桶。
-        let by_app = db.get_usage_summary_by_app(None, None, None, None)?;
-        assert_eq!(by_app.len(), 1, "应只剩一个合并后的 claude 桶");
-        assert_eq!(by_app[0].app_type, "claude");
-        assert_eq!(by_app[0].summary.total_requests, 2, "两条行都计入 claude");
-        assert!(
-            !by_app.iter().any(|a| a.app_type == "claude-desktop"),
-            "不应再出现 claude-desktop 桶"
-        );
-
-        // ② 选中 claude 过滤：汇总应同时覆盖 desktop 行。
-        let claude_summary = db.get_usage_summary(None, None, Some("claude"), None, None)?;
-        assert_eq!(claude_summary.total_requests, 2);
-
-        // ③ 请求日志按 claude 过滤返回两行，且 desktop 行投影仍是原始 app_type。
-        let logs = db.get_request_logs(
-            &LogFilters {
-                app_type: Some("claude".to_string()),
-                ..Default::default()
-            },
-            0, // 页码从 0 开始
-            50,
-        )?;
-        assert_eq!(logs.total, 2, "claude 过滤含 desktop 行");
-        assert!(
-            logs.data.iter().any(|r| r.app_type == "claude-desktop"),
-            "详情面板需要看到真实入口，行投影不可被折叠"
-        );
-
-        // ④ 折叠不外溢：codex 过滤为空。
-        let codex_summary = db.get_usage_summary(None, None, Some("codex"), None, None)?;
-        assert_eq!(codex_summary.total_requests, 0);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_backfill_missing_usage_costs_uses_new_gpt_5_5_pricing() -> Result<(), AppError> {
         let db = Database::memory()?;
 
@@ -2398,9 +1789,9 @@ mod tests {
                 &conn,
                 "codex-gpt-5-5-zero-cost",
                 "codex",
-                "_codex_session",
+                "copilot",
                 "gpt-5.5",
-                "codex_session",
+                "proxy",
                 1000,
                 1_000_000,
                 1_000_000,
@@ -2428,15 +1819,9 @@ mod tests {
     }
 
     #[test]
-    fn test_backfill_new_anthropic_openai_pricing_after_upgrade() -> Result<(), AppError> {
+    fn test_backfill_gpt_pricing_after_upgrade() -> Result<(), AppError> {
         let db = Database::memory()?;
         let cases = [
-            (
-                "anthropic/claude-opus-5.5",
-                "claude",
-                1_000_000,
-                ["4.000000", "20.000000", "0.200000", "5.000000", "29.200000"],
-            ),
             (
                 "OpenAI/GPT-6-SOL@HIGH",
                 "codex",
@@ -2487,7 +1872,7 @@ mod tests {
             // Simulate an existing database with unpriced usage before the update.
             conn.execute(
                 "DELETE FROM model_pricing WHERE model_id IN
-                 ('claude-opus-5-5', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-cyber',
+                 ('gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-cyber',
                   'gpt-5.5-pro', 'gpt-4o-mini')",
                 [],
             )?;
@@ -2572,15 +1957,34 @@ mod tests {
                  WHERE request_id = 'total-cache-semantics'",
                 [INPUT_TOKEN_SEMANTICS_TOTAL],
             )?;
+            insert_usage_log(
+                &conn,
+                "fresh-cache-semantics",
+                "codex",
+                "p1",
+                "gpt-5.5",
+                "proxy",
+                1002,
+                200_000,
+                0,
+                600_000,
+                200_000,
+                200,
+                "0",
+            )?;
+            conn.execute(
+                "UPDATE proxy_request_logs SET input_token_semantics = ?1 WHERE request_id = 'fresh-cache-semantics'",
+                [INPUT_TOKEN_SEMANTICS_FRESH],
+            )?;
         }
 
-        assert_eq!(db.backfill_missing_usage_costs()?, 2);
+        assert_eq!(db.backfill_missing_usage_costs()?, 3);
 
         let conn = lock_conn!(db.conn);
         let mut stmt = conn.prepare(
             "SELECT request_id, input_cost_usd
              FROM proxy_request_logs
-             WHERE request_id IN ('legacy-cache-semantics', 'total-cache-semantics')
+             WHERE request_id IN ('fresh-cache-semantics', 'legacy-cache-semantics', 'total-cache-semantics')
              ORDER BY request_id",
         )?;
         let rows = stmt
@@ -2591,58 +1995,12 @@ mod tests {
         assert_eq!(
             rows,
             vec![
+                ("fresh-cache-semantics".to_string(), "1.000000".to_string()),
                 ("legacy-cache-semantics".to_string(), "1.000000".to_string()),
                 ("total-cache-semantics".to_string(), "1.000000".to_string()),
             ]
         );
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_backfill_deducts_cache_read_for_grokbuild_total_rows() -> Result<(), AppError> {
-        // 回归：回填侧的 cache-inclusive 判定曾硬编码 codex|gemini 漏掉
-        // grokbuild，导致 TOTAL 行按全量 input 计价、cache_read 双算。
-        // 判定收敛到 sql_helpers::is_cache_inclusive_app 后按 450 fresh 计价。
-        let db = Database::memory()?;
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "grokbuild-total-backfill",
-                "grokbuild",
-                "_grok_session",
-                "grok-4.5",
-                "grok_session",
-                1000,
-                700,
-                100,
-                250,
-                0,
-                200,
-                "0",
-            )?;
-            conn.execute(
-                "UPDATE proxy_request_logs
-                 SET input_token_semantics = ?1
-                 WHERE request_id = 'grokbuild-total-backfill'",
-                [INPUT_TOKEN_SEMANTICS_TOTAL],
-            )?;
-        }
-
-        assert_eq!(db.backfill_missing_usage_costs()?, 1);
-
-        let conn = lock_conn!(db.conn);
-        let (input_cost, cache_read_cost, total_cost): (String, String, String) = conn.query_row(
-            "SELECT input_cost_usd, cache_read_cost_usd, total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'grokbuild-total-backfill'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        // grok-4.5 定价 2/6/0.30：input = (700-250)×2/1M，cache_read = 250×0.3/1M
-        assert_eq!(input_cost, "0.000900");
-        assert_eq!(cache_read_cost, "0.000075");
-        assert_eq!(total_cost, "0.001575");
         Ok(())
     }
 
@@ -2656,9 +2014,9 @@ mod tests {
                 &conn,
                 "codex-gpt-5-5-multiplier",
                 "codex",
-                "_codex_session",
+                "copilot",
                 "gpt-5.5",
-                "codex_session",
+                "proxy",
                 1000,
                 1_000_000,
                 0,
@@ -2703,10 +2061,10 @@ mod tests {
                     input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
                     total_cost_usd, latency_ms, status_code, created_at, data_source
                 ) VALUES (
-                    'codex-request-model-fallback', '_codex_session', 'codex', 'unknown', 'gpt-5.5',
+                    'codex-request-model-fallback', 'copilot', 'codex', 'unknown', 'gpt-5.5',
                     1000000, 0, 0, 0,
                     '0', '0', '0', '0',
-                    '0', 100, 200, 1000, 'codex_session'
+                    '0', 100, 200, 1000, 'proxy'
                 )",
                 [],
             )?;
@@ -2742,8 +2100,8 @@ mod tests {
                     input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
                     total_cost_usd, latency_ms, status_code, created_at, data_source
                 ) VALUES (
-                    'takeover-unpriced-model', 'provider-1', 'claude',
-                    'takeover-real-model-unpriced', 'claude-sonnet-4-6',
+                    'takeover-unpriced-model', 'provider-1', 'codex',
+                    'gpt-unpriced-upstream', 'gpt-6-astra',
                     1000000, 0, 0, 0,
                     '0', '0', '0', '0',
                     '0', 100, 200, 1000, 'proxy'
@@ -2752,7 +2110,7 @@ mod tests {
             )?;
         }
 
-        // request_model（claude-sonnet-4-6）有定价，但 model 是真实模型名：不得回退
+        // request_model（gpt-6-astra）有定价，但 model 是真实模型名：不得回退
         assert_eq!(db.backfill_missing_usage_costs()?, 0);
 
         {
@@ -2768,7 +2126,7 @@ mod tests {
             // 补上真实模型定价后，回填必须按真实模型价格修复（0 成本行未被污染固化）
             conn.execute(
                 "INSERT INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million)
-                 VALUES ('takeover-real-model-unpriced', 'Takeover Real Model', '0.6', '2.5')",
+                 VALUES ('gpt-unpriced-upstream', 'GPT Unpriced Upstream', '0.6', '2.5')",
                 [],
             )?;
         }
@@ -2793,8 +2151,8 @@ mod tests {
 
         {
             let conn = lock_conn!(db.conn);
-            // request 计价模式 + 接管：写入时锚定出站模型 kimi-k2-novel（当时缺价），
-            // 但上游回显了别名 → model/request_model 都是 claude-sonnet-4-6（有定价）。
+            // request 计价模式 + 接管：写入时锚定出站模型 gpt-future（当时缺价），
+            // 但上游回显了别名 → model/request_model 都是 gpt-6-astra（有定价）。
             // 回填必须按落库的 pricing_model 重算，不得换用 model 列的别名价格。
             conn.execute(
                 "INSERT INTO proxy_request_logs (
@@ -2803,8 +2161,8 @@ mod tests {
                     input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
                     total_cost_usd, latency_ms, status_code, created_at, data_source
                 ) VALUES (
-                    'persisted-pricing-model', 'provider-1', 'claude',
-                    'claude-sonnet-4-6', 'claude-sonnet-4-6', 'kimi-k2-novel',
+                    'persisted-pricing-model', 'provider-1', 'codex',
+                    'gpt-6-astra', 'gpt-6-astra', 'gpt-future',
                     1000000, 0, 0, 0,
                     '0', '0', '0', '0',
                     '0', 100, 200, 1000, 'proxy'
@@ -2813,23 +2171,20 @@ mod tests {
             )?;
         }
 
-        // pricing_model（kimi-k2-novel）缺价：不得回退到 model 列的别名价格
+        // pricing_model（gpt-future）缺价：不得回退到 model 列的别名价格
         assert_eq!(db.backfill_missing_usage_costs()?, 0);
 
         {
             let conn = lock_conn!(db.conn);
             conn.execute(
                 "INSERT INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million)
-                 VALUES ('kimi-k2-novel', 'Kimi K2 Novel', '0.6', '2.5')",
+                 VALUES ('gpt-future', 'GPT Future', '0.6', '2.5')",
                 [],
             )?;
         }
 
-        // 按 pricing_model 也能定位到该行（model/request_model 都不是 kimi-k2-novel）
-        assert_eq!(
-            db.backfill_missing_usage_costs_for_model("kimi-k2-novel")?,
-            1
-        );
+        // 按 pricing_model 也能定位到该行（model/request_model 都不是 gpt-future）
+        assert_eq!(db.backfill_missing_usage_costs_for_model("gpt-future")?, 1);
 
         let conn = lock_conn!(db.conn);
         let total_cost: String = conn.query_row(
@@ -2853,10 +2208,10 @@ mod tests {
             // 精准回填的筛选必须归一化后匹配，否则这类行要等全量回填才更新。
             insert_usage_log(
                 &conn,
-                "openrouter-alias-zero-cost",
-                "claude",
+                "gpt-alias-zero-cost",
+                "codex",
                 "provider-1",
-                "openrouter/moonshot/kimi-k2-novel:free",
+                "OpenAI/GPT-FUTURE-2026-09-25@HIGH",
                 "proxy",
                 1000,
                 1_000_000,
@@ -2875,64 +2230,22 @@ mod tests {
             let conn = lock_conn!(db.conn);
             conn.execute(
                 "INSERT INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million)
-                 VALUES ('kimi-k2-novel', 'Kimi K2 Novel', '0.6', '2.5')",
+                 VALUES ('gpt-future', 'GPT Future', '0.6', '2.5')",
                 [],
             )?;
         }
 
         // 按归一化 ID 精准回填，应命中以原始别名落库的行
-        assert_eq!(
-            db.backfill_missing_usage_costs_for_model("kimi-k2-novel")?,
-            1
-        );
+        assert_eq!(db.backfill_missing_usage_costs_for_model("gpt-future")?, 1);
 
         let conn = lock_conn!(db.conn);
         let total_cost: String = conn.query_row(
             "SELECT total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'openrouter-alias-zero-cost'",
+             FROM proxy_request_logs WHERE request_id = 'gpt-alias-zero-cost'",
             [],
             |row| row.get(0),
         )?;
         assert_eq!(total_cost, "0.600000");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_backfill_missing_usage_costs_keeps_claude_fresh_input() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "claude-cache-fresh-input",
-                "claude",
-                "_session",
-                "claude-haiku-4-5",
-                "session_log",
-                1000,
-                100,
-                0,
-                200,
-                0,
-                200,
-                "0",
-            )?;
-        }
-
-        assert_eq!(db.backfill_missing_usage_costs()?, 1);
-
-        let conn = lock_conn!(db.conn);
-        let (input_cost, cache_read_cost, total_cost): (String, String, String) = conn.query_row(
-            "SELECT input_cost_usd, cache_read_cost_usd, total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'claude-cache-fresh-input'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        assert_eq!(input_cost, "0.000100");
-        assert_eq!(cache_read_cost, "0.000020");
-        assert_eq!(total_cost, "0.000120");
 
         Ok(())
     }
@@ -2950,7 +2263,18 @@ mod tests {
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params!["req1", "p1", "claude", "claude-3", 100, 50, "0.01", 100, 200, 1000],
+                params![
+                    "req1",
+                    "p1",
+                    "codex",
+                    "gpt-6-astra",
+                    100,
+                    50,
+                    "0.01",
+                    100,
+                    200,
+                    1000
+                ],
             )?;
             conn.execute(
                 "INSERT INTO proxy_request_logs (
@@ -2958,7 +2282,18 @@ mod tests {
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params!["req2", "p1", "claude", "claude-3", 200, 100, "0.02", 150, 200, 2000],
+                params![
+                    "req2",
+                    "p1",
+                    "codex",
+                    "gpt-6-astra",
+                    200,
+                    100,
+                    "0.02",
+                    150,
+                    200,
+                    2000
+                ],
             )?;
         }
 
@@ -2985,9 +2320,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-01-01",
-                    "claude",
+                    "codex",
                     "p1",
-                    "claude-3",
+                    "gpt-6-astra",
                     10,
                     10,
                     1000,
@@ -3006,9 +2341,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-01-02",
-                    "claude",
+                    "codex",
                     "p1",
-                    "claude-3",
+                    "gpt-6-astra",
                     20,
                     19,
                     2000,
@@ -3027,9 +2362,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-01-03",
-                    "claude",
+                    "codex",
                     "p1",
-                    "claude-3",
+                    "gpt-6-astra",
                     30,
                     29,
                     3000,
@@ -3042,7 +2377,7 @@ mod tests {
             )?;
         }
 
-        let summary = db.get_usage_summary(Some(start), Some(end), Some("claude"), None, None)?;
+        let summary = db.get_usage_summary(Some(start), Some(end), Some("codex"), None, None)?;
         assert_eq!(summary.total_requests, 20);
         assert_eq!(summary.total_input_tokens, 2000);
         assert_eq!(summary.total_output_tokens, 1000);
@@ -3059,17 +2394,17 @@ mod tests {
             let conn = lock_conn!(db.conn);
             conn.execute(
                 "INSERT INTO providers (id, app_type, name, settings_config) VALUES
-                 ('prov-a', 'claude', 'Packy', '{}'),
-                 ('prov-b', 'claude', 'DeepSeek', '{}')",
+                 ('prov-a', 'codex', 'Current Copilot', '{}'),
+                 ('prov-b', 'codex', 'Previous Copilot', '{}')",
                 [],
             )?;
 
             insert_usage_log(
                 &conn,
                 "a-1",
-                "claude",
+                "codex",
                 "prov-a",
-                "claude-sonnet-4-6",
+                "gpt-6-astra",
                 "proxy",
                 detail_ts,
                 100,
@@ -3082,9 +2417,9 @@ mod tests {
             insert_usage_log(
                 &conn,
                 "b-1",
-                "claude",
+                "codex",
                 "prov-b",
-                "deepseek-v3",
+                "gpt-6-luna",
                 "proxy",
                 detail_ts,
                 200,
@@ -3098,9 +2433,9 @@ mod tests {
             insert_usage_log(
                 &conn,
                 "s-1",
-                "claude",
+                "codex",
                 "_session",
-                "claude-sonnet-4-6",
+                "gpt-6-astra",
                 "session_log",
                 detail_ts,
                 999,
@@ -3114,7 +2449,7 @@ mod tests {
             insert_usage_log(
                 &conn,
                 "a-2",
-                "claude",
+                "codex",
                 "prov-a",
                 "alias-model",
                 "proxy",
@@ -3138,19 +2473,19 @@ mod tests {
                     request_count, success_count, input_tokens, output_tokens,
                     cache_read_tokens, cache_creation_tokens, total_cost_usd, avg_latency_ms
                 ) VALUES
-                ('2026-06-08', 'claude', 'prov-a', 'claude-sonnet-4-6', 5, 5, 500, 50, 0, 0, '5.0', 100),
-                ('2026-06-08', 'claude', 'prov-b', 'deepseek-v3', 7, 7, 700, 70, 0, 0, '7.0', 100)",
+                ('2026-06-08', 'codex', 'prov-a', 'gpt-6-astra', 5, 5, 500, 50, 0, 0, '5.0', 100),
+                ('2026-06-08', 'codex', 'prov-b', 'gpt-6-luna', 7, 7, 700, 70, 0, 0, '7.0', 100)",
                 [],
             )?;
         }
 
         // ① 汇总按 Provider 展示名过滤：明细 + rollup 都命中。
-        let packy = db.get_usage_summary(None, None, None, Some("Packy"), None)?;
+        let packy = db.get_usage_summary(None, None, None, Some("Current Copilot"), None)?;
         assert_eq!(packy.total_requests, 7, "a-1 + a-2 + rollup 5");
 
         // ② 汇总按模型过滤（有效计价模型口径）。
-        let deepseek = db.get_usage_summary(None, None, None, None, Some("deepseek-v3"))?;
-        assert_eq!(deepseek.total_requests, 8, "b-1 + rollup 7");
+        let previous = db.get_usage_summary(None, None, None, None, Some("gpt-6-luna"))?;
+        assert_eq!(previous.total_requests, 8, "b-1 + rollup 7");
 
         // ③ pricing_model 优先于 model：alias-model 查不到，real-model 查得到。
         let by_alias = db.get_usage_summary(None, None, None, None, Some("alias-model"))?;
@@ -3159,32 +2494,32 @@ mod tests {
         assert_eq!(by_real.total_requests, 1);
 
         // Imported sessions remain stored, but cannot inflate Atlas traffic.
-        let session = db.get_usage_summary(None, None, None, Some("Claude (Session)"), None)?;
+        let session = db.get_usage_summary(None, None, None, Some("_codex_session"), None)?;
         assert_eq!(session.total_requests, 0);
 
-        // ⑤ Provider 统计 + 模型过滤：只剩 DeepSeek 一行。
-        let provider_stats = db.get_provider_stats(None, None, None, None, Some("deepseek-v3"))?;
+        // ⑤ Provider 统计 + 模型过滤：只剩 Previous Copilot 一行。
+        let provider_stats = db.get_provider_stats(None, None, None, None, Some("gpt-6-luna"))?;
         assert_eq!(provider_stats.len(), 1);
-        assert_eq!(provider_stats[0].provider_name, "DeepSeek");
+        assert_eq!(provider_stats[0].provider_name, "Previous Copilot");
         assert_eq!(provider_stats[0].request_count, 8);
 
-        // ⑥ 模型统计 + Provider 过滤：只剩 Packy 名下的模型。
-        let model_stats = db.get_model_stats(None, None, None, Some("Packy"), None)?;
+        // ⑥ 模型统计 + Provider 过滤：只剩 Current Copilot 名下的模型。
+        let model_stats = db.get_model_stats(None, None, None, Some("Current Copilot"), None)?;
         let models: Vec<&str> = model_stats.iter().map(|m| m.model.as_str()).collect();
-        assert!(models.contains(&"claude-sonnet-4-6"));
+        assert!(models.contains(&"gpt-6-astra"));
         assert!(models.contains(&"real-model"));
-        assert!(!models.contains(&"deepseek-v3"));
-
-        // ⑦ 分应用汇总（Hero 卡片数据源）同样受过滤影响。
-        let by_app = db.get_usage_summary_by_app(None, None, Some("Packy"), None)?;
-        assert_eq!(by_app.len(), 1);
-        assert_eq!(by_app[0].app_type, "claude");
-        assert_eq!(by_app[0].summary.total_requests, 7);
+        assert!(!models.contains(&"gpt-6-luna"));
 
         // ⑧ 趋势（>24h 走天分桶 + rollup 分支）。
         let t_start = local_ts(2026, 6, 8, 0, 0, 0);
         let t_end = local_ts(2026, 6, 10, 23, 59, 0);
-        let trends = db.get_daily_trends(Some(t_start), Some(t_end), None, Some("Packy"), None)?;
+        let trends = db.get_daily_trends(
+            Some(t_start),
+            Some(t_end),
+            None,
+            Some("Current Copilot"),
+            None,
+        )?;
         let total_req: u64 = trends.iter().map(|d| d.request_count).sum();
         assert_eq!(total_req, 7, "明细 2 + rollup 5");
 
@@ -3196,8 +2531,8 @@ mod tests {
             Some(h_start),
             Some(h_end),
             None,
-            Some("Packy"),
-            Some("claude-sonnet-4-6"),
+            Some("Current Copilot"),
+            Some("gpt-6-astra"),
         )?;
         let hourly_req: u64 = hourly.iter().map(|d| d.request_count).sum();
         assert_eq!(hourly_req, 1, "仅 a-1 命中（a-2 计价模型不同）");
@@ -3205,7 +2540,7 @@ mod tests {
         // ⑩ 请求日志列表与下拉同口径：精确名 + 有效计价模型。
         let logs = db.get_request_logs(
             &LogFilters {
-                provider_name: Some("Packy".to_string()),
+                provider_name: Some("Current Copilot".to_string()),
                 model: Some("real-model".to_string()),
                 ..Default::default()
             },
@@ -3235,9 +2570,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-01-01",
-                    "claude",
+                    "codex",
                     "p1",
-                    "claude-3",
+                    "gpt-6-astra",
                     10,
                     10,
                     1000,
@@ -3256,9 +2591,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-01-02",
-                    "claude",
+                    "codex",
                     "p1",
-                    "claude-3",
+                    "gpt-6-astra",
                     20,
                     19,
                     2000,
@@ -3271,7 +2606,7 @@ mod tests {
             )?;
         }
 
-        let summary = db.get_usage_summary(Some(start), Some(end), Some("claude"), None, None)?;
+        let summary = db.get_usage_summary(Some(start), Some(end), Some("codex"), None, None)?;
         assert_eq!(summary.total_requests, 30);
         assert_eq!(summary.total_input_tokens, 3000);
         assert_eq!(summary.total_output_tokens, 1500);
@@ -3295,8 +2630,8 @@ mod tests {
                 params![
                     "req1",
                     "p1",
-                    "claude",
-                    "claude-3-sonnet",
+                    "codex",
+                    "gpt-6-astra",
                     100,
                     50,
                     "0.01",
@@ -3309,7 +2644,7 @@ mod tests {
 
         let stats = db.get_model_stats(None, None, None, None, None)?;
         assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].model, "claude-3-sonnet");
+        assert_eq!(stats[0].model, "gpt-6-astra");
         assert_eq!(stats[0].request_count, 1);
 
         Ok(())
@@ -3327,7 +2662,18 @@ mod tests {
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params!["old", "p1", "claude", "claude-3", 100, 50, "0.01", 100, 200, 1000],
+                params![
+                    "old",
+                    "p1",
+                    "codex",
+                    "gpt-6-astra",
+                    100,
+                    50,
+                    "0.01",
+                    100,
+                    200,
+                    1000
+                ],
             )?;
             conn.execute(
                 "INSERT INTO proxy_request_logs (
@@ -3335,11 +2681,22 @@ mod tests {
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params!["new", "p1", "claude", "claude-3", 200, 75, "0.02", 120, 200, 2000],
+                params![
+                    "new",
+                    "p1",
+                    "codex",
+                    "gpt-6-astra",
+                    200,
+                    75,
+                    "0.02",
+                    120,
+                    200,
+                    2000
+                ],
             )?;
         }
 
-        let stats = db.get_provider_stats(Some(1500), Some(2500), Some("claude"), None, None)?;
+        let stats = db.get_provider_stats(Some(1500), Some(2500), Some("codex"), None, None)?;
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].provider_id, "p1");
         assert_eq!(stats[0].request_count, 1);
@@ -3364,9 +2721,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-02-01",
-                    "claude",
+                    "codex",
                     "p-rollup",
-                    "claude-3",
+                    "gpt-6-astra",
                     5,
                     5,
                     500,
@@ -3385,9 +2742,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-02-02",
-                    "claude",
+                    "codex",
                     "p-rollup",
-                    "claude-3",
+                    "gpt-6-astra",
                     8,
                     7,
                     800,
@@ -3406,9 +2763,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-02-03",
-                    "claude",
+                    "codex",
                     "p-rollup",
-                    "claude-3",
+                    "gpt-6-astra",
                     12,
                     11,
                     1200,
@@ -3421,7 +2778,7 @@ mod tests {
             )?;
         }
 
-        let stats = db.get_provider_stats(Some(start), Some(end), Some("claude"), None, None)?;
+        let stats = db.get_provider_stats(Some(start), Some(end), Some("codex"), None, None)?;
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].provider_id, "p-rollup");
         assert_eq!(stats[0].request_count, 8);
@@ -3445,8 +2802,8 @@ mod tests {
                 params![
                     "req-short",
                     "p1",
-                    "claude",
-                    "claude-3",
+                    "codex",
+                    "gpt-6-astra",
                     100,
                     50,
                     "0.01",
@@ -3457,7 +2814,7 @@ mod tests {
             )?;
         }
 
-        let stats = db.get_daily_trends(Some(0), Some(15 * 60 * 60), Some("claude"), None, None)?;
+        let stats = db.get_daily_trends(Some(0), Some(15 * 60 * 60), Some("codex"), None, None)?;
         assert_eq!(stats.len(), 15);
         assert_eq!(stats[3].request_count, 1);
 
@@ -3482,8 +2839,8 @@ mod tests {
                 params![
                     "day-1-detail",
                     "p1",
-                    "claude",
-                    "claude-3",
+                    "codex",
+                    "gpt-6-astra",
                     100,
                     50,
                     "0.01",
@@ -3501,8 +2858,8 @@ mod tests {
                 params![
                     "day-3-detail",
                     "p1",
-                    "claude",
-                    "claude-3",
+                    "codex",
+                    "gpt-6-astra",
                     200,
                     75,
                     "0.02",
@@ -3519,9 +2876,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-03-02",
-                    "claude",
+                    "codex",
                     "p1",
-                    "claude-3",
+                    "gpt-6-astra",
                     4,
                     4,
                     400,
@@ -3534,7 +2891,7 @@ mod tests {
             )?;
         }
 
-        let stats = db.get_daily_trends(Some(start), Some(end), Some("claude"), None, None)?;
+        let stats = db.get_daily_trends(Some(start), Some(end), Some("codex"), None, None)?;
         assert_eq!(stats.len(), 3);
         assert_eq!(stats[0].request_count, 1);
         assert_eq!(stats[0].total_tokens, 150);
@@ -3562,9 +2919,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-04-01",
-                    "claude",
+                    "codex",
                     "p1",
-                    "claude-3-haiku",
+                    "gpt-6-luna",
                     6,
                     6,
                     600,
@@ -3583,9 +2940,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-04-02",
-                    "claude",
+                    "codex",
                     "p1",
-                    "claude-3-haiku",
+                    "gpt-6-luna",
                     9,
                     8,
                     900,
@@ -3604,9 +2961,9 @@ mod tests {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "2024-04-03",
-                    "claude",
+                    "codex",
                     "p1",
-                    "claude-3-haiku",
+                    "gpt-6-luna",
                     12,
                     11,
                     1200,
@@ -3619,9 +2976,9 @@ mod tests {
             )?;
         }
 
-        let stats = db.get_model_stats(Some(start), Some(end), Some("claude"), None, None)?;
+        let stats = db.get_model_stats(Some(start), Some(end), Some("codex"), None, None)?;
         assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].model, "claude-3-haiku");
+        assert_eq!(stats[0].model, "gpt-6-luna");
         assert_eq!(stats[0].request_count, 9);
         assert_eq!(stats[0].total_tokens, 1350);
 
@@ -3635,55 +2992,6 @@ mod tests {
             Some("模型")
         );
         assert_eq!(strip_model_date_suffix("abc🚀12345678"), None);
-    }
-
-    #[test]
-    fn test_strip_model_date_suffix_handles_six_digit_yymmdd() {
-        // 火山方舟 6 位 YYMMDD 后缀应被剥离（doubao 全系都用这种格式）。
-        assert_eq!(
-            strip_model_date_suffix("doubao-seed-2-1-pro-260628").as_deref(),
-            Some("doubao-seed-2-1-pro")
-        );
-        assert_eq!(
-            strip_model_date_suffix("doubao-seed-1-6-250615").as_deref(),
-            Some("doubao-seed-1-6")
-        );
-        // 8 位 YYYYMMDD 仍照旧剥离。
-        assert_eq!(
-            strip_model_date_suffix("claude-3-5-sonnet-20241022").as_deref(),
-            Some("claude-3-5-sonnet")
-        );
-        // 月/日非法的 6 位尾巴（版本号等）不剥离，避免误伤。
-        assert_eq!(strip_model_date_suffix("foo-bar-123456"), None); // 月=34
-        assert_eq!(strip_model_date_suffix("widget-209900"), None); // 月=99
-        assert_eq!(strip_model_date_suffix("gizmo-251200"), None); // 日=00
-    }
-
-    #[test]
-    fn test_pricing_resolves_volcengine_dated_model_to_bare_seed_row() -> Result<(), AppError> {
-        // 回归：火山真实用量带 6 位日期后缀（doubao-seed-2-1-pro-260628），
-        // 必须能归一化命中定价表里的裸名 seed 行（doubao-seed-2-1-pro），否则成本显示 $0。
-        let db = Database::memory()?;
-        let conn = lock_conn!(db.conn);
-
-        conn.execute(
-            "INSERT OR REPLACE INTO model_pricing (
-                model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
-            ) VALUES ('doubao-seed-2-1-pro', 'Doubao Seed 2.1 Pro', '0.84', '4.2', '0.17', '0')",
-            [],
-        )?;
-
-        let row = find_model_pricing_row(&conn, "doubao-seed-2-1-pro-260628")?;
-        assert!(
-            row.is_some(),
-            "带日期的火山模型应通过 6 位日期剥离命中裸名定价行"
-        );
-        let (input, output, ..) = row.unwrap();
-        assert_eq!(input, "0.84");
-        assert_eq!(output, "4.2");
-
-        Ok(())
     }
 
     #[test]
@@ -3712,119 +3020,66 @@ mod tests {
     }
 
     #[test]
-    fn test_model_pricing_matching() -> Result<(), AppError> {
+    fn gpt_pricing_matches_dates_and_reasoning_without_vendor_fallbacks() -> Result<(), AppError> {
         let db = Database::memory()?;
         let conn = lock_conn!(db.conn);
+        for (alias, model) in [
+            ("gpt-5.2-codex@low", "gpt-5.2-codex-low"),
+            ("OpenAI/GPT-5.5@HIGH", "gpt-5.5-high"),
+            ("OpenAI/GPT-5.5-2026-05-14", "gpt-5.5"),
+            ("gpt-4o-mini-20240718", "gpt-4o-mini"),
+            ("gpt-6-astra@ultra", "gpt-6-astra"),
+            ("gpt-6-luna@max", "gpt-6-luna"),
+        ] {
+            assert_eq!(
+                find_model_pricing_row(&conn, alias)?,
+                find_model_pricing_row(&conn, model)?,
+                "{alias}"
+            );
+            assert!(find_model_pricing_row(&conn, alias)?.is_some(), "{alias}");
+        }
+        assert!(find_model_pricing_row(&conn, "retired-vendor/gpt-6-astra")?.is_none());
+        assert!(find_model_pricing_row(&conn, "unknown")?.is_none());
+        Ok(())
+    }
 
-        // 准备额外定价数据，覆盖前缀/后缀清洗场景
-        conn.execute(
-            "INSERT OR REPLACE INTO model_pricing (
-                model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
-            ) VALUES (?, ?, ?, ?, ?, ?)",
-            params![
-                "claude-haiku-4.5",
-                "Claude Haiku 4.5",
-                "1.0",
-                "2.0",
-                "0.0",
-                "0.0"
-            ],
-        )?;
-
-        // 测试精确匹配（seed_model_pricing 已预置 claude-sonnet-4-5-20250929）
-        let result = find_model_pricing_row(&conn, "claude-sonnet-4-5-20250929")?;
-        assert!(
-            result.is_some(),
-            "应该能精确匹配 claude-sonnet-4-5-20250929"
-        );
-
-        // 清洗：去除前缀和冒号后缀
-        let result = find_model_pricing_row(&conn, "anthropic/claude-haiku-4.5")?;
-        assert!(
-            result.is_some(),
-            "带前缀的模型 anthropic/claude-haiku-4.5 应能匹配到 claude-haiku-4.5"
-        );
-        let result = find_model_pricing_row(&conn, "moonshotai/kimi-k2-0905:exa")?;
-        assert!(
-            result.is_some(),
-            "带前缀+冒号后缀的模型应清洗后匹配到 kimi-k2-0905"
-        );
-
-        // 清洗：@ 替换为 -（seed_model_pricing 已预置 gpt-5.2-codex-low）
-        let result = find_model_pricing_row(&conn, "gpt-5.2-codex@low")?;
-        assert!(
-            result.is_some(),
-            "带 @ 分隔符的模型 gpt-5.2-codex@low 应能匹配到 gpt-5.2-codex-low"
-        );
-        let result = find_model_pricing_row(&conn, "OpenAI/GPT-5.5@HIGH")?;
-        assert!(
-            result.is_some(),
-            "大小写混合的 GPT-5.5 模型应能归一化匹配到 gpt-5.5-high"
-        );
-        let result = find_model_pricing_row(&conn, "OpenAI/GPT-5.5-2026-05-14")?;
-        assert!(
-            result.is_some(),
-            "OpenAI 日期后缀模型应能回退到 gpt-5.5 基础定价"
-        );
-        let result = find_model_pricing_row(&conn, "google/gemini-3-pro-preview-20260514")?;
-        assert!(
-            result.is_some(),
-            "Gemini 日期后缀模型应能回退到 gemini-3-pro-preview 基础定价"
-        );
-
-        // Claude Desktop route 短 ID：应通过前缀匹配到带日期的定价
-        let result = find_model_pricing_row(&conn, "claude-haiku-4-5")?;
-        assert!(
-            result.is_some(),
-            "Claude Desktop 短路由 claude-haiku-4-5 应能匹配到 claude-haiku-4-5-20251001"
-        );
-        let result = find_model_pricing_row(&conn, "anthropic/claude-opus-4.8")?;
-        assert!(
-            result.is_some(),
-            "聚合商点号格式 anthropic/claude-opus-4.8 应能匹配到 claude-opus-4-8"
-        );
-
-        // Claude Desktop 旧版/异常包装的非 Anthropic route：claude-gpt-5.5 → gpt-5.5
-        let result = find_model_pricing_row(&conn, "claude-gpt-5.5")?;
-        assert!(
-            result.is_some(),
-            "带 claude- 包装的非 Anthropic 模型应能剥离后匹配到真实模型定价"
-        );
-
-        // Bedrock/Vertex 常见形态：provider 前缀 + -vN 后缀 + :0 修饰
-        let result =
-            find_model_pricing_row(&conn, "global.anthropic.claude-haiku-4-5-20251001-v1:0")?;
-        assert!(
-            result.is_some(),
-            "Bedrock/Vertex 风格 Claude 模型 ID 应能归一化到基础 Claude 模型定价"
-        );
-        let result = find_model_pricing_row(&conn, "global.anthropic.claude-opus-4-8-v1:0")?;
-        assert!(
-            result.is_some(),
-            "Bedrock 风格 Claude Opus 4.8 模型 ID 应能归一化到基础 Claude 模型定价"
-        );
-        let result = find_model_pricing_row(&conn, "claude-opus-4-8@20260527")?;
-        assert!(
-            result.is_some(),
-            "Vertex 风格 Claude Opus 4.8 模型 ID 应能归一化到基础 Claude 模型定价"
-        );
-
-        // Reasoning effort 后缀：没有专门价格时回退到基础模型
-        let result = find_model_pricing_row(&conn, "gpt-5.4@low")?;
-        assert!(
-            result.is_some(),
-            "缺少专门 effort 价格时应回退到 gpt-5.4 基础模型定价"
-        );
-
-        // Kimi Code 是订阅/额度模型，不应伪装成公开按 token 计费模型
-        let result = find_model_pricing_row(&conn, "kimi-for-coding")?;
-        assert!(result.is_none(), "kimi-for-coding 没有固定 token 单价");
-
-        // 测试不存在的模型
-        let result = find_model_pricing_row(&conn, "unknown-model-123")?;
-        assert!(result.is_none(), "不应该匹配不存在的模型");
-
+    #[test]
+    fn backfill_preserves_recorded_costs_and_never_reprices_imported_sessions(
+    ) -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            for (id, source, cost) in [
+                ("missing", "proxy", "0"),
+                ("recorded", "proxy", "12.345678"),
+                ("imported", "codex_session", "0"),
+            ] {
+                insert_usage_log(
+                    &conn, id, "codex", "copilot", "gpt-5", source, 1000, 1_000_000, 0, 0, 0, 200,
+                    cost,
+                )?;
+            }
+            conn.execute(
+                "UPDATE model_pricing SET input_cost_per_million = '99' WHERE model_id = 'gpt-5'",
+                [],
+            )?;
+        }
+        assert_eq!(db.backfill_missing_usage_costs()?, 1);
+        let conn = lock_conn!(db.conn);
+        for (id, expected) in [
+            ("missing", "99.000000"),
+            ("recorded", "12.345678"),
+            ("imported", "0"),
+        ] {
+            assert_eq!(
+                conn.query_row(
+                    "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id = ?1",
+                    [id],
+                    |row| row.get::<_, String>(0)
+                )?,
+                expected
+            );
+        }
         Ok(())
     }
 }

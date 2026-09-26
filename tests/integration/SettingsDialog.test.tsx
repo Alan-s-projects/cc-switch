@@ -108,7 +108,7 @@ vi.mock("@/components/settings/ImportExportSection", () => ({
 }));
 
 vi.mock("@/components/settings/AboutSection", () => ({
-  AboutSection: ({ isPortable }: any) => <div>about:{String(isPortable)}</div>,
+  AboutSection: () => <div>about</div>,
 }));
 
 const renderDialog = (
@@ -146,7 +146,9 @@ describe("SettingsPage integration", () => {
     const appInput = await screen.findByPlaceholderText(
       "settings.browsePlaceholderApp",
     );
-    expect((appInput as HTMLInputElement).value).toBe("/home/mock/.cc-switch");
+    expect((appInput as HTMLInputElement).value).toBe(
+      "/home/mock/.copilot-bridge-atlas",
+    );
   });
 
   it("imports configuration and triggers success callback", async () => {
@@ -217,15 +219,17 @@ describe("SettingsPage integration", () => {
     const appInput = (await screen.findByPlaceholderText(
       "settings.browsePlaceholderApp",
     )) as HTMLInputElement;
-    expect(appInput.value).toBe("/home/mock/.cc-switch");
+    expect(appInput.value).toBe("/home/mock/.copilot-bridge-atlas");
 
     fireEvent.click(browseButton);
     await waitFor(() =>
-      expect(appInput.value).toBe("/home/mock/.cc-switch/picked"),
+      expect(appInput.value).toBe("/home/mock/.copilot-bridge-atlas/picked"),
     );
 
     fireEvent.click(resetButton);
-    await waitFor(() => expect(appInput.value).toBe("/home/mock/.cc-switch"));
+    await waitFor(() =>
+      expect(appInput.value).toBe("/home/mock/.copilot-bridge-atlas"),
+    );
   });
 
   it("notifies when export fails", async () => {
@@ -247,7 +251,7 @@ describe("SettingsPage integration", () => {
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
     const cancelMessage = toastErrorMock.mock.calls.at(-1)?.[0] as string;
     expect(cancelMessage).toMatch(
-      /settings\.selectFileFailed|请选择.*保存路径/,
+      /settings\.selectSavePath|Choose where to save/,
     );
 
     toastErrorMock.mockClear();

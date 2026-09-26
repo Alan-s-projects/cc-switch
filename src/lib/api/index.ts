@@ -5,12 +5,7 @@ export { settingsApi, backupsApi } from "./settings";
 export { usageApi } from "./usage";
 export { proxyApi } from "./proxy";
 export * as authApi from "./auth";
-export * as copilotApi from "./copilot";
-export type {
-  CopilotDeviceCodeResponse,
-  CopilotAuthStatus,
-  GitHubAccount,
-} from "./copilot";
+export type { GitHubAccount } from "./copilot";
 export type {
   ManagedAuthProvider,
   ManagedAuthAccount,

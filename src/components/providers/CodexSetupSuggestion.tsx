@@ -16,7 +16,7 @@ import {
 import { copyText } from "@/lib/clipboard";
 import { ConfigDiff, type ConfigDiffLine } from "./ConfigDiff";
 
-const PREVIEW_PATH_KEY = "cc-switch-codex-preview-path";
+const PREVIEW_PATH_KEY = "copilot-bridge-atlas-codex-preview-path";
 const normalizePath = (path: string) => path.trim().replace(/^"(.*)"$/, "$1");
 const DEFAULT_RECOMMENDATIONS = {
   context1m: false,

@@ -1,12 +1,3 @@
-// 使用统计相关类型定义
-
-export interface TokenUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-}
-
 export interface RequestLog {
   requestId: string;
   providerId: string;
@@ -80,11 +71,6 @@ export interface UsageSummary {
   cacheHitRate: number;
 }
 
-export interface UsageSummaryByApp {
-  appType: string;
-  summary: UsageSummary;
-}
-
 export interface DailyStats {
   date: string;
   requestCount: number;
@@ -126,8 +112,7 @@ export interface LogFilters {
 /**
  * Dashboard 顶栏的全局筛选维度，作用于 Hero / 趋势图 / 三个统计 Tab。
  *
- * - `providerName` 按展示名精确匹配（与 Provider 统计列表同口径，含
- *   "Claude (Session)" 等会话占位名）；
+ * - `providerName` matches the recorded provider name.
  * - `model` 按「有效计价模型」匹配（pricing_model 优先、回落 model，
  *   与模型统计的分组口径一致）。
  */
@@ -135,16 +120,6 @@ export interface UsageScopeFilters {
   appType?: string;
   providerName?: string;
   model?: string;
-}
-
-export interface ProviderLimitStatus {
-  providerId: string;
-  dailyUsage: string;
-  dailyLimit?: string;
-  dailyExceeded: boolean;
-  monthlyUsage: string;
-  monthlyLimit?: string;
-  monthlyExceeded: boolean;
 }
 
 export type UsageRangePreset = "today" | "1d" | "7d" | "14d" | "30d" | "custom";
@@ -158,85 +133,6 @@ export interface UsageRangeSelection {
   liveEndTime?: boolean;
 }
 
-/**
- * App types surfaced as dashboard filter buttons.
- *
- * `claude-desktop` is intentionally NOT listed: the Desktop gateway's proxy
- * traffic is still recorded under its own `app_type` (preserving route-takeover
- * billing audit — the request detail panel shows the real value), but the
- * dashboard folds it into `claude` for display. It is the embedded Claude Code
- * runtime running inside the Desktop shell, and Desktop *chat* usage never
- * passes through this app at all, so a separate "Claude Desktop" bucket would
- * only ever show a partial number and mislead users into reading it as the
- * Desktop's full usage. The backend collapses `claude-desktop → claude` in
- * every dashboard query (see `folded_app_type_sql`).
- * `opencode` and `pi` have no proxy handler; their usage reaches this
- * dashboard through session importers. `openclaw` / `hermes` appear only as
- * managed apps elsewhere.
- */
-export type AppType =
-  | "claude"
-  | "codex"
-  | "gemini"
-  | "grokbuild"
-  | "opencode"
-  | "pi"
-  | "mcode";
-
-export type AppTypeFilter = "all" | AppType;
-
-export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-  "opencode",
-  "pi",
-  "mcode",
-];
-
-/**
- * App types whose proxy uses an OpenAI-style protocol. Two consequences:
- *
- * 1. `inputTokens` already includes the cached portion (must subtract
- *    `cacheReadTokens` to get fresh-input semantics — see
- *    [getFreshInputTokens]).
- * 2. The protocol does not report cache _creation_ separately, only cache
- *    _reads_. So `cacheCreationTokens` is always 0 for these app types and
- *    the UI should label it as N/A rather than 0.
- *
- * Mirror of the Rust `CACHE_INCLUSIVE_APP_TYPES` whitelist.
- */
-export const CACHE_INCLUSIVE_APP_TYPES: ReadonlySet<string> = new Set([
-  "codex",
-  "gemini",
-  "grokbuild",
-]);
-
-// Pi sessions can mix Anthropic and OpenAI APIs, but the dashboard aggregates
-// only by app type. Treat cache-write coverage as partial without changing
-// Pi's fresh-input token semantics.
-const PARTIAL_CACHE_WRITE_APP_TYPES: ReadonlySet<string> = new Set([
-  "pi",
-  "mcode",
-]);
-
-export type CacheWriteAvailability = "ok" | "partial" | "na";
-
-export function getCacheWriteAvailability(
-  appTypes: readonly string[],
-): CacheWriteAvailability {
-  if (appTypes.length === 0) return "ok";
-  const unavailable = appTypes.filter((appType) =>
-    CACHE_INCLUSIVE_APP_TYPES.has(appType),
-  ).length;
-  if (unavailable === appTypes.length) return "na";
-  const partial = appTypes.some((appType) =>
-    PARTIAL_CACHE_WRITE_APP_TYPES.has(appType),
-  );
-  return unavailable === 0 && !partial ? "ok" : "partial";
-}
-
 /** Subset of request-log fields needed to derive cache-normalized input. */
 export interface CacheNormalizableLog {
   appType: string;
@@ -245,15 +141,11 @@ export interface CacheNormalizableLog {
 }
 
 /**
- * For a single request log, return the input token count with cache reads
- * removed. Anthropic-style providers already report `inputTokens` without
- * cache, so they pass through unchanged.
+ * Codex reports cached tokens inside inputTokens. Preserve already-normalized
+ * historical rows when their input value is smaller than the cache count.
  */
 export function getFreshInputTokens(log: CacheNormalizableLog): number {
-  if (
-    CACHE_INCLUSIVE_APP_TYPES.has(log.appType) &&
-    log.inputTokens >= log.cacheReadTokens
-  ) {
+  if (log.appType === "codex" && log.inputTokens >= log.cacheReadTokens) {
     return log.inputTokens - log.cacheReadTokens;
   }
   return log.inputTokens;
@@ -301,10 +193,4 @@ export function isUnpricedUsage(log: UsageCostLog): boolean {
     (!Number.isFinite(multiplier) || multiplier !== 0) &&
     totalCost === 0
   );
-}
-
-export interface StatsFilters {
-  timeRange: UsageRangePreset;
-  providerId?: string;
-  appType?: string;
 }

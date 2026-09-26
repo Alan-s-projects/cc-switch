@@ -60,11 +60,7 @@ pub async fn import_config_from_file(
     run_with_database_restore_lock(move || {
         tauri::async_runtime::spawn_blocking(move || {
             let path_buf = PathBuf::from(&filePath);
-            let backup_id = {
-                // SQL restore replaces the `skills` table. Exclude local Skill
-                // mutations while the database image is being swapped.
-                db.import_sql(&path_buf)?
-            };
+            let backup_id = db.import_sql(&path_buf)?;
             let warning =
                 post_sync_warning_from_result(Ok(run_post_import_sync(&app_state_for_sync)));
             if let Some(msg) = warning.as_ref() {

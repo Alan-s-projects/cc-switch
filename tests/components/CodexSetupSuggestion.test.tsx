@@ -22,10 +22,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open }));
 vi.mock("@/lib/clipboard", () => ({ copyText: mocks.copy }));
 
-const previewPathKey = "cc-switch-codex-preview-path";
+const previewPathKey = "copilot-bridge-atlas-codex-preview-path";
 const profilePath = "D:/Codex profiles/work config.toml";
 const oldUrl = 'base_url = "http://127.0.0.1:4142/v1"';
-const newUrl = 'base_url = "http://127.0.0.1:15721/v1"';
+const newUrl = 'base_url = "http://127.0.0.1:15722/v1"';
 const currentLines = [
   'model_provider = "copilot-bridge"',
   "model_auto_compact_token_limit = 900000",
@@ -96,7 +96,7 @@ const unifiedDiff = (lines: ConfigDiffLine[], newCount: number) =>
 const preview = {
   configPath: "C:/Users/test/.codex/config.toml",
   configExists: true,
-  endpoint: "http://127.0.0.1:15721/v1",
+  endpoint: "http://127.0.0.1:15722/v1",
   currentProvider: "Copilot Bridge",
   copilotConfig: proposedText(copilotLines),
   copilotDiff: unifiedDiff(copilotLines, 10),
@@ -329,7 +329,7 @@ describe("read-only Codex connection suggestions", () => {
   });
 
   it("explains a missing auto-detected file and previews additions without creating it", async () => {
-    const text = 'model_provider = "cc-switch"';
+    const text = 'model_provider = "copilot-bridge-atlas"';
     mocks.invoke.mockResolvedValue({
       ...preview,
       configExists: false,

@@ -87,9 +87,7 @@ function renderApp() {
   );
 }
 describe("Atlas application scope", () => {
-  it("opens the one Copilot entry and ignores retired navigation preferences", () => {
-    localStorage.setItem("cc-switch-last-app", "claude");
-    localStorage.setItem("cc-switch-last-view", "mcp");
+  it("opens the Copilot overview", () => {
     renderApp();
     expect(screen.getByText("GitHub Copilot")).toBeVisible();
     expect(screen.getByTestId("bridge-overview")).toBeVisible();

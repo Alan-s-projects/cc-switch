@@ -1,20 +1,8 @@
-//! HTTP代理服务器
-//!
-//! 基于Axum的HTTP服务器，处理代理请求
-//!
-//! Uses a manual hyper HTTP/1.1 accept loop with `preserve_header_case(true)` so
-//! that the original header-name casing from the CLI client is captured in a
-//! `HeaderCaseMap` extension.  This map is later forwarded to the upstream via
-//! the hyper-based HTTP client, producing wire-level header casing identical to
-//! a direct (non-proxied) CLI request.
+//! Local OpenAI-compatible listener for Codex.
 
 use super::{
-    handlers,
-    log_codes::srv as log_srv,
-    provider_router::ProviderRouter,
-    providers::{codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore},
-    types::*,
-    ProxyError,
+    handlers, log_codes::srv as log_srv, provider_router::ProviderRouter,
+    providers::codex_chat_history::CodexChatHistoryStore, types::*, ProxyError,
 };
 use crate::database::Database;
 use axum::{
@@ -37,10 +25,8 @@ pub struct ProxyState {
     pub start_time: Arc<RwLock<Option<std::time::Instant>>>,
     /// 每个应用类型当前使用的 provider (app_type -> (provider_id, provider_name))
     pub current_providers: Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
-    /// 共享的 ProviderRouter（持有熔断器状态，跨请求保持）
+    /// The selected Copilot provider is resolved once per request.
     pub provider_router: Arc<ProviderRouter>,
-    /// Gemini Native shadow state，用于 thoughtSignature / tool call 回放
-    pub gemini_shadow: Arc<GeminiShadowStore>,
     /// Codex Chat bridge history，用于恢复 previous_response_id 指向的 tool call
     pub codex_chat_history: Arc<CodexChatHistoryStore>,
     /// AppHandle，用于发射事件和更新托盘菜单
@@ -62,9 +48,8 @@ impl ProxyServer {
         db: Arc<Database>,
         app_handle: Option<tauri::AppHandle>,
     ) -> Self {
-        // 创建共享的 ProviderRouter（熔断器状态将跨所有请求保持）
+        // Share the provider selector across requests.
         let provider_router = Arc::new(ProviderRouter::new(db.clone()));
-        // 创建故障转移切换管理器
 
         let state = ProxyState {
             db,
@@ -73,7 +58,6 @@ impl ProxyServer {
             start_time: Arc::new(RwLock::new(None)),
             current_providers: Arc::new(RwLock::new(std::collections::HashMap::new())),
             provider_router,
-            gemini_shadow: Arc::new(GeminiShadowStore::default()),
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
             app_handle,
         };
@@ -149,36 +133,13 @@ impl ProxyServer {
 
                         let app = app.clone();
                         tokio::spawn(async move {
-                            // Peek raw TCP bytes to capture original header casing
-                            // before hyper parses (and lowercases) the header names.
-                            let original_cases = {
-                                let mut peek_buf = vec![0u8; 8192];
-                                match stream.peek(&mut peek_buf).await {
-                                    Ok(n) => {
-                                        let cases = super::hyper_client::OriginalHeaderCases::from_raw_bytes(&peek_buf[..n]);
-                                        log::debug!(
-                                            "[ProxyServer] Peeked {} bytes, captured {} header casings",
-                                            n, cases.cases.len()
-                                        );
-                                        cases
-                                    }
-                                    Err(e) => {
-                                        log::debug!("[ProxyServer] peek failed (non-fatal): {e}");
-                                        super::hyper_client::OriginalHeaderCases::default()
-                                    }
-                                }
-                            };
-
                             // service_fn 将 axum Router（tower::Service）桥接到 hyper
                             let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
                                 let mut router = app.clone();
-                                let cases = original_cases.clone();
                                 async move {
                                     // 将 hyper::body::Incoming 转为 axum::body::Body，保留 extensions
-                                    let (mut parts, body) = req.into_parts();
+                                    let (parts, body) = req.into_parts();
 
-                                    // Insert our own header case map alongside hyper's internal one
-                                    parts.extensions.insert(cases);
 
                                     let body = axum::body::Body::new(body);
                                     let axum_req = http::Request::from_parts(parts, body);
@@ -269,18 +230,6 @@ impl ProxyServer {
             .collect();
 
         status
-    }
-
-    /// 更新某个应用类型当前“目标供应商”（用于 UI 展示 active_targets）
-    ///
-    /// 注意：这不代表该供应商一定已经处理过请求，而是用于“热切换/启用故障转移立即切 P1”
-    /// 等场景下，让 UI 能立刻反映最新目标。
-    pub async fn set_active_target(&self, app_type: &str, provider_id: &str, provider_name: &str) {
-        let mut current_providers = self.state.current_providers.write().await;
-        current_providers.insert(
-            app_type.to_string(),
-            (provider_id.to_string(), provider_name.to_string()),
-        );
     }
 
     fn build_router(&self) -> Router {
@@ -391,7 +340,6 @@ mod tests {
                 "base_url": format!("http://{address}/v1"),
                 "auth": { "OPENAI_API_KEY": "test-key" }
             }),
-            None,
         );
         db.save_provider("codex", &legacy).unwrap();
         db.set_current_provider("codex", &legacy.id).unwrap();

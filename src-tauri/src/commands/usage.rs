@@ -16,6 +16,7 @@ pub fn get_usage_summary(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<UsageSummary, AppError> {
+    crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
     state.db.get_usage_summary(
         start_date,
         end_date,
@@ -23,27 +24,6 @@ pub fn get_usage_summary(
         provider_name.as_deref(),
         model.as_deref(),
     )
-}
-
-/// 获取按 app_type 拆分的使用量汇总
-#[tauri::command]
-pub fn get_usage_summary_by_app(
-    state: State<'_, AppState>,
-    start_date: Option<i64>,
-    end_date: Option<i64>,
-    provider_name: Option<String>,
-    model: Option<String>,
-) -> Result<Vec<UsageSummaryByApp>, AppError> {
-    Ok(vec![UsageSummaryByApp {
-        app_type: "codex".into(),
-        summary: state.db.get_usage_summary(
-            start_date,
-            end_date,
-            Some("codex"),
-            provider_name.as_deref(),
-            model.as_deref(),
-        )?,
-    }])
 }
 
 /// 获取每日趋势
@@ -56,6 +36,7 @@ pub fn get_usage_trends(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<DailyStats>, AppError> {
+    crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
     state.db.get_daily_trends(
         start_date,
         end_date,
@@ -75,6 +56,7 @@ pub fn get_provider_stats(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<ProviderStats>, AppError> {
+    crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
     state.db.get_provider_stats(
         start_date,
         end_date,
@@ -94,6 +76,7 @@ pub fn get_model_stats(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<ModelStats>, AppError> {
+    crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
     state.db.get_model_stats(
         start_date,
         end_date,
@@ -115,43 +98,20 @@ pub fn get_request_logs(
     state.db.get_request_logs(&filters, page, page_size)
 }
 
-/// 获取单个请求详情
-#[tauri::command]
-pub fn get_request_detail(
-    state: State<'_, AppState>,
-    request_id: String,
-) -> Result<Option<RequestLogDetail>, AppError> {
-    state.db.get_request_detail(&request_id)
-}
-
 /// 获取模型定价列表
 #[tauri::command]
 pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingInfo>, AppError> {
-    log::info!("获取模型定价列表");
     state.db.ensure_model_pricing_seeded()?;
     crate::services::model_pricing::sync_local_model_pricing(&state.db)?;
 
     let db = state.db.clone();
     let conn = crate::database::lock_conn!(db.conn);
 
-    // 检查表是否存在
-    let table_exists: bool = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='model_pricing'",
-            [],
-            |row| row.get::<_, i64>(0).map(|count| count > 0),
-        )
-        .unwrap_or(false);
-
-    if !table_exists {
-        log::error!("model_pricing 表不存在,可能需要重启应用以触发数据库迁移");
-        return Ok(Vec::new());
-    }
-
     let mut stmt = conn.prepare(
         "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
                 cache_read_cost_per_million, cache_creation_cost_per_million
          FROM model_pricing
+         WHERE model_id LIKE 'gpt-%'
          ORDER BY display_name",
     )?;
 
@@ -171,7 +131,6 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
         pricing.push(row?);
     }
 
-    log::info!("成功获取 {} 条模型定价数据", pricing.len());
     Ok(pricing)
 }
 
@@ -231,16 +190,6 @@ pub fn record_models_dev_sync_result(
     error: Option<String>,
 ) -> Result<(), AppError> {
     crate::services::model_pricing::record_models_dev_sync_result(&state.db, synced_at, error)
-}
-
-/// 检查 Provider 使用限额
-#[tauri::command]
-pub fn check_provider_limits(
-    state: State<'_, AppState>,
-    provider_id: String,
-    app_type: String,
-) -> Result<crate::services::usage_stats::ProviderLimitStatus, AppError> {
-    state.db.check_provider_limits(&provider_id, &app_type)
 }
 
 /// 删除模型定价

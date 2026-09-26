@@ -40,6 +40,7 @@ import {
 } from "@/lib/api/copilot";
 import { cn } from "@/lib/utils";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { isGptModel } from "@/utils/codexModelCatalog";
 import type { CodexCatalogModel, CodexCopilotApiFormat } from "@/types";
 import type { ManagedAuthProvider } from "@/lib/api";
 
@@ -47,6 +48,7 @@ export function isCopilotModelSupportedByCodex(
   model: CopilotModel,
   format: CodexCopilotApiFormat = "auto",
 ): boolean {
+  if (!isGptModel(model.id)) return false;
   const endpoints =
     format === "openai_responses"
       ? ["/responses", "/v1/responses"]
@@ -96,12 +98,12 @@ export function mergeCopilotModelCapabilities(
         : model.supports_vision
           ? ["text", "image"]
           : ["text"],
-    reasoningLevels: model.reasoning_efforts ?? existing?.reasoningLevels,
-    defaultReasoningLevel:
-      model.reasoning_efforts &&
-      !model.reasoning_efforts.includes(existing?.defaultReasoningLevel ?? "")
-        ? undefined
-        : existing?.defaultReasoningLevel,
+    // Reasoning levels are editable preferences. Live data seeds an unset
+    // list, but must not replace a saved choice or its default.
+    reasoningLevels: existing?.reasoningLevels?.length
+      ? existing.reasoningLevels
+      : model.reasoning_efforts,
+    defaultReasoningLevel: existing?.defaultReasoningLevel,
   };
 }
 
@@ -306,21 +308,26 @@ export function CodexFormFields({
         : await copilotGetModels();
       if (sequence !== fetchSequence.current) return;
       const existing = new Map(
-        catalogModels.map((model) => [model.model, model]),
+        catalogModels.map((model) => [model.model.trim().toLowerCase(), model]),
       );
       const usable = models.filter((model) =>
         isCopilotModelSupportedByCodex(model, copilotApiFormat),
       );
       if (!usable.length) {
-        toast.error("No models support the selected protocol. Try Automatic.");
+        toast.error(
+          "No GPT models support the selected protocol. Try Automatic.",
+        );
         return;
       }
       onCatalogModelsChange(
         usable.map((model) =>
-          mergeCopilotModelCapabilities(model, existing.get(model.id)),
+          mergeCopilotModelCapabilities(
+            model,
+            existing.get(model.id.trim().toLowerCase()),
+          ),
         ),
       );
-      toast.success(`Loaded ${usable.length} Copilot models.`);
+      toast.success(`Loaded ${usable.length} Copilot GPT models.`);
     } catch (error) {
       if (sequence === fetchSequence.current)
         toast.error(extractErrorMessage(error));
@@ -400,9 +407,10 @@ export function CodexFormFields({
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          Copilot supplies image, parallel-tool and reasoning capabilities.
-          Input limits cap the catalog context window. Save changes, then reload
-          Codex to use the updated catalog.
+          Copilot supplies image and parallel-tool capabilities and initial
+          reasoning levels. Saved reasoning choices survive refresh. Input
+          limits cap the catalog context window. Save changes, then reload Codex
+          to use the updated catalog.
         </p>
         {catalogModels.length === 0 && (
           <p className="text-sm text-muted-foreground">

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { providersApi, settingsApi } from "@/lib/api";
@@ -9,7 +9,6 @@ import {
   useDirectorySettings,
   type ResolvedDirectories,
 } from "./useDirectorySettings";
-import { useSettingsMetadata } from "./useSettingsMetadata";
 
 interface SaveResult {
   requiresRestart: boolean;
@@ -19,7 +18,6 @@ export interface UseSettingsResult {
   settings: SettingsFormState | null;
   isLoading: boolean;
   isSaving: boolean;
-  isPortable: boolean;
   appConfigDir?: string;
   resolvedDirs: ResolvedDirectories;
   requiresRestart: boolean;
@@ -49,7 +47,7 @@ const sanitizeDir = (value?: string | null): string | undefined => {
 /**
  * useSettings - 组合层
  * 负责：
- * - 组合 useSettingsForm、useDirectorySettings、useSettingsMetadata
+ * - 组合 useSettingsForm、useDirectorySettings
  * - 保存设置逻辑
  * - 重置设置逻辑
  */
@@ -62,10 +60,8 @@ export function useSettings(): UseSettingsResult {
   const {
     settings,
     isLoading: isFormLoading,
-    initialLanguage,
     updateSettings,
     resetSettings: resetForm,
-    syncLanguage,
   } = useSettingsForm();
 
   // 2️⃣ 目录管理
@@ -80,29 +76,15 @@ export function useSettings(): UseSettingsResult {
     resetAllDirectories,
   } = useDirectorySettings();
 
-  // 3️⃣ 元数据管理
-  const {
-    isPortable,
-    requiresRestart,
-    isLoading: isMetadataLoading,
-    acknowledgeRestart,
-    setRequiresRestart,
-  } = useSettingsMetadata();
+  const [requiresRestart, setRequiresRestart] = useState(false);
+  const acknowledgeRestart = useCallback(() => setRequiresRestart(false), []);
 
   // 重置设置
   const resetSettings = useCallback(() => {
     resetForm(data ?? null);
-    syncLanguage(initialLanguage);
     resetAllDirectories();
     setRequiresRestart(false);
-  }, [
-    data,
-    initialLanguage,
-    resetForm,
-    syncLanguage,
-    resetAllDirectories,
-    setRequiresRestart,
-  ]);
+  }, [data, resetForm, resetAllDirectories, setRequiresRestart]);
 
   // 即时保存设置（用于 General 标签页的实时更新）
   // 保存基础配置 + 独立的系统 API 调用（开机自启）
@@ -128,22 +110,10 @@ export function useSettings(): UseSettingsResult {
             console.error("Failed to update auto-launch:", error);
             toast.error(
               t("settings.autoLaunchFailed", {
-                defaultValue: "设置开机自启失败",
+                defaultValue: "Failed to set auto-launch",
               }),
             );
           }
-        }
-
-        // 持久化语言偏好
-        try {
-          if (typeof window !== "undefined" && updates.language) {
-            window.localStorage.setItem("language", updates.language);
-          }
-        } catch (error) {
-          console.warn(
-            "[useSettings] Failed to persist language preference",
-            error,
-          );
         }
 
         // 更新托盘菜单
@@ -158,7 +128,7 @@ export function useSettings(): UseSettingsResult {
         console.error("[useSettings] Failed to auto-save settings", error);
         toast.error(
           t("notifications.settingsSaveFailed", {
-            defaultValue: "保存设置失败: {{error}}",
+            defaultValue: "Failed to save settings: {{error}}",
             error: (error as Error)?.message ?? String(error),
           }),
         );
@@ -198,21 +168,10 @@ export function useSettings(): UseSettingsResult {
             console.error("Failed to update auto-launch:", error);
             toast.error(
               t("settings.autoLaunchFailed", {
-                defaultValue: "设置开机自启失败",
+                defaultValue: "Failed to set auto-launch",
               }),
             );
           }
-        }
-
-        try {
-          if (typeof window !== "undefined" && payload.language) {
-            window.localStorage.setItem("language", payload.language);
-          }
-        } catch (error) {
-          console.warn(
-            "[useSettings] Failed to persist language preference",
-            error,
-          );
         }
 
         try {
@@ -227,7 +186,7 @@ export function useSettings(): UseSettingsResult {
         if (!options?.silent) {
           toast.success(
             t("notifications.settingsSaved", {
-              defaultValue: "设置已保存",
+              defaultValue: "Settings saved",
             }),
             { closeButton: true },
           );
@@ -238,7 +197,7 @@ export function useSettings(): UseSettingsResult {
         console.error("[useSettings] Failed to save settings", error);
         toast.error(
           t("notifications.settingsSaveFailed", {
-            defaultValue: "保存设置失败: {{error}}",
+            defaultValue: "Failed to save settings: {{error}}",
             error: (error as Error)?.message ?? String(error),
           }),
         );
@@ -257,15 +216,14 @@ export function useSettings(): UseSettingsResult {
   );
 
   const isLoading = useMemo(
-    () => isFormLoading || isDirectoryLoading || isMetadataLoading,
-    [isFormLoading, isDirectoryLoading, isMetadataLoading],
+    () => isFormLoading || isDirectoryLoading,
+    [isFormLoading, isDirectoryLoading],
   );
 
   return {
     settings,
     isLoading,
     isSaving: saveMutation.isPending,
-    isPortable,
     appConfigDir,
     resolvedDirs,
     requiresRestart,
